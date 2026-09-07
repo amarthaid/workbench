@@ -228,6 +228,16 @@ describe("createSwarm", () => {
     s.destroy();
   });
 
+  it("keeps logo sprites within the given logoZone band, on landing and after drifting", async () => {
+    const s = createSwarm(canvas, { rasterize, now, ambient: true, logos: ["a.svg", "b.svg"], logoZone: [0.5, 1] });
+    await vi.waitFor(() => expect(s.state().ready).toBe(true));
+    const W = 640;
+    for (const l of s.state().logos) expect(l.x).toBeGreaterThanOrEqual(W * 0.5);
+    tick(16); for (let i = 0; i < 200; i++) tick(16);
+    for (const l of s.state().logos) expect(l.x).toBeGreaterThanOrEqual(W * 0.5);
+    s.destroy();
+  });
+
   it("without logos, drawImage is never called", async () => {
     const s = createSwarm(canvas, { rasterize, now, ambient: true });
     await vi.waitFor(() => expect(s.state().ready).toBe(true));

@@ -136,7 +136,7 @@ export default {
   const narrow = matchMedia("(max-width: 880px)").matches;
   createSwarm(document.getElementById("swarm"), narrow
     ? { ground: dark ? "dark" : "accent", markX: 0.5, markY: 0.3, markFrac: 0.58, ambient: false, "logos":${JSON.stringify(d.logoUrls)} }
-    : { ground: dark ? "dark" : "accent", markY: 0.5, "logos":${JSON.stringify(d.logoUrls)} });
+    : { ground: dark ? "dark" : "accent", markY: 0.5, "logos":${JSON.stringify(d.logoUrls)}, "logoZone":${JSON.stringify([0.46, 1])} });
 </script>
 <script src="site.js" defer></script>
 </body>

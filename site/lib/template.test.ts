@@ -57,4 +57,7 @@ describe("renderPage", () => {
   it("passes the integration logo URLs into the swarm script", () => {
     expect(html).toContain('"logos":["logos/github.svg"]');
   });
+  it("keeps the logo ambient band clear of the copy column", () => {
+    expect(html).toContain('"logoZone":[0.46,1]');
+  });
 });
