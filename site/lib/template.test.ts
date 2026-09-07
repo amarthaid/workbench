@@ -6,6 +6,7 @@ const data = {
   replay: [{ prompt: "hello" }, { call: { tool: "search_tools", args: { query: "x" } } }, { result: "ok" }],
   docsUrl: "https://example.com/docs", repoUrl: "https://example.com/repo", image: "og-1200x630.png",
   shots: { apps: "shots/apps.png", connect: "shots/connect.png", result: "shots/result.png" },
+  logoUrls: ["logos/github.svg"],
 };
 
 describe("renderPage", () => {
@@ -52,5 +53,8 @@ describe("renderPage", () => {
   it("resolves the hero docs link relative to a same-domain docs path", () => {
     const relative = renderPage({ ...data, docsUrl: "docs/" });
     expect(relative).toContain('href="docs/start/quickstart.html"');
+  });
+  it("passes the integration logo URLs into the swarm script", () => {
+    expect(html).toContain('"logos":["logos/github.svg"]');
   });
 });

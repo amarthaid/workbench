@@ -14,7 +14,7 @@ export function fillReplay(replay: ReplayStep[], totals: Inventory["totals"]): R
   }));
 }
 
-export interface PageData { inventory: Inventory; replay: ReplayStep[]; docsUrl: string; repoUrl: string; image: string; shots: { apps: string; connect: string; result: string } }
+export interface PageData { inventory: Inventory; replay: ReplayStep[]; docsUrl: string; repoUrl: string; image: string; shots: { apps: string; connect: string; result: string }; logoUrls: string[] }
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
@@ -135,8 +135,8 @@ export default {
   const dark = document.documentElement.dataset.theme === "dark" || (!document.documentElement.dataset.theme && matchMedia("(prefers-color-scheme: dark)").matches);
   const narrow = matchMedia("(max-width: 880px)").matches;
   createSwarm(document.getElementById("swarm"), narrow
-    ? { ground: dark ? "dark" : "accent", markX: 0.5, markY: 0.3, markFrac: 0.58, ambient: false }
-    : { ground: dark ? "dark" : "accent", markY: 0.5 });
+    ? { ground: dark ? "dark" : "accent", markX: 0.5, markY: 0.3, markFrac: 0.58, ambient: false, "logos":${JSON.stringify(d.logoUrls)} }
+    : { ground: dark ? "dark" : "accent", markY: 0.5, "logos":${JSON.stringify(d.logoUrls)} });
 </script>
 <script src="site.js" defer></script>
 </body>

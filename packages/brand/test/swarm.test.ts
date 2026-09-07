@@ -9,7 +9,7 @@ import type { Mask } from "../src/swarm/sample";
 function stubContext() {
   const calls: string[] = [];
   const ctx: Record<string, unknown> = { globalAlpha: 1, lineWidth: 1, strokeStyle: "", shadowBlur: 0, shadowColor: "" };
-  for (const m of ["setTransform", "clearRect", "save", "restore", "translate", "rotate", "scale", "beginPath", "arc", "rect", "moveTo", "lineTo", "closePath", "stroke"]) ctx[m] = vi.fn(() => calls.push(m));
+  for (const m of ["setTransform", "clearRect", "save", "restore", "translate", "rotate", "scale", "beginPath", "arc", "rect", "moveTo", "lineTo", "closePath", "stroke", "drawImage"]) ctx[m] = vi.fn(() => calls.push(m));
   return { ctx, calls };
 }
 // A 64×64 mask whose centre 32×32 is solid.
@@ -205,6 +205,35 @@ describe("createSwarm", () => {
       expect(py).toBeGreaterThanOrEqual(0);
       expect(py).toBeLessThanOrEqual(H * 0.6);
     }
+    s.destroy();
+  });
+
+  it("with logos, builds a logo ambient layer instead of the shapes-based big layer", async () => {
+    const s = createSwarm(canvas, { rasterize, now, ambient: true, logos: ["a.svg", "b.svg"] });
+    await vi.waitFor(() => expect(s.state().ready).toBe(true));
+    expect(s.state().logoCount).toBe(Math.round(640 / 140));
+    expect(s.state().bigCount).toBe(0);
+    s.destroy();
+  });
+
+  it("draws every logo sprite via drawImage and never rotates it", async () => {
+    class StubImage { complete = true; naturalWidth = 10; src = ""; }
+    const loadImage = () => new StubImage() as unknown as HTMLImageElement;
+    const s = createSwarm(canvas, { rasterize, now, ambient: true, logos: ["a.svg", "b.svg"], loadImage });
+    await vi.waitFor(() => expect(s.state().ready).toBe(true));
+    const logoCount = s.state().logoCount;
+    ctx.calls.length = 0;
+    tick(16);
+    expect(ctx.calls.filter((c) => c === "drawImage").length).toBe(logoCount);
+    s.destroy();
+  });
+
+  it("without logos, drawImage is never called", async () => {
+    const s = createSwarm(canvas, { rasterize, now, ambient: true });
+    await vi.waitFor(() => expect(s.state().ready).toBe(true));
+    ctx.calls.length = 0;
+    tick(16);
+    expect(ctx.calls.filter((c) => c === "drawImage").length).toBe(0);
     s.destroy();
   });
 });

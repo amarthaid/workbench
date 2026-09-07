@@ -35,12 +35,21 @@ for (const f of ["apps.png", "connect.png", "result.png"]) {
 const inventory = await collectInventory(root);
 if (inventory.totals.integrations === 0 || inventory.totals.tools === 0 || inventory.totals.metaTools === 0) throw new Error("site: a count is zero");
 const replay = JSON.parse(readFileSync(join(here, "data", "replay.json"), "utf8")) as ReplayStep[];
+
+// Each integration's logo also lands as its own file under _site/logos/, so
+// the landing swarm's ambient layer can load them as <img> sprites — the
+// strip above still gets its logos inlined from inventory.integrations.
+mkdirSync(join(out, "logos"), { recursive: true });
+for (const i of inventory.integrations) writeFileSync(join(out, "logos", `${i.name}.svg`), i.logoSvg);
+const logoUrls = inventory.integrations.map((i) => `logos/${i.name}.svg`);
+
 const html = renderPage({
   inventory, replay: fillReplay(replay, inventory.totals),
   docsUrl: process.env.SITE_DOCS_URL ?? "https://barockok.github.io/workbench/docs/",
   repoUrl: "https://github.com/barockok/workbench",
   image: process.env.SITE_URL ? `${process.env.SITE_URL}/og-1200x630.png` : (process.env.URL ?? "") + "/og-1200x630.png",
   shots: { apps: "shots/apps.png", connect: "shots/connect.png", result: "shots/result.png" },
+  logoUrls,
 });
 if (/@(icloud|gmail)\.com/i.test(html)) throw new Error("site: output matches the PII guard");
 writeFileSync(join(out, "index.html"), html);
