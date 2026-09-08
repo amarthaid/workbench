@@ -10,7 +10,7 @@ export interface SwarmOptions {
   markFrac?: number;
   ambient?: boolean;
   logos?: string[];
-  logoZone?: [x0: number, x1: number];
+  logoZone?: [x0: number, x1: number] | [x0: number, x1: number, y0: number, y1: number];
   rasterize?: (svg: string, size: number) => Promise<Mask>;
   loadImage?: (url: string) => HTMLImageElement;
   now?: () => number;
@@ -69,7 +69,8 @@ export function createSwarm(canvas: HTMLCanvasElement, opts: SwarmOptions = {}):
   const coarse = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
   const markX = opts.markX ?? 0.66, markY = opts.markY ?? 0.5, markFrac = opts.markFrac ?? 0.86, wantAmbient = opts.ambient ?? true;
   const logoUrls = opts.logos ?? [];
-  const logoZone: [number, number] = opts.logoZone ?? [0, 1];
+  const zoneOpt = opts.logoZone ?? [0, 1];
+  const logoZone: [number, number, number, number] = [zoneOpt[0], zoneOpt[1], zoneOpt[2] ?? 0, zoneOpt[3] ?? 1];
   let ground: SwarmGround = opts.ground ?? "dark";
   let W = 0, H = 0, raf = 0, born = 0, done = reduced, doneAt = 0, poseMix = reduced ? 1 : 0, ready = false, disposed = false;
   let parts: Particle[] = [], targets: SwarmTarget[] = [], big: Ambient[] = [], tiny: Ambient[] = [], logoSprites: Ambient[] = [];
@@ -150,11 +151,11 @@ export function createSwarm(canvas: HTMLCanvasElement, opts: SwarmOptions = {}):
     const useLogos = wantAmbient && logoUrls.length > 0;
     if (useLogos) {
       const count = Math.round(W / 140);
-      const bx0 = W * logoZone[0], bx1 = W * logoZone[1];
+      const bx0 = W * logoZone[0], bx1 = W * logoZone[1], by0 = H * logoZone[2], by1 = H * logoZone[3];
       // Cycle through every logo once (in order) before any repeats, then
       // fall back to random picks for the rest.
       logoSprites = Array.from({ length: count }, (_, i) => mk(true, i < logoUrls.length ? i : (rnd() * logoUrls.length) | 0));
-      for (const a of logoSprites) { a.size = 40 + rnd() * 50; a.x = bx0 + rnd() * (bx1 - bx0); }
+      for (const a of logoSprites) { a.size = 40 + rnd() * 50; a.x = bx0 + rnd() * (bx1 - bx0); a.y = by0 + rnd() * (by1 - by0); }
       big = [];
     } else {
       logoSprites = [];
@@ -203,14 +204,16 @@ export function createSwarm(canvas: HTMLCanvasElement, opts: SwarmOptions = {}):
       p.x = px + p.ox; p.y = py + p.oy; p.k = k;
       p.ax += p.spin * 0.02; p.ay += p.spin * 0.016;
     }
-    const bx0 = W * logoZone[0], bx1 = W * logoZone[1];
+    const bx0 = W * logoZone[0], bx1 = W * logoZone[1], by0 = H * logoZone[2], by1 = H * logoZone[3];
     for (const a of big.concat(tiny, logoSprites)) {
       const e = done ? 1 : lanes[a.lane].ease;
       const isLogo = a.li !== undefined;
       if (done) {
         a.x += a.dx; a.y += a.dy;
-        if (a.y < -80) { a.y = H + 80; a.x = isLogo ? bx0 + rnd() * (bx1 - bx0) : rnd() * W; }
-        else if (isLogo) { if (a.x < bx0) a.x = bx1; else if (a.x > bx1) a.x = bx0; }
+        if (isLogo) {
+          if (a.y < by0) a.y = by1; else if (a.y > by1) a.y = by0;
+          if (a.x < bx0) a.x = bx1; else if (a.x > bx1) a.x = bx0;
+        } else if (a.y < -80) { a.y = H + 80; a.x = rnd() * W; }
         else if (a.x < -80) a.x = W + 80; else if (a.x > W + 80) a.x = -80;
       }
       a.px = a.sx + (a.x - a.sx) * e; a.py = a.sy + (a.y - a.sy) * e;

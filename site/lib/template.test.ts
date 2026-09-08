@@ -58,6 +58,6 @@ describe("renderPage", () => {
     expect(html).toContain('"logos":["logos/github.svg"]');
   });
   it("keeps the logo ambient band clear of the copy column", () => {
-    expect(html).toContain('"logoZone":[0.46,1]');
+    expect(html).toContain('"logoZone":[0.46,1,0,0.72]');
   });
 });
