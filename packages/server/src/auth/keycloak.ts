@@ -40,15 +40,6 @@ function getKeycloakCallbackUrl(): string {
   return `${config.SERVER_PUBLIC_URL}/api/auth/keycloak/callback`;
 }
 
-const nonceMap = new Map<string, { nonce: string; expiresAt: number }>();
-
-function pruneExpiredNonces(): void {
-  const now = Date.now();
-  for (const [state, entry] of nonceMap) {
-    if (entry.expiresAt < now) nonceMap.delete(state);
-  }
-}
-
 export function isKeycloakConfigured(): boolean {
   return !!(config.KEYCLOAK_ISSUER_URL && config.KEYCLOAK_CLIENT_ID && config.KEYCLOAK_CLIENT_SECRET);
 }
@@ -56,11 +47,9 @@ export function isKeycloakConfigured(): boolean {
 export async function buildAuthUrl(returnTicket?: string): Promise<string> {
   if (!isKeycloakConfigured()) throw new Error("Keycloak not configured");
   const d = await getDiscovery();
-  pruneExpiredNonces();
-  const baseState = await createAuthState(crypto.randomUUID(), "keycloak-sso");
-  const state = returnTicket ? `${baseState}.${returnTicket}` : baseState;
   const nonce = crypto.randomBytes(16).toString("hex");
-  nonceMap.set(state, { nonce, expiresAt: Date.now() + 10 * 60 * 1000 });
+  const baseState = await createAuthState(crypto.randomUUID(), "keycloak-sso", undefined, undefined, nonce);
+  const state = returnTicket ? `${baseState}.${returnTicket}` : baseState;
   const url = new URL(d.authorization_endpoint);
   url.searchParams.set("client_id", config.KEYCLOAK_CLIENT_ID!);
   url.searchParams.set("redirect_uri", getKeycloakCallbackUrl());
@@ -120,13 +109,11 @@ export async function handleCallback(code: string, state: string): Promise<{ use
   if (!authState || authState.integration !== "keycloak-sso") {
     throw new Error("Invalid state");
   }
-  const nonceEntry = nonceMap.get(state);
-  if (!nonceEntry || nonceEntry.expiresAt < Date.now()) {
+  if (!authState.nonce) {
     throw new Error("Invalid or expired nonce");
   }
-  nonceMap.delete(state);
   const tokens = await exchangeCodeForTokens(code);
-  const kcUser = await verifyIdToken(tokens.id_token, nonceEntry.nonce);
+  const kcUser = await verifyIdToken(tokens.id_token, authState.nonce);
   if (kcUser.email_verified === false) {
     throw new Error("Email not verified");
   }

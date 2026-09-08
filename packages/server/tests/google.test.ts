@@ -178,4 +178,54 @@ describe("handleCallback", () => {
 
     await expect(handleCallback("code", state)).rejects.toThrow("Email not verified");
   });
+
+  it("consumes the pending_auth row: a second callback with the same state fails", async () => {
+    const { state, nonce } = await getStateAndNonce();
+
+    vi.mocked(jwtVerify).mockResolvedValue({
+      payload: { sub: "google-777", email: "once@example.com", email_verified: true, nonce },
+    } as any);
+    vi.mocked(global.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ id_token: "id-123", access_token: "acc-456", expires_in: 3600 }))
+    );
+
+    const result = await handleCallback("code", state);
+    expect(result.email).toBe("once@example.com");
+
+    await expect(handleCallback("code", state)).rejects.toThrow("Invalid state");
+  });
+
+  it("rejects a callback whose ID token nonce doesn't match the stored one", async () => {
+    const { state } = await getStateAndNonce();
+
+    vi.mocked(jwtVerify).mockResolvedValue({
+      payload: { sub: "google-888", email: "mismatch@example.com", email_verified: true, nonce: "not-the-right-nonce" },
+    } as any);
+    vi.mocked(global.fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify({ id_token: "id-123", access_token: "acc-456", expires_in: 3600 }))
+    );
+
+    await expect(handleCallback("code", state)).rejects.toThrow("Invalid nonce");
+  });
+
+  it("succeeds when the callback is handled by a different server instance (nonce read back from the DB)", async () => {
+    // buildAuthUrl runs against the module graph loaded at the top of this file.
+    const { state, nonce } = await getStateAndNonce();
+
+    // Simulate a restart / a second server instance: drop every module (including
+    // src/db) and re-import auth/google fresh. The nonce must survive because it
+    // lives in the pending_auth row, not in an in-process Map.
+    vi.resetModules();
+    const freshGoogle = await import("../src/auth/google");
+
+    vi.mocked(jwtVerify).mockResolvedValue({
+      payload: { sub: "google-999", email: "restarted@example.com", email_verified: true, nonce },
+    } as any);
+    vi.mocked(global.fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify({ id_token: "id-123", access_token: "acc-456", expires_in: 3600 }))
+    );
+
+    const result = await freshGoogle.handleCallback("code", state);
+    expect(result.email).toBe("restarted@example.com");
+  });
 });

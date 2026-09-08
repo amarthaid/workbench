@@ -248,9 +248,11 @@ Two caveats:
   per worker, not on the primary. The primary dies on the default signal
   disposition.
 
-Some state is per-process and therefore not shared across workers: the SSO nonce
-map and the transient connect-flow records that `connect` / `wait_for_connection`
-poll. Sticky routing avoids surprises there.
+Some state is per-process and therefore not shared across workers: the transient
+connect-flow records that `connect` / `wait_for_connection` poll. (The SSO nonce
+lives in the `pending_auth` row alongside `state`, so it's shared across workers
+through the database and needs no sticky routing.) Sticky routing avoids
+surprises for the connect-flow records.
 
 ## PostgreSQL behaviours worth knowing
 

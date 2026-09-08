@@ -22,16 +22,6 @@ interface GoogleIdToken {
 
 let jwksUri: string | null = null;
 
-// Nonce storage keyed by state, with automatic expiry (10 minutes)
-const nonceMap = new Map<string, { nonce: string; expiresAt: number }>();
-
-function pruneExpiredNonces(): void {
-  const now = Date.now();
-  for (const [state, entry] of nonceMap) {
-    if (entry.expiresAt < now) nonceMap.delete(state);
-  }
-}
-
 // The Google SSO callback route is served by *this server*, so the redirect URI
 // must use SERVER_PUBLIC_URL (not PORTAL_URL — the portal may live on a separate
 // origin). The auth-request and token-exchange redirect_uri must be byte-equal,
@@ -54,17 +44,13 @@ export async function buildAuthUrl(returnTicket?: string): Promise<string> {
     throw new Error("GOOGLE_CLIENT_ID not configured");
   }
 
-  // Prune expired nonces before inserting a new one
-  pruneExpiredNonces();
+  // Generate the nonce first so it can be persisted alongside the state.
+  const nonce = crypto.randomBytes(16).toString("hex");
 
   // Encode an optional return ticket (e.g. a pending OAuth /authorize request)
   // into the state so the callback can resume the right flow.
-  const baseState = await createAuthState(crypto.randomUUID(), "google-sso");
+  const baseState = await createAuthState(crypto.randomUUID(), "google-sso", undefined, undefined, nonce);
   const state = returnTicket ? `${baseState}.${returnTicket}` : baseState;
-
-  // Generate nonce and store it keyed by state
-  const nonce = crypto.randomBytes(16).toString("hex");
-  nonceMap.set(state, { nonce, expiresAt: Date.now() + 10 * 60 * 1000 });
 
   const redirectUri = getGoogleCallbackUrl();
   const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
@@ -126,7 +112,8 @@ export async function verifyGoogleIdToken(idToken: string, expectedNonce?: strin
 
 export async function handleCallback(code: string, state: string): Promise<{ userId: string; email: string }> {
   // state may be "<baseState>.<ticket>" when SSO was started by /authorize.
-  // verifyAuthState was stored under the base; the nonce is keyed by the full state.
+  // verifyAuthState was stored under the base and also carries the nonce, and
+  // it deletes the row on lookup so both the state and the nonce are single-use.
   const base = state.includes(".") ? state.slice(0, state.indexOf(".")) : state;
   // Verify state to prevent CSRF
   const authState = await verifyAuthState(base);
@@ -134,15 +121,14 @@ export async function handleCallback(code: string, state: string): Promise<{ use
     throw new Error("Invalid state");
   }
 
-  // Look up and consume nonce to prevent ID token replay
-  const nonceEntry = nonceMap.get(state);
-  if (!nonceEntry || nonceEntry.expiresAt < Date.now()) {
+  // The nonce rides with the pending_auth row to survive restarts and
+  // multi-instance deployments; if it's missing, treat it like expiry.
+  if (!authState.nonce) {
     throw new Error("Invalid or expired nonce");
   }
-  nonceMap.delete(state);
 
   const tokens = await exchangeCodeForTokens(code);
-  const googleUser = await verifyGoogleIdToken(tokens.id_token, nonceEntry.nonce);
+  const googleUser = await verifyGoogleIdToken(tokens.id_token, authState.nonce);
 
   if (!googleUser.email_verified) {
     throw new Error("Email not verified");
