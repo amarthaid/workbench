@@ -4,7 +4,7 @@
     "description": "Self-hosted MCP tool aggregator. One endpoint, per-user OAuth, every SaaS tool your agent needs.",
     "repo": "https://github.com/barockok/workbench",
     "domain": "github.io",
-    "version": "0.24.0"
+    "version": "0.28.0"
   },
   "tabs": [
     {
