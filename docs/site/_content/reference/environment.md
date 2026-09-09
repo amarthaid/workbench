@@ -133,8 +133,9 @@ error** that crashes the boot, not a falsy value.
 > With a SQLite `DATABASE_URL` the process exits with status 1 and a clear message —
 > SQLite cannot be shared across processes. The total connection count becomes
 > `PG_POOL_MAX × worker count`, which must stay well under the server's
-> `max_connections`. SSO nonces and in-flight connection records are held in
-> process-local maps, so they are not shared across workers.
+> `max_connections`. In-flight connection records are held in process-local
+> maps, so they are not shared across workers. (The SSO nonce is stored in the
+> `pending_auth` row and is shared across workers through the database.)
 
 ## Audit and telemetry
 

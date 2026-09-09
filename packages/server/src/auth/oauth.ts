@@ -15,12 +15,13 @@ export async function createAuthState(
   userId: string,
   integration: string,
   codeVerifier?: string,
-  config?: string
+  config?: string,
+  nonce?: string
 ): Promise<string> {
   const state = crypto.randomBytes(32).toString("hex");
   await db.run(
-    "INSERT INTO pending_auth (state, user_id, integration, expires_at, code_verifier, config) VALUES (?, ?, ?, ?, ?, ?)",
-    [state, userId, integration, Math.floor(Date.now() / 1000) + 600, codeVerifier ?? null, config ?? null]
+    "INSERT INTO pending_auth (state, user_id, integration, expires_at, code_verifier, config, nonce) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    [state, userId, integration, Math.floor(Date.now() / 1000) + 600, codeVerifier ?? null, config ?? null, nonce ?? null]
   );
   await db.run("DELETE FROM pending_auth WHERE expires_at < ?", [Math.floor(Date.now() / 1000)]);
   return state;
@@ -28,14 +29,15 @@ export async function createAuthState(
 
 export async function verifyAuthState(
   state: string
-): Promise<{ userId: string; integration: string; codeVerifier?: string; config?: string } | null> {
+): Promise<{ userId: string; integration: string; codeVerifier?: string; config?: string; nonce?: string } | null> {
   const row = await db.get<{
     user_id: string;
     integration: string;
     code_verifier: string | null;
     config: string | null;
+    nonce: string | null;
   }>(
-    "SELECT user_id, integration, code_verifier, config FROM pending_auth WHERE state = ? AND expires_at > ?",
+    "SELECT user_id, integration, code_verifier, config, nonce FROM pending_auth WHERE state = ? AND expires_at > ?",
     [state, Math.floor(Date.now() / 1000)]
   );
 
@@ -47,6 +49,7 @@ export async function verifyAuthState(
     integration: row.integration,
     codeVerifier: row.code_verifier ?? undefined,
     config: row.config ?? undefined,
+    nonce: row.nonce ?? undefined,
   };
 }
 
