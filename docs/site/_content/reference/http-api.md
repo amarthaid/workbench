@@ -265,7 +265,8 @@ A token minted by `update_jot` puts the upload in **patch** mode: the live tree 
 the token's delete list applied, and the archive overlaid on top, so an uploaded path wins
 over a delete of itself. `NO_INDEX` is still checked, but a patch normally inherits the
 live `index.html`. `access` and the password hash come from the live manifest, never the
-token, so a patch cannot change a jot's gating.
+token, so an upload cannot change a jot's gating — `update_jot` writes those to the
+manifest itself, at call time, before any token is minted.
 
 Jot **content** responses carry `Content-Security-Policy: sandbox allow-scripts
 allow-forms`, `nosniff`, `X-Frame-Options: SAMEORIGIN`, and

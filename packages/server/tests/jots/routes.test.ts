@@ -14,7 +14,7 @@ vi.mock("../../src/config", () => ({
 }));
 
 import { registerJotRoutes } from "../../src/jots/routes";
-import { deployJot, readManifest } from "../../src/jots/store";
+import { deployJot, readManifest, updateJotMeta } from "../../src/jots/store";
 import { hashPassword, makeToken, cookieName } from "../../src/jots/auth";
 import { mint } from "../../src/jots/pending";
 
@@ -356,6 +356,47 @@ describe("jots/routes patch upload", () => {
     const body = await tarGz([{ name: "data.json", content: "{}" }]);
     await app.inject({ method: "POST", url: `/j/upload/${token}`, payload: body, headers: gz });
     expect(readManifest("site")?.cors).toBe(true);
+  });
+});
+
+describe("jots/routes settings change without an upload", () => {
+  const gz = { "content-type": "application/gzip" };
+
+  it("gates a live public jot as soon as the manifest changes", async () => {
+    deployJot({ name: "site", owner: "u1", access: "public", files: [{ path: "index.html", content: "hi" }] });
+    expect((await app.inject({ method: "GET", url: "/j/site/" })).statusCode).toBe(200);
+    updateJotMeta("site", "u1", { access: "password", passwordHash: hashPassword("pw") });
+    const res = await app.inject({ method: "GET", url: "/j/site/", headers: { accept: "application/json" } });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("unlocks a gated jot again, and the old cookie is moot", async () => {
+    const hash = hashPassword("pw");
+    deployJot({ name: "site", owner: "u1", access: "password", passwordHash: hash, files: [{ path: "index.html", content: "hi" }] });
+    updateJotMeta("site", "u1", { access: "public" });
+    expect((await app.inject({ method: "GET", url: "/j/site/" })).statusCode).toBe(200);
+    expect(readManifest("site")?.hash).toBeUndefined();
+  });
+
+  it("invalidates an issued unlock cookie when the password is rotated", async () => {
+    const oldHash = hashPassword("old");
+    deployJot({ name: "site", owner: "u1", access: "password", passwordHash: oldHash, files: [{ path: "index.html", content: "hi" }] });
+    const cookie = `${cookieName("site")}=${makeToken("test-secret-32-chars-long-xxxxxx", "site", oldHash)}`;
+    expect((await app.inject({ method: "GET", url: "/j/site/", headers: { cookie } })).statusCode).toBe(200);
+    updateJotMeta("site", "u1", { passwordHash: hashPassword("new") });
+    const res = await app.inject({ method: "GET", url: "/j/site/", headers: { cookie, accept: "application/json" } });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("keeps the new gating across a later patch upload", async () => {
+    deployJot({ name: "site", owner: "u1", access: "public", files: [{ path: "index.html", content: "hi" }] });
+    updateJotMeta("site", "u1", { access: "password", passwordHash: hashPassword("pw") });
+    const { token } = mint({ owner: "u1", name: "site", mode: "patch" });
+    const body = await tarGz([{ name: "data.json", content: "{}" }]);
+    expect((await app.inject({ method: "POST", url: `/j/upload/${token}`, payload: body, headers: gz })).statusCode).toBe(200);
+    const m = readManifest("site")!;
+    expect(m.access).toBe("password");
+    expect(m.hash).toBeTruthy();
   });
 });
 

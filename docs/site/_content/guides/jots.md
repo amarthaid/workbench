@@ -136,8 +136,9 @@ Two differences from a deploy are worth holding onto:
 - **No `index.html` needed in the archive.** The live one is retained, so a patch that
   ships only `data.json` is fine. A deploy in the same shape would be rejected with
   `NO_INDEX`.
-- **Access is inherited, never set.** `access` and the password hash are read from the
-  live jot rather than from the token, so an update cannot change who can read a jot.
+- **Access is inherited by the upload.** `access` and the password hash are read from the
+  live jot rather than from the token, so the archive you upload can never change who can
+  read a jot. To change that, pass the settings to `update_jot` itself — see below.
   Redeploy for that.
 
 Ownership is re-checked when the upload lands, not just at mint: a jot that has been
@@ -148,6 +149,37 @@ The **merged** tree is re-measured against both limits. `JOTS_MAX_BYTES` and
 without this check a run of small patches could walk a jot past either cap. A patch that
 would push it over returns 413 (`TOO_LARGE` or `TOO_MANY_FILES`) and leaves the live jot
 untouched.
+
+## Changing access, password, or CORS
+
+Those three settings do not need an upload at all. Pass them to `update_jot` and they are
+written to the live jot as soon as the call returns:
+
+```json
+{ "executions": [ { "tool": "update_jot",
+  "args": { "name": "release-report", "access": "password", "password": "hunter2" } } ] }
+```
+
+```json
+{ "result": { "uploadUrl": "…", "token": "…", "expiresAt": 1756000000000,
+  "applied": { "access": "password", "cors": false } } }
+```
+
+The `applied` block is the confirmation that the change is already live. The `uploadUrl`
+comes back as always, for file changes in the same call; ignore it and it simply expires.
+
+- **Lock a jot:** `{ "access": "password", "password": "…" }`, or just `{ "password": "…" }`.
+- **Unlock it:** `{ "access": "public" }`. The stored hash is dropped.
+- **Rotate the password:** pass a new `password`. Restating `access: "password"` without
+  one keeps the current password.
+- **Toggle CORS:** `{ "cors": true }` or `{ "cors": false }`.
+
+Anything you leave out keeps its current value, and the files are untouched either way.
+
+> [!NOTE] Changing a password signs everyone out
+> A visitor's unlock cookie is an HMAC over the current password hash, so rotating the
+> password — or unlocking the jot and gating it again — invalidates every cookie already
+> issued for it. Whoever still needs in has to enter the new password.
 
 ## The guards, in order
 
@@ -249,7 +281,8 @@ inside the page.
 ```
 
 This pairs naturally with `update_jot`: the page ships once, and the weekly data file is
-patched in on its own.
+patched in on its own. `update_jot` can also flip the flag on a jot that is already
+live — `cors: true` to turn it on, `cors: false` to turn it back off — with no upload.
 
 What it does *not* do is weaken the sandbox. `sandbox allow-scripts allow-forms`,
 `nosniff`, and `X-Frame-Options` are unchanged, so the page still cannot reach app

@@ -5,6 +5,7 @@ vi.mock("../src/jots/store", () => ({
   listJots: vi.fn(),
   deleteJot: vi.fn(),
   listJotFiles: vi.fn(),
+  updateJotMeta: vi.fn(),
   readManifest: vi.fn(() => null),
 }));
 vi.mock("../src/jots/pending", () => ({
@@ -18,7 +19,7 @@ import { jotsPlugin } from "../src/plugins/internal/jots";
 import * as store from "../src/jots/store";
 import { hashPassword } from "../src/jots/auth";
 import { mint } from "../src/jots/pending";
-import { readManifest } from "../src/jots/store";
+import { readManifest, updateJotMeta } from "../src/jots/store";
 
 function findTool(name: string) {
   return jotsPlugin.tools.find((t) => t.name === name)!;
@@ -91,15 +92,61 @@ describe("jots plugin update_jot", () => {
   it("mints a patch token for a jot the caller owns", async () => {
     vi.mocked(readManifest).mockReturnValue(owned);
     const result = await findTool("update_jot").handler({ userId: "u1" }, { name: "site" });
-    expect(mint).toHaveBeenCalledWith({ owner: "u1", name: "site", mode: "patch", deletes: [], cors: undefined });
+    expect(mint).toHaveBeenCalledWith({ owner: "u1", name: "site", mode: "patch", deletes: [] });
     expect(result).toMatchObject({ token: "tok123", expiresAt: 42 });
     expect((result as { uploadUrl: string }).uploadUrl).toMatch(/\/j\/upload\/tok123$/);
+    expect(updateJotMeta).not.toHaveBeenCalled();
+    expect(result).not.toHaveProperty("applied");
   });
 
-  it("passes the delete list and the cors flag through to the token", async () => {
+  it("passes the delete list through to the token", async () => {
     vi.mocked(readManifest).mockReturnValue(owned);
-    await findTool("update_jot").handler({ userId: "u1" }, { name: "site", delete: ["old.json"], cors: true });
-    expect(mint).toHaveBeenCalledWith(expect.objectContaining({ deletes: ["old.json"], cors: true }));
+    await findTool("update_jot").handler({ userId: "u1" }, { name: "site", delete: ["old.json"] });
+    expect(mint).toHaveBeenCalledWith(expect.objectContaining({ deletes: ["old.json"] }));
+  });
+
+  it("applies a password immediately, without waiting for an upload", async () => {
+    vi.mocked(readManifest).mockReturnValue(owned);
+    vi.mocked(updateJotMeta).mockReturnValue({ name: "site", access: "password", cors: false, url: "https://wb.test/j/site/" });
+    const result = await findTool("update_jot").handler({ userId: "u1" }, { name: "site", password: "pw" });
+    expect(hashPassword).toHaveBeenCalledWith("pw");
+    expect(updateJotMeta).toHaveBeenCalledWith("site", "u1", {
+      access: "password",
+      passwordHash: "scrypt$salt$hash",
+      cors: undefined,
+    });
+    expect(result).toMatchObject({ applied: { access: "password", cors: false } });
+  });
+
+  it("unlocks a jot back to public without a password", async () => {
+    vi.mocked(readManifest).mockReturnValue({ ...owned, access: "password", hash: "scrypt$a$b" });
+    vi.mocked(updateJotMeta).mockReturnValue({ name: "site", access: "public", cors: false, url: "https://wb.test/j/site/" });
+    const result = await findTool("update_jot").handler({ userId: "u1" }, { name: "site", access: "public" });
+    expect(hashPassword).not.toHaveBeenCalled();
+    expect(updateJotMeta).toHaveBeenCalledWith("site", "u1", { access: "public", passwordHash: undefined, cors: undefined });
+    expect(result).toMatchObject({ applied: { access: "public", cors: false } });
+  });
+
+  it("applies the cors flag on its own", async () => {
+    vi.mocked(readManifest).mockReturnValue(owned);
+    vi.mocked(updateJotMeta).mockReturnValue({ name: "site", access: "public", cors: true, url: "https://wb.test/j/site/" });
+    const result = await findTool("update_jot").handler({ userId: "u1" }, { name: "site", cors: true });
+    expect(updateJotMeta).toHaveBeenCalledWith("site", "u1", { access: undefined, passwordHash: undefined, cors: true });
+    expect(result).toMatchObject({ applied: { access: "public", cors: true } });
+    // cors now rides the manifest, not the upload token.
+    expect(mint).toHaveBeenCalledWith({ owner: "u1", name: "site", mode: "patch", deletes: [] });
+  });
+
+  it("rejects an empty password and surfaces a settings error without minting", async () => {
+    vi.mocked(readManifest).mockReturnValue(owned);
+    expect(await findTool("update_jot").handler({ userId: "u1" }, { name: "site", password: "" })).toEqual({
+      error: "PASSWORD_REQUIRED",
+    });
+    vi.mocked(updateJotMeta).mockReturnValue({ error: "PASSWORD_REQUIRED" });
+    expect(await findTool("update_jot").handler({ userId: "u1" }, { name: "site", access: "password" })).toEqual({
+      error: "PASSWORD_REQUIRED",
+    });
+    expect(mint).not.toHaveBeenCalled();
   });
 
   it("refuses an unknown jot, a jot owned by someone else, and an invalid name", async () => {
@@ -116,6 +163,11 @@ describe("jots plugin update_jot", () => {
     expect(await findTool("update_jot").handler({ userId: "u1" }, { name: "site", delete: ["../etc"] })).toEqual({ error: "INVALID_PATH" });
     expect(await findTool("update_jot").handler({ userId: "u1" }, { name: "site", delete: ["jot.json"] })).toEqual({ error: "INVALID_PATH" });
     expect(mint).not.toHaveBeenCalled();
+    // A bad path aborts before any setting is applied.
+    expect(await findTool("update_jot").handler({ userId: "u1" }, { name: "site", delete: [".."], access: "public" })).toEqual({
+      error: "INVALID_PATH",
+    });
+    expect(updateJotMeta).not.toHaveBeenCalled();
   });
 });
 

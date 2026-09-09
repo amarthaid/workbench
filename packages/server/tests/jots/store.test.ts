@@ -10,7 +10,7 @@ vi.mock("../../src/config", () => ({
   config: { JOTS_MAX_BYTES: 1000, JOTS_MAX_FILES: 1000, SERVER_PUBLIC_URL: "https://wb.test", NODE_ENV: "test" },
 }));
 
-import { deployJot, commitJotDir, listJots, deleteJot, readManifest, listJotFiles } from "../../src/jots/store";
+import { deployJot, commitJotDir, listJots, deleteJot, readManifest, listJotFiles, updateJotMeta } from "../../src/jots/store";
 
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "jots-"));
@@ -156,5 +156,77 @@ describe("jots/store cors flag", () => {
   it("omits cors when not requested", () => {
     deployJot({ name: "site", owner: "u1", access: "public", files: [file("index.html", "hi")] });
     expect(readManifest("site")?.cors).toBeUndefined();
+  });
+});
+
+describe("jots/store updateJotMeta", () => {
+  const seed = (access: "public" | "password" = "public", extra: Record<string, unknown> = {}) =>
+    deployJot({ name: "site", owner: "u1", access, files: [file("index.html", "hi")], ...extra });
+
+  it("gates a public jot without touching its files", () => {
+    seed();
+    const r = updateJotMeta("site", "u1", { access: "password", passwordHash: "scrypt$a$b" });
+    expect(r).toEqual({ name: "site", access: "password", cors: false, url: "https://wb.test/j/site/" });
+    const m = readManifest("site")!;
+    expect(m.access).toBe("password");
+    expect(m.hash).toBe("scrypt$a$b");
+    expect(fs.readFileSync(path.join(tmp, "site", "index.html"), "utf8")).toBe("hi");
+  });
+
+  it("drops the hash when a jot goes public again", () => {
+    seed("password", { passwordHash: "scrypt$a$b" });
+    expect(updateJotMeta("site", "u1", { access: "public" })).toMatchObject({ access: "public" });
+    const m = readManifest("site")!;
+    expect(m.access).toBe("public");
+    expect(m.hash).toBeUndefined();
+  });
+
+  it("keeps the current password when access is restated without a new one", () => {
+    seed("password", { passwordHash: "scrypt$a$b" });
+    updateJotMeta("site", "u1", { access: "password" });
+    expect(readManifest("site")?.hash).toBe("scrypt$a$b");
+  });
+
+  it("rotates the password in place", () => {
+    seed("password", { passwordHash: "scrypt$a$b" });
+    updateJotMeta("site", "u1", { passwordHash: "scrypt$c$d" });
+    expect(readManifest("site")?.hash).toBe("scrypt$c$d");
+  });
+
+  it("toggles cors both ways and leaves unmentioned fields alone", () => {
+    seed();
+    updateJotMeta("site", "u1", { cors: true });
+    expect(readManifest("site")?.cors).toBe(true);
+    expect(updateJotMeta("site", "u1", { cors: false })).toMatchObject({ access: "public", cors: false });
+    expect(readManifest("site")?.cors).toBeUndefined();
+  });
+
+  it("preserves createdAt and moves updatedAt", () => {
+    seed();
+    const before = readManifest("site")!;
+    updateJotMeta("site", "u1", { cors: true });
+    const after = readManifest("site")!;
+    expect(after.createdAt).toBe(before.createdAt);
+    expect(after.updatedAt >= before.updatedAt).toBe(true);
+  });
+
+  it("refuses a password jot with no hash to fall back on", () => {
+    seed();
+    expect(updateJotMeta("site", "u1", { access: "password" })).toEqual({ error: "PASSWORD_REQUIRED" });
+    expect(readManifest("site")?.access).toBe("public");
+  });
+
+  it("refuses another owner, an unknown jot, and an invalid name", () => {
+    seed();
+    expect(updateJotMeta("site", "u2", { access: "public" })).toEqual({ error: "FORBIDDEN" });
+    expect(updateJotMeta("nope", "u1", { access: "public" })).toEqual({ error: "NOT_FOUND" });
+    expect(updateJotMeta("BAD", "u1", { access: "public" })).toEqual({ error: "INVALID_NAME" });
+  });
+
+  it("leaves no staging file behind inside the jot", () => {
+    seed();
+    updateJotMeta("site", "u1", { access: "password", passwordHash: "scrypt$a$b" });
+    expect(fs.readdirSync(path.join(tmp, "site")).sort()).toEqual(["index.html", "jot.json"]);
+    expect(fs.readdirSync(tmp)).toEqual(["site"]);
   });
 });
