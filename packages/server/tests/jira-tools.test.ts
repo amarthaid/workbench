@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import {
+  createIssue,
   searchIssues,
   getIssue,
   searchUsers,
@@ -11,6 +12,7 @@ import {
   addComment,
   getComments,
   listProjects,
+  getCreateMeta,
 } from "../../plugins/atlassian-jira/tools/index";
 
 // Mock ctx.http that records urls/bodies and replies with a canned payload.
@@ -305,6 +307,146 @@ describe("jira_add_comment / jira_get_comments (ADF round-trip)", () => {
     expect(out).toEqual([
       { id: "900", author: "Test User", body: "Looks good to me", created: "2026-06-12" },
     ]);
+  });
+});
+
+describe("jira_create_issue", () => {
+  it("posts standard fields and returns the API response", async () => {
+    const reply = { id: "10001", key: "WB-1", self: "https://x" };
+    const { ctx, urls, bodies, methods } = recordingCtx(reply);
+    const out: any = await createIssue.handler(ctx, {
+      projectKey: "WB",
+      summary: "Fix login",
+      description: "Steps to reproduce",
+      issueType: "Bug",
+    });
+    expect(urls[0]).toContain("/rest/api/3/issue");
+    expect(methods[0]).toBe("POST");
+    const body = JSON.parse(bodies[0]);
+    expect(body.fields.project).toEqual({ key: "WB" });
+    expect(body.fields.summary).toBe("Fix login");
+    expect(body.fields.description).toEqual(adf("Steps to reproduce"));
+    expect(body.fields.issuetype).toEqual({ name: "Bug" });
+    expect(out).toEqual(reply);
+  });
+
+  it("merges extra fields into the POST body", async () => {
+    const { ctx, bodies } = recordingCtx({ id: "1", key: "WB-2", self: "x" });
+    await createIssue.handler(ctx, {
+      projectKey: "WB",
+      summary: "Task",
+      issueType: "Task",
+      fields: { customfield_11153: { id: "11015" } },
+    });
+    const body = JSON.parse(bodies[0]);
+    expect(body.fields.customfield_11153).toEqual({ id: "11015" });
+    expect(body.fields.project).toEqual({ key: "WB" });
+  });
+
+  it("named args take precedence over conflicting keys in fields", async () => {
+    const { ctx, bodies } = recordingCtx({ id: "1", key: "WB-3", self: "x" });
+    await createIssue.handler(ctx, {
+      projectKey: "WB",
+      summary: "Real summary",
+      issueType: "Task",
+      fields: { summary: "Ignored", customfield_9: 99 },
+    });
+    const body = JSON.parse(bodies[0]);
+    expect(body.fields.summary).toBe("Real summary");
+    expect(body.fields.customfield_9).toBe(99);
+  });
+
+  it("omits description from body when not provided", async () => {
+    const { ctx, bodies } = recordingCtx({ id: "1", key: "WB-4", self: "x" });
+    await createIssue.handler(ctx, { projectKey: "WB", summary: "No desc", issueType: "Task" });
+    const body = JSON.parse(bodies[0]);
+    expect("description" in body.fields).toBe(false);
+  });
+});
+
+describe("jira_get_create_meta", () => {
+  it("fetches issue types then field schema per type and returns required fields with allowed values", async () => {
+    const issueTypesReply = {
+      issueTypes: [{ id: "10001", name: "Task" }],
+    };
+    const fieldsReply = {
+      fields: [
+        {
+          fieldId: "summary",
+          name: "Summary",
+          required: true,
+          schema: { type: "string" },
+          allowedValues: undefined,
+        },
+        {
+          fieldId: "customfield_11153",
+          name: "Work Category",
+          required: true,
+          schema: { type: "option" },
+          allowedValues: [
+            { id: "11015", value: "NON KR: Support" },
+            { id: "11016", value: "KR: Growth" },
+          ],
+        },
+      ],
+    };
+
+    const callCount = { n: 0 };
+    const ctx = {
+      http: vi.fn(async (url: string) => {
+        callCount.n++;
+        if (url.includes("/issuetypes") && !url.includes("/10001")) {
+          return { json: async () => issueTypesReply };
+        }
+        return { json: async () => fieldsReply };
+      }),
+    } as any;
+
+    const out: any = await getCreateMeta.handler(ctx, { projectKey: "WB", issueType: "Task" });
+    expect(out).toHaveLength(1);
+    expect(out[0].issueType).toBe("Task");
+    const wc = out[0].fields.find((f: any) => f.fieldId === "customfield_11153");
+    expect(wc).toBeDefined();
+    expect(wc.required).toBe(true);
+    expect(wc.allowedValues).toEqual([
+      { id: "11015", value: "NON KR: Support" },
+      { id: "11016", value: "KR: Growth" },
+    ]);
+  });
+
+  it("returns all issue types when issueType filter is omitted", async () => {
+    const issueTypesReply = {
+      issueTypes: [
+        { id: "10001", name: "Task" },
+        { id: "10002", name: "Bug" },
+      ],
+    };
+    const ctx = {
+      http: vi.fn(async (url: string) => {
+        if (!url.match(/\/\d+$/)) return { json: async () => issueTypesReply };
+        return { json: async () => ({ fields: [] }) };
+      }),
+    } as any;
+
+    const out: any = await getCreateMeta.handler(ctx, { projectKey: "WB" });
+    expect(out).toHaveLength(2);
+    expect(out.map((r: any) => r.issueType)).toEqual(["Task", "Bug"]);
+  });
+});
+
+describe("jira_update_issue (with custom fields)", () => {
+  it("merges extra fields into PUT body while named args still take precedence", async () => {
+    const { ctx, bodies, methods } = recordingCtx({}, 204);
+    const out: any = await updateIssue.handler(ctx, {
+      issueKey: "WB-9",
+      summary: "Updated title",
+      fields: { summary: "Ignored", customfield_11153: { id: "11016" } },
+    });
+    expect(methods[0]).toBe("PUT");
+    const body = JSON.parse(bodies[0]);
+    expect(body.fields.summary).toBe("Updated title");
+    expect(body.fields.customfield_11153).toEqual({ id: "11016" });
+    expect(out).toEqual({ success: true });
   });
 });
 
