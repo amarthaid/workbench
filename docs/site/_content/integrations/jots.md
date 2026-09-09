@@ -21,7 +21,7 @@ Like `browser`, it is an internal plugin: server source rather than `PLUGINS_DIR
 | Tool | Purpose |
 |---|---|
 | `deploy_jot` | Start a deploy; returns an upload URL and a single-use token |
-| `update_jot` | Start a **partial** update; the archive is overlaid onto the live jot |
+| `update_jot` | Start a **partial** update; the archive is overlaid onto the live jot, and `access` / `password` / `cors` change the live settings without one |
 | `list_jot_files` | List the files inside a jot you own — path, bytes, updated time |
 | `list_jots` | List the jots you deployed — name, access, URL, updated time |
 | `delete_jot` | Delete a jot you own by name |
@@ -64,7 +64,26 @@ tar czf - -C <dir> data.json | curl --data-binary @- \
 
 The archive needs no root `index.html`. The live one is retained. Call `list_jot_files` first to see what a jot currently holds.
 
-A patch reads `access` and the password hash from the live manifest rather than from the token. An update therefore can never change a jot's gating. Redeploy for that. The server checks ownership again when the upload lands. A jot deleted or reassigned between mint and upload returns 404 or 403.
+A patch reads `access` and the password hash from the live manifest rather than from the token, so the upload itself can never change a jot's gating. The server checks ownership again when the upload lands. A jot deleted or reassigned between mint and upload returns 404 or 403.
+
+## Changing access without an upload
+
+`update_jot` also takes `access` (`public` or `password`), `password`, and `cors`. Those are written straight to the live manifest when the tool is called — they do **not** wait for an upload — so locking, unlocking, or re-passwording a jot costs one call and no tarball:
+
+```json
+{ "executions": [ { "tool": "update_jot",
+  "arguments": { "name": "report", "access": "password", "password": "hunter2" } } ] }
+```
+
+The response echoes the result back as `applied: { access, cors }`. Rules:
+
+- `password` on its own implies `access: "password"`.
+- Switching to `password` on a jot that is already gated keeps the current password unless you pass a new one. An empty `password` is rejected.
+- Going `public` drops the stored hash. So does rotating the password — and either way every unlock cookie already issued for that jot stops working, because the cookie is an HMAC over the hash.
+- Unmentioned settings are inherited from the live manifest.
+- Files are untouched, and `createdAt` is preserved; `updatedAt` moves.
+
+Settings and files are applied independently: in a call that does both, the settings land immediately and the file changes land when the archive is uploaded. A bad `delete` path aborts before either.
 
 The **merged** tree is re-measured against both limits. Extraction only sees the incoming archive, so without that second check a run of patches could walk a jot past `JOTS_MAX_BYTES` or `JOTS_MAX_FILES`. An overflowing patch returns 413 and leaves the live jot untouched.
 
@@ -100,7 +119,7 @@ The `sandbox` directive forces the browser to treat the page as a unique **opaqu
 
 ### Opting into cross-origin reads
 
-`deploy_jot` and `update_jot` both accept `cors: true`, stored on the jot's manifest. On a **public** jot, the server sends `Access-Control-Allow-Origin: *` and `Cross-Origin-Resource-Policy: cross-origin`, and answers preflight `OPTIONS` requests. That is what lets a page fetch its own JSON. It pairs with `update_jot`: ship the page once, then patch the data file on its own schedule.
+`deploy_jot` and `update_jot` both accept `cors: true`, stored on the jot's manifest. On `update_jot` it takes effect at once, like the other settings, and `cors: false` turns it back off. On a **public** jot, the server sends `Access-Control-Allow-Origin: *` and `Cross-Origin-Resource-Policy: cross-origin`, and answers preflight `OPTIONS` requests. That is what lets a page fetch its own JSON. It pairs with `update_jot`: ship the page once, then patch the data file on its own schedule.
 
 The sandbox is untouched. `sandbox allow-scripts allow-forms`, `nosniff`, and `X-Frame-Options` are still sent, so the page still cannot reach app cookies, storage, `/api`, or `/mcp`.
 
@@ -114,4 +133,4 @@ The manifest file `jot.json` is blocked on both upload and serve. The guards com
 
 Path traversal is rejected on both sides. An archive entry that escapes the root is refused at extraction. A serve path that resolves outside the jot directory returns 403.
 
-Each **deploy** replaces the whole jot, and there is no rollback. `update_jot` covers the incremental case. Anything else means re-uploading the complete directory.
+Each **deploy** replaces the whole jot, and there is no rollback. `update_jot` covers the incremental case — file overlays, and access/password/cors changes on their own. Anything else means re-uploading the complete directory.

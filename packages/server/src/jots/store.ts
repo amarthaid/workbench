@@ -201,3 +201,57 @@ export function listJotFiles(name: string, owner: string): { files: JotFile[] } 
   files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   return { files: files.slice(0, config.JOTS_MAX_FILES) };
 }
+
+export interface JotMetaPatch {
+  access?: "public" | "password";
+  passwordHash?: string;
+  cors?: boolean;
+}
+
+export type UpdateMetaResult =
+  | { name: string; access: "public" | "password"; cors: boolean; url: string }
+  | { error: string };
+
+// Change a live jot's gating without touching its files: rewrite the manifest
+// alone (tmp file + rename onto it, same filesystem). Flipping public/password,
+// rotating a password, or toggling cors used to mean re-uploading the whole
+// tree through deploy_jot; this is the cheap path.
+//
+// Unset fields are inherited from the live manifest, so a caller can change one
+// thing without restating the rest. Going public drops the hash — which also
+// invalidates every outstanding unlock cookie, since those are HMACs over it
+// (see auth.ts) — and staying on password without a new hash keeps the old one.
+export function updateJotMeta(name: string, owner: string, patch: JotMetaPatch): UpdateMetaResult {
+  if (!isValidJotName(name)) return { error: "INVALID_NAME" };
+  const existing = readManifest(name);
+  if (!existing) return { error: "NOT_FOUND" };
+  if (existing.owner !== owner) return { error: "FORBIDDEN" };
+
+  const access = patch.access ?? existing.access;
+  const hash = access === "password" ? patch.passwordHash ?? existing.hash : undefined;
+  if (access === "password" && !hash) return { error: "PASSWORD_REQUIRED" };
+  const cors = patch.cors ?? existing.cors === true;
+
+  const manifest: Manifest = {
+    access,
+    owner: existing.owner,
+    createdAt: existing.createdAt,
+    updatedAt: new Date().toISOString(),
+    ...(access === "password" ? { hash } : {}),
+    ...(cors ? { cors: true } : {}),
+  };
+
+  // Stage outside the jot dir: a half-written manifest inside it would be a
+  // servable file holding the password hash. `.tmp-` also keeps it out of
+  // listJots. Same parent dir as the jot, so the rename is atomic.
+  const tmpFile = path.join(jotsRoot(), `${name}.tmp-meta-${crypto.randomBytes(4).toString("hex")}`);
+  try {
+    fs.writeFileSync(tmpFile, JSON.stringify(manifest, null, 2));
+    fs.renameSync(tmpFile, path.join(jotDir(name), MANIFEST));
+  } catch (e) {
+    fs.rmSync(tmpFile, { force: true });
+    console.error("[updateJotMeta] unexpected error:", e);
+    return { error: "UPDATE_FAILED" };
+  }
+  return { name, access, cors, url: jotUrl(name) };
+}

@@ -147,7 +147,8 @@ connected, nothing is minted.
 A static site the agent can deploy and host: `deploy_jot` returns a single-use
 upload URL, you push a gzip tarball, and it is served at `/j/<name>/`. Names are
 global and creator-locked, and a jot can be password-gated. `update_jot` patches a
-live jot instead of replacing it, so a single data file can be refreshed on its own.
+live jot instead of replacing it, so a single data file can be refreshed on its own — and
+it flips a jot's access, password, or CORS with no upload at all.
 `list_jot_files` shows what a jot currently holds.
 
 Jots are served on an opaque origin under a sandbox CSP, so a jot's JavaScript

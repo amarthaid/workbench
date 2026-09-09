@@ -354,7 +354,7 @@ Five tools for hosting static files. Also `auth: none`.
 | Tool | Purpose |
 |---|---|
 | `deploy_jot` | Returns `{ uploadUrl, token, expiresAt, maxBytes }` for a gzip-tarball upload that replaces the jot |
-| `update_jot` | Same, in patch mode: the archive is overlaid onto the live jot, plus an optional `delete` list |
+| `update_jot` | Same, in patch mode: the archive is overlaid onto the live jot, plus an optional `delete` list. `access` / `password` / `cors` are applied to the live jot immediately, no upload needed |
 | `list_jot_files` | List a jot's files — path, bytes, updatedAt |
 | `list_jots` | List the caller's own jots — never anyone else's |
 | `delete_jot` | Delete a jot you own |
@@ -366,12 +366,22 @@ the token is minted. `update_jot`, `list_jot_files`, and `delete_jot` return `FO
 for another owner's jot and `NOT_FOUND` when it does not exist. `update_jot` also
 rejects a `delete` entry that escapes the jot or names the manifest (`INVALID_PATH`).
 
-A patch inherits `access` and the password hash from the live jot, so it cannot change
-gating, and its archive needs no root `index.html` — the live one is retained.
+A patch upload inherits `access` and the password hash from the live jot, so the archive
+cannot change gating, and it needs no root `index.html` — the live one is retained.
+
+Gating is changed through `update_jot`'s own arguments instead. `access`
+(`public` / `password`), `password`, and `cors` are written to the manifest when the tool
+is called, not when an archive lands, and come back in the result as
+`applied: { access, cors }`. `password` alone implies `access: "password"`; an empty
+password is `PASSWORD_REQUIRED`, as is switching to `password` on a jot with no stored
+hash; restating `access: "password"` without a new password keeps the current one; going
+public drops the hash. Any change to the hash invalidates the unlock cookies already
+issued for that jot. Omitted settings are inherited from the live manifest.
 
 Both tools accept `cors: true`, which on a **public** jot serves its files with
 `Access-Control-Allow-Origin: *` so the page can fetch its own data. The sandbox CSP is
-unchanged. The flag is ignored on password jots.
+unchanged. The flag is ignored on password jots. On `update_jot`, `cors: false` turns it
+back off.
 
 Limits come from configuration: `JOTS_MAX_BYTES` (5 MiB), `JOTS_MAX_FILES` (1000), and
 `JOTS_UPLOAD_TTL_SECONDS` (300, single use). An archive with no root `index.html` is
