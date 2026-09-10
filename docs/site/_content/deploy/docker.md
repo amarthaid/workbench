@@ -211,4 +211,11 @@ must not buffer or compress that stream: the server sends
 other proxies may need response buffering disabled explicitly. Read
 timeouts should exceed the 15s keepalive comment the stream emits.
 
+If you run more than one replica, route a user's browser traffic to one of
+them: `/api/auth/*`, `/api/browser-session/*` and `/mcp` all resolve a
+process-local browser session, so cookie capture and the live view fail (401 or
+404 `NO_CHANNEL`) on any other replica. Cookie affinity is enough — portal
+requests are same-origin and carry cookies. See
+[browser session pod affinity](../field-notes/2026-09-10-browser-session-pod-affinity.md).
+
 Run TLS at the proxy. The server speaks plain HTTP.
