@@ -19,7 +19,7 @@ vi.mock("../context/AuthContext", () => ({
   useAuth: () => ({ user: { id: "u1", email: "dev@example.com" }, token: "t", isLoading: false, login: vi.fn(), logout: vi.fn() }),
 }));
 
-// Mounts a live CDP websocket; stand it in.
+// Mounts a live CDP stream (SSE + command POSTs); stand it in.
 vi.mock("../components/CdpScreencast", () => ({ default: () => <div>screencast</div> }));
 
 import { fetchIntegrations, redeemConnectLink, connectCapture } from "../api";

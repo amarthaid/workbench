@@ -38,6 +38,10 @@ export default function CdpScreencast({ cdpProxyUrl, sessionId, cdpToken, width 
   const cmdIdRef = useRef(1);
   const queueRef = useRef<CdpMessage[]>([]);
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Set per connection attempt: abandons the current stream so run() re-attaches.
+  const channelLostRef = useRef<(() => void) | null>(null);
+  // Distinguishes "never worked" from "worked, then ended" for the error text.
+  const everLiveRef = useRef(false);
   const remoteSizeRef = useRef({ width: 0, height: 0 });
   const [status, setStatus] = useState<"connecting" | "live" | "closed" | "error">("connecting");
   const [error, setError] = useState<string | null>(null);
@@ -57,7 +61,18 @@ export default function CdpScreencast({ cdpProxyUrl, sessionId, cdpToken, width 
         ...authHeader(),
       },
       body: JSON.stringify(batch),
-    }).catch(() => undefined);
+    })
+      .then((res) => {
+        // NO_CHANNEL: the server that answered this POST does not have our
+        // channel. Either the session went away under us, or the request
+        // reached a different replica than the one holding it — the browser
+        // session is per-process, so every request has to land on the same
+        // one. Dropping this on the floor is the bad outcome: frames keep
+        // arriving, so the view looks live while input goes nowhere. Give the
+        // stream up instead and let the retry loop re-attach.
+        if (res.status === 404) channelLostRef.current?.();
+      })
+      .catch(() => undefined);
   }, [cdpProxyUrl]);
 
   const send = useCallback(
@@ -107,6 +122,7 @@ export default function CdpScreencast({ cdpProxyUrl, sessionId, cdpToken, width 
     }
 
     function onReady() {
+      everLiveRef.current = true;
       setStatus("live");
       setError(null);
       send("Page.enable");
@@ -147,47 +163,82 @@ export default function CdpScreencast({ cdpProxyUrl, sessionId, cdpToken, width 
     }
 
     async function connect(): Promise<void> {
-      // 1. Attach: proves who we are and dials chromium. The bearer goes in a
-      // header — the reason this is a POST and not a socket handshake.
-      const attached = await fetch(`${cdpProxyUrl}/attach`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeader() },
-        body: JSON.stringify({ sessionId, cdpToken }),
-        signal: abort.signal,
-      });
-      if (attached.status === 401 || attached.status === 403) throw new FatalError("Unauthorized");
-      if (!attached.ok) throw new Error(`attach failed (${attached.status})`);
-      const { channelId } = (await attached.json()) as { channelId: string };
-      channelRef.current = channelId;
-
-      // 2. Events: an SSE stream read through fetch rather than EventSource,
-      // which cannot send an Authorization header.
-      const stream = await fetch(
-        `${cdpProxyUrl}/events?channel=${encodeURIComponent(channelId)}`,
-        { headers: { Accept: "text/event-stream", ...authHeader() }, signal: abort.signal }
-      );
-      if (stream.status === 401 || stream.status === 403) throw new FatalError("Unauthorized");
-      if (!stream.ok || !stream.body) throw new Error(`stream failed (${stream.status})`);
-
-      const reader = stream.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        // SSE frames are separated by a blank line; a partial tail stays in
-        // the buffer until the rest of it arrives.
-        let split = buffer.indexOf("\n\n");
-        while (split !== -1) {
-          const frame = buffer.slice(0, split);
-          buffer = buffer.slice(split + 2);
-          const parsed = parseSseFrame(frame);
-          if (parsed?.event === "ready") onReady();
-          else if (parsed?.event === "cdp") onCdp(parsed.data);
-          else if (parsed?.event === "closed") return;
-          split = buffer.indexOf("\n\n");
+      // One controller per attempt, chained to the component's: unmounting
+      // stops everything, while a lost channel only ends this attempt.
+      const attemptAbort = new AbortController();
+      let lost = false;
+      const chain = () => attemptAbort.abort(new Error("cancelled"));
+      abort.signal.addEventListener("abort", chain);
+      // Before the stream exists, losing the channel means cancelling the
+      // request in flight. Once it exists, the reader is cancelled instead:
+      // a body read already in progress does not observe a later abort in
+      // every runtime, and this is the path that actually matters.
+      channelLostRef.current = () => {
+        lost = true;
+        attemptAbort.abort(new Error("channel lost"));
+      };
+      try {
+        // 1. Attach: proves who we are and dials chromium. The bearer goes in
+        // a header — the reason this is a POST and not a socket handshake.
+        const attached = await fetch(`${cdpProxyUrl}/attach`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeader() },
+          body: JSON.stringify({ sessionId, cdpToken }),
+          signal: attemptAbort.signal,
+        });
+        if (attached.status === 401 || attached.status === 403) {
+          // A 401 here after the view has already been live is the session
+          // ending, not a credential problem — say the true thing.
+          throw new FatalError(everLiveRef.current ? "Session ended" : "Unauthorized");
         }
+        if (!attached.ok) throw new Error(`attach failed (${attached.status})`);
+        const { channelId } = (await attached.json()) as { channelId: string };
+        channelRef.current = channelId;
+
+        // 2. Events: an SSE stream read through fetch rather than EventSource,
+        // which cannot send an Authorization header.
+        const stream = await fetch(
+          `${cdpProxyUrl}/events?channel=${encodeURIComponent(channelId)}`,
+          {
+            headers: { Accept: "text/event-stream", ...authHeader() },
+            signal: attemptAbort.signal,
+          }
+        );
+        if (stream.status === 401 || stream.status === 403) {
+          throw new FatalError(everLiveRef.current ? "Session ended" : "Unauthorized");
+        }
+        if (!stream.ok || !stream.body) throw new Error(`stream failed (${stream.status})`);
+
+        const reader = stream.body.getReader();
+        channelLostRef.current = () => {
+          lost = true;
+          void reader.cancel();
+        };
+        const decoder = new TextDecoder();
+        let buffer = "";
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          // SSE frames are separated by a blank line; a partial tail stays in
+          // the buffer until the rest of it arrives.
+          let split = buffer.indexOf("\n\n");
+          while (split !== -1) {
+            const frame = buffer.slice(0, split);
+            buffer = buffer.slice(split + 2);
+            const parsed = parseSseFrame(frame);
+            if (parsed?.event === "ready") onReady();
+            else if (parsed?.event === "cdp") onCdp(parsed.data);
+            else if (parsed?.event === "closed") return;
+            split = buffer.indexOf("\n\n");
+          }
+        }
+        // The stream ending because we cancelled it is not the session ending:
+        // make run() retry instead of reporting a clean close.
+        if (lost) throw new Error("channel lost");
+      } finally {
+        abort.signal.removeEventListener("abort", chain);
+        channelLostRef.current = null;
       }
     }
 
