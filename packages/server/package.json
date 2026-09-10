@@ -14,7 +14,6 @@
   "dependencies": {
     "@a-workbench/shared": "*",
     "@fastify/static": "^10.1.3",
-    "@fastify/websocket": "^11.0.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/auto-instrumentations-node": "^0.80.0",

@@ -117,8 +117,8 @@ profile is claimed — surfaced as 409 by `/api/browser-session/reset` and
 [Browser sessions](../guides/browser-sessions.md).
 
 A human can take over the live session: `browser_live_url` mints a signed,
-short-lived URL into the portal that streams the same browser over a CDP
-WebSocket proxy.
+short-lived URL into the portal, which streams the same browser over an
+origin-gated CDP bridge — an SSE stream down, batched command POSTs back up.
 
 **Why it matters:** it is how integrations without a usable OAuth app still work,
 and how an agent hands control back to you mid-task.

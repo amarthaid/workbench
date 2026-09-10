@@ -9,11 +9,10 @@ wins:
 
 ```mermaid
 flowchart TB
-  A[websocket support] --> B["/api/* portal routes"]
-  B --> C["OAuth 2.1 server + /oauth/callback"]
-  C --> D["/metrics + hooks"]
-  D --> E[CDP WebSocket proxies]
-  E --> F["POST /mcp"]
+  A["/api/* portal routes"] --> B["OAuth 2.1 server + /oauth/callback"]
+  B --> C["/metrics + hooks"]
+  C --> D[CDP live-view bridge]
+  D --> F["POST /mcp"]
   F --> F2["/rest/:integration"]
   F2 --> G["/c/:integration/* curl proxy"]
   G --> H["/j/* jots"]
@@ -169,35 +168,42 @@ replaces both: the provider consent URL and the warm browser session are now
 side effects of a successful redeem, not something the link carries or triggers on
 its own.
 
-## CDP WebSocket proxies
+## CDP live-view bridge
 
-`GET /api/auth/cookie/:integration/cdp` and `GET /api/browser-session/cdp`, both
-WebSocket upgrades. Identical mechanism.
+Two path prefixes, one implementation: `/api/auth/cookie/:integration/cdp`
+(cookie capture) and `/api/browser-session/cdp` (the warm session's live view).
+Both are plain HTTP — there is no WebSocket anywhere in the browser-facing path.
+Chromium itself only speaks CDP over a socket, but that hop is server-side.
 
-- **Origin is checked twice.** A `preValidation` hook 403s the upgrade for a
-  non-allowlisted `Origin`, and the handler re-checks and closes with **4403**. The
-  allowlist is exactly `PORTAL_URL` and `SERVER_PUBLIC_URL`, normalised to
-  `protocol//host`.
-- **Auth is in-band, not in the URL.** The first client frame must be JSON
-  `{ type: "auth", sessionId, cdpToken }`, authorized against the portal session
-  behind the WebSocket upgrade — a connect JWT cannot authenticate this socket.
-  Authorization resolves the warm session by `(userId, cdpToken)` alone; nothing
-  pins it to which of the two routes the frame arrived on, but that is harmless
-  since only a portal session — not a connect link — can produce a valid frame in
-  the first place.
-- On success the server sends `{"type":"ready"}` and proxies. Frames are normalised
-  to text in both directions, because Chromium closes on binary opcodes.
+| Method | Path | Request | Response |
+|---|---|---|---|
+| POST | `<base>/attach` | portal session + `Origin` + body `{ sessionId, cdpToken }` | `201 { channelId, keepAliveMs, maxBatch }`. Dials the warm session's page target. 401 for a bad bearer or a `cdpToken` that resolves to no warm session; 403 for a disallowed `Origin` |
+| GET | `<base>/events?channel=` | portal session + `Origin` | `200 text/event-stream`: `event: ready` first, then one `event: cdp` per chromium message, `event: closed` when the session ends. `: keepalive` comment every 15s. 404 `NO_CHANNEL`, 409 `STREAM_IN_USE` |
+| POST | `<base>/commands?channel=` | portal session + `Origin` + body: one CDP command object or an array of up to 64 | `202 { sent }`. 400 `BAD_COMMANDS` for anything that is not a list of objects with a string `method`; 404 `NO_CHANNEL` |
+| POST | `<base>/detach?channel=` | portal session + `Origin`, no body | `204`. Closes the chromium socket and retires the channel |
 
-| Close code | Meaning |
-|---|---|
-| 4400 | Malformed auth frame |
-| 4401 | Unauthorized |
-| 4403 | Disallowed `Origin` |
-| 4408 | No auth frame within 5 seconds |
+- **Auth is a header, on every request.** A WebSocket cannot send
+  `Authorization`, which is why the old proxy took the portal bearer inside a
+  JSON `auth` frame; each endpoint here is a normal request, so nothing is
+  trusted from a message body. A connect JWT still cannot authorize a live view
+  — only a portal session can, resolving the warm session by
+  `(userId, cdpToken)`.
+- **A `channelId` is a handle, not a credential.** Every follow-up request
+  re-proves the session and must match the userId that opened the channel;
+  another user's channelId reads as 404.
+- **The stream owns the channel's lifetime.** One stream per channel; when it
+  drops, the channel closes and chromium stops screencasting into nothing —
+  reconnecting means a fresh `attach`. A channel that attaches but never streams
+  is reaped after 120s.
+- The `Origin` allowlist is exactly `PORTAL_URL` and `SERVER_PUBLIC_URL`,
+  normalised to `protocol//host`, and is checked before the channel map is
+  touched. The stream is the one route that accepts a *missing* `Origin`,
+  because a browser sends none on a same-origin GET; a present-but-disallowed
+  one still 403s there, and every POST requires the header outright.
 
 > [!WARNING] A wrong `PORTAL_URL` or `SERVER_PUBLIC_URL` breaks cookie capture
-> Both variables form the WebSocket origin allowlist. If either does not match the
-> browser's actual origin, the upgrade 403s and live login capture silently fails.
+> Both variables form the live-view origin allowlist. If either does not match the
+> browser's actual origin, `attach` 403s and live login capture silently fails.
 
 ## OAuth 2.1 authorization server
 

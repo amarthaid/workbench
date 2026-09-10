@@ -175,7 +175,7 @@ HTTP API, the MCP endpoint, and the curl proxy.
 ```mermaid
 flowchart LR
   A[Agent / MCP client] -->|POST /mcp| P[Reverse proxy TLS]
-  B[Browser portal] -->|/api, wss CDP| P
+  B[Browser portal] -->|/api, CDP SSE| P
   C[OAuth provider] -->|redirect /api/auth/...| P
   P -->|HTTP :3000| S[workbench]
   S --> D[(Database)]
@@ -187,25 +187,28 @@ Set both public URLs to the externally reachable origin:
 | Variable | Set to | Why it matters |
 |---|---|---|
 | `SERVER_PUBLIC_URL` | The public origin of the server, e.g. `https://workbench.example.com` | Base for every OAuth redirect URI, the MCP protected-resource and authorization-server metadata, the `iss`/`aud` of OAuth access tokens, and whether the `awb_oauth_binding` cookie gets `Secure` (it does only when the value starts with `https://`) |
-| `PORTAL_URL` | The origin the browser loads the portal from — the same value, when the server serves the SPA | SSO and connect redirect target, and half of the WebSocket `Origin` allowlist |
+| `PORTAL_URL` | The origin the browser loads the portal from — the same value, when the server serves the SPA | SSO and connect redirect target, and half of the live-view `Origin` allowlist |
 
-The allowlist for the CDP live-view WebSockets is exactly the set
-`{PORTAL_URL, SERVER_PUBLIC_URL}`. Anything else is rejected with a 403 on the
-upgrade.
+The allowlist for the CDP live-view endpoints is exactly the set
+`{PORTAL_URL, SERVER_PUBLIC_URL}`. Anything else is rejected with a 403.
 
 > [!WARNING] Only the incoming `Origin` is normalized — the allowlist is compared verbatim
 > The browser's `Origin` header is reduced to `protocol//host` before the lookup,
 > but `PORTAL_URL` and `SERVER_PUBLIC_URL` go into the set exactly as you wrote
 > them. A trailing slash, a path suffix, or an explicit default port
 > (`https://workbench.example.com:443`) can therefore never match any real origin,
-> and every CDP upgrade 403s. Set both variables to a bare scheme-and-host origin
+> and every CDP attach 403s. Set both variables to a bare scheme-and-host origin
 > with no trailing slash.
 
 If cookie capture or the live browser view fails with a 403 behind your proxy,
 check the two variables for that exact shape first, then check that they match the
 origin the browser is actually using.
 
-Your proxy must also forward WebSocket upgrades for `/api/auth/cookie/:integration/cdp`
-and `/api/browser-session/cdp`, and preserve the `Origin` header.
+The live view needs no WebSocket support in your proxy — it is REST plus an
+SSE stream (`.../cdp/events`). Your proxy must preserve the `Origin` header, and
+must not buffer or compress that stream: the server sends
+`Cache-Control: no-transform` and `X-Accel-Buffering: no`, which nginx honours;
+other proxies may need response buffering disabled explicitly. Read
+timeouts should exceed the 15s keepalive comment the stream emits.
 
 Run TLS at the proxy. The server speaks plain HTTP.

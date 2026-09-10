@@ -11,11 +11,9 @@ export default defineConfig({
     port: 3000,
     strictPort: true,
     proxy: {
-      "/api": {
-        target: "http://localhost:3001",
-        // /api/auth/cookie/<int>/cdp is a WebSocket — enable WS proxying.
-        ws: true,
-      },
+      // The CDP live view streams over /api/.../cdp/events as SSE — plain
+      // HTTP, so nothing here needs to forward an Upgrade.
+      "/api": "http://localhost:3001",
       "/callback": "http://localhost:3001",
     },
   },

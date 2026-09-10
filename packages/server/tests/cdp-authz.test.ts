@@ -13,7 +13,7 @@ vi.mock("../src/auth/connect-token", () => ({
   verifyConnectToken: verifyConnectTokenMock,
 }));
 
-import { authorizeCdpFrame } from "../src/auth/cdp-authz";
+import { authorizeCdpAttach } from "../src/auth/cdp-authz";
 
 const ENDPOINT = "ws://127.0.0.1:9222/devtools/page/ABC";
 
@@ -22,10 +22,10 @@ beforeEach(() => {
   verifyConnectTokenMock.mockReset();
 });
 
-describe("authorizeCdpFrame", () => {
+describe("authorizeCdpAttach", () => {
   it("returns the warm endpoint when portal user matches the sessionId", async () => {
     getWarmCdpEndpointMock.mockReturnValue(ENDPOINT);
-    const result = await authorizeCdpFrame(
+    const result = await authorizeCdpAttach(
       { sessionId: "user-1", cdpToken: "tok-1" },
       "user-1"
     );
@@ -37,7 +37,7 @@ describe("authorizeCdpFrame", () => {
 
   it("returns null when portal user does not match the sessionId", async () => {
     getWarmCdpEndpointMock.mockReturnValue(ENDPOINT);
-    const result = await authorizeCdpFrame(
+    const result = await authorizeCdpAttach(
       { sessionId: "user-2", cdpToken: "tok-1" },
       "user-1"
     );
@@ -46,7 +46,7 @@ describe("authorizeCdpFrame", () => {
   });
 
   it("rejects a frame whose only credential is a connect JWT", async () => {
-    const result = await authorizeCdpFrame(
+    const result = await authorizeCdpAttach(
       { sessionId: "user-1", cdpToken: "tok-1", bearer: "jwt" } as never,
       null
     );
@@ -57,7 +57,7 @@ describe("authorizeCdpFrame", () => {
 
   it("returns null when authorized but no warm session exists", async () => {
     getWarmCdpEndpointMock.mockReturnValue(null);
-    const result = await authorizeCdpFrame(
+    const result = await authorizeCdpAttach(
       { sessionId: "user-1", cdpToken: "tok-1" },
       "user-1"
     );
@@ -66,7 +66,7 @@ describe("authorizeCdpFrame", () => {
   });
 
   it("returns null when there is neither a portal user nor a bearer", async () => {
-    const result = await authorizeCdpFrame(
+    const result = await authorizeCdpAttach(
       { sessionId: "user-1", cdpToken: "tok-1" },
       null
     );

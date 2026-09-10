@@ -54,7 +54,7 @@ The cheaper habit is to prefer `browser_read_text` for text-heavy pages, forms, 
 
 Opening it attaches a live view of the *same* session the agent is driving. A person can take over by hand to solve a CAPTCHA, complete an SSO prompt, or click through a consent screen. They can then leave the page. The agent's next tool call continues in the browser they just used. This is the escape hatch for anything an agent cannot or should not do itself.
 
-The live-view connection is authorized on its first WebSocket frame, not through the URL, and the browser canvas only accepts connections from allowed origins.
+The live-view connection is authorized by an `Authorization` header on every request, not through the URL, and the browser canvas only accepts connections from allowed origins.
 
 ## Notes and gotchas
 
