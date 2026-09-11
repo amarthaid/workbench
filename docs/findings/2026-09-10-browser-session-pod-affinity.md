@@ -96,9 +96,17 @@ it on all of them.
 - **Consistent hashing, not modulo.** `hash % N` remaps nearly every key when a
   pod comes or goes, so one rollout breaks every live session at once.
 - **`CLUSTER_ENABLED` off.** Hashing reaches a pod, not a worker inside it.
-- **`/mcp` carries no such header** — an MCP client will not send one. Hash that
-  path on `Authorization`, which is equally per-user, or keep `browser_*` on a
-  single replica.
+- **`/mcp` is not solved by this.** An MCP client sends no `X-Browser-Session`,
+  and hashing that path on `Authorization` instead — which an earlier draft of
+  this finding suggested — does not work: `resolveMcpUser` takes identity from
+  three different carriers, and neither of the common two is usable as a hash
+  key. An api-key agent sends no `Authorization` at all, so every such client
+  hashes on an empty value and lands on one replica; an OAuth Bearer rotates at
+  its TTL, so the hash moves on refresh, which is the session yank above rather
+  than a fix for it. Until this is settled, keep `browser_*` on a single
+  replica — and note that pins *all* `POST /mcp` traffic, since tool calls are
+  not separable by path. Tracked in
+  [#87](https://github.com/barockok/workbench/issues/87).
 
 Config lives in [the proxy setup](../deploy/docker.md#multiple-replicas).
 

@@ -248,9 +248,13 @@ Three things to get right, each of which silently breaks stickiness:
   worker per core, each with its own session map, and no ingress can route
   inside a worker pool.
 
-Agent traffic to `/mcp` carries no such header — an MCP client will not send
-one. Hash that path on `Authorization` instead, which is equally per-user, or
-keep `browser_*` tools on a single replica. Full reasoning:
+Agent traffic to `/mcp` is **not covered by this** — an MCP client sends no such
+header, and `Authorization` is not a usable substitute: `/mcp` accepts identity
+as an api key (no `Authorization` header at all, so every such agent hashes
+alike) or as an OAuth Bearer (which rotates at its TTL, moving the hash under a
+live session). So if you run `browser_*` tools with more than one replica, pin
+them — and that means pinning all `POST /mcp` traffic, since tool calls are not
+separable by path. Full reasoning:
 [browser session pod affinity](../field-notes/2026-09-10-browser-session-pod-affinity.md).
 
 Run TLS at the proxy. The server speaks plain HTTP.
