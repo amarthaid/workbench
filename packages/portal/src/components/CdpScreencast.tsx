@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { browserSessionHeaders, setBrowserSessionKey } from "../api";
 
 interface Props {
   // Base path of the CDP bridge, e.g. /api/auth/cookie/<int>/cdp. The client
   // appends /attach, /events, /commands and /detach. No secrets in the URL —
   // every request carries the portal bearer as an Authorization header.
   cdpProxyUrl: string;
-  sessionId: string;
-  cdpToken: string;
   // Width of the rendered view (height keeps aspect ratio from chromium frames).
   width: number;
 }
@@ -32,9 +31,12 @@ const MAX_RECONNECTS = 3;
  * go back as batched POSTs. Chromium itself still speaks CDP over a socket,
  * but that hop is entirely server-side (see server/src/auth/cdp-bridge.ts).
  */
-export default function CdpScreencast({ cdpProxyUrl, sessionId, cdpToken, width }: Props) {
+export default function CdpScreencast({ cdpProxyUrl, width }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const channelRef = useRef<string | null>(null);
+  // The per-user routing key from /attach. Held here only to know whether we
+  // are attached; the value itself lives in the api module so every other
+  // browser-touching call carries it too.
+  const keyRef = useRef<string | null>(null);
   const cmdIdRef = useRef(1);
   const queueRef = useRef<CdpMessage[]>([]);
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -50,27 +52,27 @@ export default function CdpScreencast({ cdpProxyUrl, sessionId, cdpToken, width 
 
   const flush = useCallback(() => {
     flushTimerRef.current = null;
-    const channel = channelRef.current;
     const batch = queueRef.current;
-    if (!channel || batch.length === 0) return;
+    if (!keyRef.current || batch.length === 0) return;
     queueRef.current = [];
-    void fetch(`${cdpProxyUrl}/commands?channel=${encodeURIComponent(channel)}`, {
+    // The first of these to reach the server is what starts chromium, on the
+    // replica the routing key sends it to.
+    void fetch(`${cdpProxyUrl}/commands`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         ...authHeader(),
+        ...browserSessionHeaders(),
       },
       body: JSON.stringify(batch),
     })
       .then((res) => {
-        // NO_CHANNEL: the server that answered this POST does not have our
-        // channel. Either the session went away under us, or the request
-        // reached a different replica than the one holding it — the browser
-        // session is per-process, so every request has to land on the same
-        // one. Dropping this on the floor is the bad outcome: frames keep
-        // arriving, so the view looks live while input goes nowhere. Give the
-        // stream up instead and let the retry loop re-attach.
-        if (res.status === 404) channelLostRef.current?.();
+        // The session went away under us (reaped, or its replica restarted),
+        // or a misrouted request reached a replica that does not hold it.
+        // Dropping this on the floor is the bad outcome: frames keep arriving,
+        // so the view looks live while input goes nowhere. Give the stream up
+        // instead and let the retry loop re-attach.
+        if (res.status === 404 || res.status === 409) channelLostRef.current?.();
       })
       .catch(() => undefined);
   }, [cdpProxyUrl]);
@@ -178,12 +180,12 @@ export default function CdpScreencast({ cdpProxyUrl, sessionId, cdpToken, width 
         attemptAbort.abort(new Error("channel lost"));
       };
       try {
-        // 1. Attach: proves who we are and dials chromium. The bearer goes in
-        // a header — the reason this is a POST and not a socket handshake.
+        // 1. Attach: mints this user's routing key. It starts nothing — it is
+        // the one request that cannot be routed yet, so it must not be the one
+        // that pins a browser to a replica.
         const attached = await fetch(`${cdpProxyUrl}/attach`, {
           method: "POST",
-          headers: { "Content-Type": "application/json", ...authHeader() },
-          body: JSON.stringify({ sessionId, cdpToken }),
+          headers: authHeader(),
           signal: attemptAbort.signal,
         });
         if (attached.status === 401 || attached.status === 403) {
@@ -192,18 +194,20 @@ export default function CdpScreencast({ cdpProxyUrl, sessionId, cdpToken, width 
           throw new FatalError(everLiveRef.current ? "Session ended" : "Unauthorized");
         }
         if (!attached.ok) throw new Error(`attach failed (${attached.status})`);
-        const { channelId } = (await attached.json()) as { channelId: string };
-        channelRef.current = channelId;
+        const { sessionKey } = (await attached.json()) as { sessionKey: string };
+        setBrowserSessionKey(sessionKey);
+        keyRef.current = sessionKey;
 
         // 2. Events: an SSE stream read through fetch rather than EventSource,
-        // which cannot send an Authorization header.
-        const stream = await fetch(
-          `${cdpProxyUrl}/events?channel=${encodeURIComponent(channelId)}`,
-          {
-            headers: { Accept: "text/event-stream", ...authHeader() },
-            signal: attemptAbort.signal,
-          }
-        );
+        // which cannot send an Authorization header — nor the routing key.
+        const stream = await fetch(`${cdpProxyUrl}/events`, {
+          headers: {
+            Accept: "text/event-stream",
+            ...authHeader(),
+            ...browserSessionHeaders(),
+          },
+          signal: attemptAbort.signal,
+        });
         if (stream.status === 401 || stream.status === 403) {
           throw new FatalError(everLiveRef.current ? "Session ended" : "Unauthorized");
         }
@@ -252,7 +256,7 @@ export default function CdpScreencast({ cdpProxyUrl, sessionId, cdpToken, width 
           return;
         } catch (e) {
           if (cancelled || abort.signal.aborted) return;
-          channelRef.current = null;
+          keyRef.current = null;
           if (e instanceof FatalError) {
             setStatus("error");
             setError(e.message);
@@ -273,22 +277,22 @@ export default function CdpScreencast({ cdpProxyUrl, sessionId, cdpToken, width 
 
     return () => {
       cancelled = true;
-      const channel = channelRef.current;
-      channelRef.current = null;
+      const attached = keyRef.current !== null;
+      keyRef.current = null;
       if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
       queueRef.current = [];
       abort.abort();
-      if (channel) {
+      if (attached) {
         // Bodyless POST — no Content-Type, or Fastify rejects it with
         // FST_ERR_CTP_EMPTY_JSON_BODY. keepalive lets it outlive the unload.
-        void fetch(`${cdpProxyUrl}/detach?channel=${encodeURIComponent(channel)}`, {
+        void fetch(`${cdpProxyUrl}/detach`, {
           method: "POST",
-          headers: authHeader(),
+          headers: { ...authHeader(), ...browserSessionHeaders() },
           keepalive: true,
         }).catch(() => undefined);
       }
     };
-  }, [cdpProxyUrl, sessionId, cdpToken, send]);
+  }, [cdpProxyUrl, send]);
 
   // Translate a DOM event on the canvas into chromium coordinates.
   function canvasToRemote(e: React.MouseEvent<HTMLCanvasElement>) {

@@ -6,7 +6,6 @@ import {
   type IntegrationSummary,
   type ApiKeyField,
 } from "../api";
-import { useAuth } from "../context/AuthContext";
 import CookieAuthPopup from "../components/CookieAuthPopup";
 import ApiKeyAuthModal from "../components/ApiKeyAuthModal";
 import { ConfirmDialog } from "../components/dialogs/ConfirmDialog";
@@ -16,8 +15,6 @@ interface CookieAuthState {
   integration: string;
   loginUrl: string;
   cdpProxyUrl: string;
-  cdpToken: string;
-  sessionId: string;
 }
 
 interface ApiKeyAuthState {
@@ -34,7 +31,6 @@ interface ApiKeyAuthState {
  */
 export function useConnectFlow() {
   const qc = useQueryClient();
-  const { user } = useAuth();
 
   const [cookieAuth, setCookieAuth] = useState<CookieAuthState | null>(null);
   const [apiKeyAuth, setApiKeyAuth] = useState<ApiKeyAuthState | null>(null);
@@ -60,15 +56,13 @@ export function useConnectFlow() {
 
       if (result.type === "cookie") {
         // Cookie connect always returns login_required: open the live view so
-        // the human logs in and clicks Capture. The WS auth frame's sessionId
-        // is the portal user's id — the server keys the warm session by userId
-        // and requires sessionId === userId.
+        // the human logs in and clicks Capture. Nothing identifying travels
+        // with it — the live view authenticates with the portal bearer and the
+        // server resolves this user's own session from it.
         setCookieAuth({
           integration: integ.name,
           loginUrl: result.loginUrl,
           cdpProxyUrl: result.cdpProxyUrl,
-          cdpToken: result.cdpToken,
-          sessionId: user?.id ?? "",
         });
         return;
       }
@@ -147,8 +141,6 @@ export function useConnectFlow() {
           integration={cookieAuth.integration}
           loginUrl={cookieAuth.loginUrl}
           cdpProxyUrl={cookieAuth.cdpProxyUrl}
-          cdpToken={cookieAuth.cdpToken}
-          sessionId={cookieAuth.sessionId}
           onClose={() => setCookieAuth(null)}
           onSuccess={refresh}
         />

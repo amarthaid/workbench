@@ -118,7 +118,7 @@ export default function Connect() {
         <div><b>02</b> — Click "Capture session" once authenticated.</div>
       </div>
       <div style={{ padding: 0, background: "#000", marginTop: "var(--s-12)" }}>
-        <CdpScreencast cdpProxyUrl={info.cdpProxyUrl} sessionId={info.sessionId} cdpToken={info.cdpToken} width={1024} />
+        <CdpScreencast cdpProxyUrl={info.cdpProxyUrl} width={1024} />
       </div>
       {error && <div className="ui-form-error" style={{ marginTop: "var(--s-12)" }}>{error}</div>}
     </Modal>

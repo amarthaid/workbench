@@ -177,29 +177,63 @@ Chromium itself only speaks CDP over a socket, but that hop is server-side.
 
 | Method | Path | Request | Response |
 |---|---|---|---|
-| POST | `<base>/attach` | portal session + `Origin` + body `{ sessionId, cdpToken }` | `201 { channelId, keepAliveMs, maxBatch }`. Dials the warm session's page target. 401 for a bad bearer or a `cdpToken` that resolves to no warm session; 403 for a disallowed `Origin` |
-| GET | `<base>/events?channel=` | portal session + `Origin` | `200 text/event-stream`: `event: ready` first, then one `event: cdp` per chromium message, `event: closed` when the session ends. `: keepalive` comment every 15s. 404 `NO_CHANNEL`, 409 `STREAM_IN_USE` |
-| POST | `<base>/commands?channel=` | portal session + `Origin` + body: one CDP command object or an array of up to 64 | `202 { sent }`. 400 `BAD_COMMANDS` for anything that is not a list of objects with a string `method`; 404 `NO_CHANNEL` |
-| POST | `<base>/detach?channel=` | portal session + `Origin`, no body | `204`. Closes the chromium socket and retires the channel |
+| POST | `<base>/attach` | portal session + `Origin`, no body | `201 { sessionKey, header, keepAliveMs, maxBatch }`. Mints this user's routing key and **starts nothing**. 401 bad bearer, 403 disallowed `Origin` |
+| GET | `<base>/events` | portal session + `X-Browser-Session` (`Origin` optional) | `200 text/event-stream`: `event: ready` first, then one `event: cdp` per chromium message, `event: closed` when the session ends. `: keepalive` comment every 15s. 400 `BAD_SESSION_KEY` |
+| POST | `<base>/commands` | portal session + `Origin` + `X-Browser-Session` + body: one CDP command object or an array of up to 64 | `202 { sent }`. **The first one starts chromium.** 400 `BAD_COMMANDS` / `BAD_SESSION_KEY`, 409 `BROWSER_SESSION_BUSY` (spawn in flight — retry), 503 `BROWSER_START_FAILED` |
+| POST | `<base>/detach` | portal session + `Origin` + `X-Browser-Session`, no body | `204`. Closes the chromium socket and retires the channel |
 
-- **Auth is a header, on every request.** A WebSocket cannot send
-  `Authorization`, which is why the old proxy took the portal bearer inside a
-  JSON `auth` frame; each endpoint here is a normal request, so nothing is
-  trusted from a message body. A connect JWT still cannot authorize a live view
-  — only a portal session can, resolving the warm session by
-  `(userId, cdpToken)`.
-- **A `channelId` is a handle, not a credential.** Every follow-up request
-  re-proves the session and must match the userId that opened the channel;
-  another user's channelId reads as 404.
-- **The stream owns the channel's lifetime.** One stream per channel; when it
-  drops, the channel closes and chromium stops screencasting into nothing —
-  reconnecting means a fresh `attach`. A channel that attaches but never streams
-  is reaped after 120s.
-- The `Origin` allowlist is exactly `PORTAL_URL` and `SERVER_PUBLIC_URL`,
-  normalised to `protocol//host`, and is checked before the channel map is
-  touched. The stream is the one route that accepts a *missing* `Origin`,
-  because a browser sends none on a same-origin GET; a present-but-disallowed
-  one still 403s there, and every POST requires the header outright.
+### Why attach starts nothing
+
+A browser session is process-local, so across replicas every request that
+touches one has to reach the replica that owns it (see
+[browser session pod affinity](../field-notes/2026-09-10-browser-session-pod-affinity.md)).
+`attach` is the one request that *cannot* be routed yet — the caller has no key
+to route on — so it must not be the request that commits the pinned resource.
+It only mints the key. The first `commands` starts chromium wherever the key
+routes it, and the key keeps every later request going to that replica.
+
+So the pod that mints is often not the pod that owns, and that is fine:
+minting touches nothing.
+
+### The routing key
+
+`sessionKey` is `HMAC(SESSION_SECRET, userId)` — **stable per user**, not per
+attach, so `attach` is idempotent. That stability is load-bearing: chromium is
+one process per user holding an exclusive lock on a shared profile directory,
+so two keys for one user would route to two replicas that both spawn on that
+profile and fight over its `SingletonLock`.
+
+- **It is a routing hint, not a credential.** Every endpoint authenticates the
+  portal bearer first and the session it reaches is always *that bearer's own*,
+  resolved from the verified userId — never from the key. A leaked key grants
+  nothing on its own (401 without a bearer), and another user's key with your
+  bearer is a 400 that starts nothing for either party.
+- **It is required after attach.** A client that forgets it gets 400 rather
+  than silently working on a single replica and failing intermittently behind
+  a load balancer.
+- The portal sends the same header on every other call that reaches a browser
+  session — `GET /api/auth/:integration`, `POST /api/connect/redeem`,
+  `.../capture`, `.../cancel`, `/api/browser-session/reset` — because those
+  warm or read the browser and must land on the same replica.
+
+### Stream lifetime
+
+`event: ready` means *the stream is attached*, not that chromium is running —
+it may not be yet. The client sends its first command on that signal, and that
+command is what starts the browser.
+
+One stream per channel, **last one wins**: a reconnecting stream takes the
+channel over and the stranded one gets `event: closed`, because a refreshed tab
+can arrive before the old response is noticed as dead. When the current stream
+drops, the channel closes so chromium stops screencasting into nothing;
+reconnecting means a fresh `attach`. A channel with no stream is reaped after
+120s.
+
+The `Origin` allowlist is exactly `PORTAL_URL` and `SERVER_PUBLIC_URL`,
+normalised to `protocol//host`, and is checked before the channel map is
+touched. The stream is the one route that accepts a *missing* `Origin`, because
+a browser sends none on a same-origin GET; a present-but-disallowed one still
+403s there, and every POST requires the header outright.
 
 > [!WARNING] A wrong `PORTAL_URL` or `SERVER_PUBLIC_URL` breaks cookie capture
 > Both variables form the live-view origin allowlist. If either does not match the

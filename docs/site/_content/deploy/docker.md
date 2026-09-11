@@ -211,11 +211,46 @@ must not buffer or compress that stream: the server sends
 other proxies may need response buffering disabled explicitly. Read
 timeouts should exceed the 15s keepalive comment the stream emits.
 
-If you run more than one replica, route a user's browser traffic to one of
-them: `/api/auth/*`, `/api/browser-session/*` and `/mcp` all resolve a
-process-local browser session, so cookie capture and the live view fail (401 or
-404 `NO_CHANNEL`) on any other replica. Cookie affinity is enough — portal
-requests are same-origin and carry cookies. See
+### Multiple replicas
+
+A browser session is process-local, so a user's browser traffic has to reach the
+one replica that owns their Chromium. The server makes that routable: `POST
+<base>/cdp/attach` mints a per-user key and starts nothing, and the portal then
+sends it as **`X-Browser-Session`** on every call that touches a browser
+session. Hash that header to a pod and the design works; ignore it and cookie
+capture and the live view fail intermittently.
+
+nginx-ingress, on the browser-session paths:
+
+```yaml
+nginx.ingress.kubernetes.io/upstream-hash-by: "$http_x_browser_session"
+```
+
+Istio/Envoy:
+
+```yaml
+trafficPolicy:
+  loadBalancer:
+    consistentHash:
+      httpHeaderName: x-browser-session
+```
+
+Three things to get right, each of which silently breaks stickiness:
+
+- **Hash to pod endpoints, not to a `Service`.** A ClusterIP behind the hashing
+  hop re-round-robins and the hash is wasted. Use the controller's native
+  endpoint routing (nginx-ingress and Istio both target pod IPs by default) or
+  a headless service.
+- **Consistent hashing, not modulo.** `hash % N` remaps nearly every key when a
+  pod is added or removed, so one rollout breaks every live session at once.
+  Ring hash or maglev moves only the keys it must.
+- **`CLUSTER_ENABLED=false` wherever the browser feature is used.** It forks one
+  worker per core, each with its own session map, and no ingress can route
+  inside a worker pool.
+
+Agent traffic to `/mcp` carries no such header — an MCP client will not send
+one. Hash that path on `Authorization` instead, which is equally per-user, or
+keep `browser_*` tools on a single replica. Full reasoning:
 [browser session pod affinity](../field-notes/2026-09-10-browser-session-pod-affinity.md).
 
 Run TLS at the proxy. The server speaks plain HTTP.

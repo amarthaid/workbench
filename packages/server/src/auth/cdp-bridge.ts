@@ -1,28 +1,65 @@
-import { randomUUID } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { ServerResponse } from "node:http";
 import WebSocket from "ws";
 import { config } from "../config";
 import { verifySession } from "./session";
-import { authorizeCdpAttach } from "./cdp-authz";
+import { ensureSession } from "./browser-session";
 
-// Browser-facing CDP transport: plain HTTP instead of a WebSocket.
+// Browser-facing CDP transport: plain HTTP instead of a WebSocket, and
+// routable across replicas.
 //
 // Chromium only speaks CDP over a WebSocket, so the server↔chromium hop is
-// still a socket (see the dialer below). What the *browser* talks to is a
-// three-endpoint REST + SSE bridge over one channel:
+// still a socket (see the dialer below). What the *browser* talks to is:
 //
-//   POST <base>/attach            → dial chromium, mint a channelId
-//   GET  <base>/events?channel=   → SSE: chromium → client CDP messages
-//   POST <base>/commands?channel= → client → chromium CDP commands (batched)
-//   POST <base>/detach?channel=   → tear the channel down
+//   POST <base>/attach    → mint this user's browser-session key. Nothing else:
+//                           no chromium, no channel, no state.
+//   GET  <base>/events    → SSE: chromium → client CDP messages
+//   POST <base>/commands  → client → chromium CDP commands (batched). The
+//                           first one STARTS chromium on the replica that
+//                           receives it.
+//   POST <base>/detach    → tear the view down
 //
 // Two things get better by dropping the socket. Auth stops being in-band: a
 // WebSocket can't carry an Authorization header, which is why the old proxy
 // took the portal bearer inside a JSON "auth" frame; every endpoint here is a
-// normal request that carries the header, so nothing has to be trusted from a
-// message body. And nothing in the path needs to forward an Upgrade — a
-// reverse proxy that only knows how to stream HTTP responses is enough.
+// normal request that carries the header. And nothing in the path needs to
+// forward an Upgrade — a reverse proxy that only streams HTTP is enough.
+//
+// ─── Why attach commits nothing ───────────────────────────────────────────
+//
+// A browser session is process-local (see
+// docs/findings/2026-09-10-browser-session-pod-affinity.md), so across
+// replicas every request touching one has to reach the replica that owns it.
+// `attach` is the one request that cannot be routed yet — the client has no
+// key to route on — so it must not be the request that commits the pinned
+// resource. It only mints the key. The first `commands` starts chromium
+// wherever the key routes, and the key keeps every later request going there.
+//
+// The key is `HMAC(SESSION_SECRET, userId)`, which makes it *stable per user*
+// rather than per attach. That is load-bearing: chromium is one process per
+// user holding an exclusive lock on a shared profile directory, so two keys
+// for one user would route to two replicas that both spawn on that profile
+// and fight over its SingletonLock.
+//
+// It is a ROUTING KEY, NOT A CREDENTIAL. Every endpoint still authenticates
+// the portal bearer and checks the key against that user, so a leaked key
+// grants nothing on its own; it exists so an L7 proxy can hash on it.
+
+export const SESSION_HEADER = "x-browser-session";
+
+export function mintSessionKey(userId: string): string {
+  return createHmac("sha256", config.SESSION_SECRET)
+    .update(`browser-session:${userId}`)
+    .digest("base64url");
+}
+
+export function verifySessionKey(key: string | undefined, userId: string): boolean {
+  if (!key) return false;
+  const expected = Buffer.from(mintSessionKey(userId));
+  const given = Buffer.from(key);
+  return expected.length === given.length && timingSafeEqual(expected, given);
+}
 
 // ─── Upstream (chromium) link ─────────────────────────────────────────────
 
@@ -73,25 +110,33 @@ const wsDialer: Dialer = (target, handlers) => {
   };
 };
 
+let dial: Dialer = wsDialer;
+// Test seam: the chromium socket is the one thing a unit test cannot have.
+export function _setDialer(next: Dialer | null): void {
+  dial = next ?? wsDialer;
+}
+
 // ─── Channels ─────────────────────────────────────────────────────────────
 
 export type SseEventName = "ready" | "cdp" | "closed";
 export type ChannelSink = (event: SseEventName, data?: string) => void;
 
+// One channel per user, because chromium is one process per user. It exists
+// before anything is started: `link` stays null until the first command.
 export interface CdpChannel {
-  id: string;
   userId: string;
-  link: UpstreamLink;
-  // At most one SSE stream drains a channel. Messages that arrive with no
-  // stream attached are dropped: the client attaches before it enables any
-  // CDP domain, so an unattached channel has nothing to say.
+  link: UpstreamLink | null;
+  // Shared by concurrent first commands so a burst starts chromium once.
+  starting: Promise<void> | null;
+  // At most one SSE stream drains a channel. Messages arriving with no stream
+  // attached are dropped — nothing asked for them.
   sink: ChannelSink | null;
   lastActivity: number;
   closed: boolean;
 }
 
-// A channel that is attached but never streamed (client died between the two
-// requests) would otherwise hold a chromium socket open forever.
+// A channel with no stream attached is either waiting for a reconnect or
+// abandoned; either way it should not hold a chromium socket for long.
 export const CHANNEL_IDLE_MS = 120_000;
 export const KEEPALIVE_MS = 15_000;
 // Bound on one /commands batch — the client coalesces input events, and an
@@ -100,45 +145,62 @@ export const MAX_BATCH = 64;
 
 const channels = new Map<string, CdpChannel>();
 
-export function createChannel(userId: string, target: string, dial: Dialer = wsDialer): CdpChannel {
+function getOrCreateChannel(userId: string): CdpChannel {
+  const existing = channels.get(userId);
+  if (existing && !existing.closed) {
+    existing.lastActivity = Date.now();
+    return existing;
+  }
   const channel: CdpChannel = {
-    id: randomUUID(),
     userId,
-    link: { send: () => undefined, close: () => undefined },
+    link: null,
+    starting: null,
     sink: null,
     lastActivity: Date.now(),
     closed: false,
   };
-  channels.set(channel.id, channel);
-  channel.link = dial(target, {
-    onMessage: (text) => {
-      channel.lastActivity = Date.now();
-      channel.sink?.("cdp", text);
-    },
-    onClose: () => closeChannel(channel.id),
-  });
+  channels.set(userId, channel);
   return channel;
 }
 
-// Look a channel up as its owner. A channelId is a handle, not a credential:
-// the caller still has to prove the same userId that opened it.
-export function getChannel(id: string | undefined, userId: string): CdpChannel | null {
-  if (!id) return null;
-  const channel = channels.get(id);
-  if (!channel || channel.closed || channel.userId !== userId) return null;
-  channel.lastActivity = Date.now();
-  return channel;
+export function getChannel(userId: string): CdpChannel | undefined {
+  const channel = channels.get(userId);
+  return channel && !channel.closed ? channel : undefined;
 }
 
-export function closeChannel(id: string): void {
-  const channel = channels.get(id);
+// Start chromium for this channel if it isn't running yet. This is the call
+// that pins the session to this replica.
+async function ensureUpstream(channel: CdpChannel): Promise<void> {
+  if (channel.link) return;
+  if (channel.starting) return channel.starting;
+  channel.starting = (async () => {
+    const session = await ensureSession(channel.userId);
+    if (channel.closed) return;
+    channel.link = dial(session.cdpPageWsUrl, {
+      onMessage: (text) => {
+        channel.lastActivity = Date.now();
+        channel.sink?.("cdp", text);
+      },
+      onClose: () => closeChannel(channel.userId),
+    });
+  })();
+  try {
+    await channel.starting;
+  } finally {
+    channel.starting = null;
+  }
+}
+
+export function closeChannel(userId: string): void {
+  const channel = channels.get(userId);
   if (!channel) return;
-  channels.delete(id);
+  channels.delete(userId);
   channel.closed = true;
   const sink = channel.sink;
   channel.sink = null;
   sink?.("closed");
-  try { channel.link.close(); } catch { /* noop */ }
+  try { channel.link?.close(); } catch { /* noop */ }
+  channel.link = null;
 }
 
 // Forward a batch of client CDP commands upstream. Returns the number sent,
@@ -150,15 +212,15 @@ export function sendCommands(channel: CdpChannel, body: unknown): number | null 
     if (!msg || typeof msg !== "object" || Array.isArray(msg)) return null;
     if (typeof (msg as { method?: unknown }).method !== "string") return null;
   }
-  for (const msg of list) channel.link.send(JSON.stringify(msg));
+  for (const msg of list) channel.link?.send(JSON.stringify(msg));
   channel.lastActivity = Date.now();
   return list.length;
 }
 
 export function reapIdleChannels(now = Date.now()): void {
-  for (const [id, channel] of channels) {
+  for (const [userId, channel] of channels) {
     if (channel.sink) continue;
-    if (now - channel.lastActivity > CHANNEL_IDLE_MS) closeChannel(id);
+    if (now - channel.lastActivity > CHANNEL_IDLE_MS) closeChannel(userId);
   }
 }
 
@@ -171,7 +233,7 @@ export function startChannelReaper(): void {
 
 // Test seam.
 export function _resetChannels(): void {
-  for (const id of [...channels.keys()]) closeChannel(id);
+  for (const userId of [...channels.keys()]) closeChannel(userId);
 }
 
 // ─── Request guards ───────────────────────────────────────────────────────
@@ -226,6 +288,19 @@ async function guard(
   return userId;
 }
 
+// Every request past attach must carry the routing key. Requiring it is the
+// point: a client that forgets it would otherwise work on a single replica and
+// fail intermittently behind a load balancer, which is the worst of both.
+function keyed(request: FastifyRequest, reply: FastifyReply, userId: string): boolean {
+  const header = request.headers[SESSION_HEADER];
+  const key = Array.isArray(header) ? header[0] : header;
+  if (!verifySessionKey(key, userId)) {
+    reply.status(400).send({ error: "BAD_SESSION_KEY", header: SESSION_HEADER });
+    return false;
+  }
+  return true;
+}
+
 // ─── SSE framing ──────────────────────────────────────────────────────────
 
 function writeSse(res: ServerResponse, event: SseEventName, data?: string): void {
@@ -240,36 +315,29 @@ function writeSse(res: ServerResponse, event: SseEventName, data?: string): void
 
 // Both live-view flows share one implementation: cookie-auth capture (whose
 // path carries the integration for readability only) and the warm
-// browser-session view. Auth for both resolves through the session's cdpToken.
+// browser-session view. The key is per user, so it is valid on either.
 const CDP_BASES = ["/api/auth/cookie/:integration/cdp", "/api/browser-session/cdp"] as const;
 
 export function registerCdpBridgeRoutes(app: FastifyInstance): void {
   for (const base of CDP_BASES) {
-    app.post<{ Body: { sessionId?: string; cdpToken?: string } }>(
-      `${base}/attach`,
-      async (request, reply) => {
-        const userId = await guard(request, reply);
-        if (!userId) return reply;
-        const target = await authorizeCdpAttach(
-          { sessionId: request.body?.sessionId, cdpToken: request.body?.cdpToken },
-          userId
-        );
-        if (!target) return reply.status(401).send({ error: "Unauthorized" });
-        const channel = createChannel(userId, target);
-        return reply.status(201).send({
-          channelId: channel.id,
-          keepAliveMs: KEEPALIVE_MS,
-          maxBatch: MAX_BATCH,
-        });
-      }
-    );
+    // Mint. Unrouted by definition — the caller has no key yet — so it starts
+    // nothing and is safe on any replica. Idempotent: same user, same key.
+    app.post(`${base}/attach`, async (request, reply) => {
+      const userId = await guard(request, reply);
+      if (!userId) return reply;
+      return reply.status(201).send({
+        sessionKey: mintSessionKey(userId),
+        header: SESSION_HEADER,
+        keepAliveMs: KEEPALIVE_MS,
+        maxBatch: MAX_BATCH,
+      });
+    });
 
-    app.get<{ Querystring: { channel?: string } }>(`${base}/events`, async (request, reply) => {
+    app.get(`${base}/events`, async (request, reply) => {
       const userId = await guard(request, reply, true);
       if (!userId) return reply;
-      const channel = getChannel(request.query.channel, userId);
-      if (!channel) return reply.status(404).send({ error: "NO_CHANNEL" });
-      if (channel.sink) return reply.status(409).send({ error: "STREAM_IN_USE" });
+      if (!keyed(request, reply, userId)) return reply;
+      const channel = getOrCreateChannel(userId);
 
       reply.hijack();
       const res = reply.raw;
@@ -281,31 +349,41 @@ export function registerCdpBridgeRoutes(app: FastifyInstance): void {
         Connection: "keep-alive",
         "X-Accel-Buffering": "no",
       });
+
+      // Last stream wins. A refreshed tab can arrive before the old response
+      // is noticed as dead, and refusing the new one would strand the user
+      // behind a stream nobody is reading.
+      const previous = channel.sink;
+      channel.sink = null;
+      previous?.("closed");
+
       const keepAlive = setInterval(() => {
         try { res.write(": keepalive\n\n"); } catch { /* noop */ }
       }, KEEPALIVE_MS);
       keepAlive.unref?.();
 
-      channel.sink = (event, data) => {
+      const mine: ChannelSink = (event, data) => {
         writeSse(res, event, data);
-        // "closed" is the last thing a channel ever says — end the response
-        // rather than leaving the client holding an open stream.
         if (event === "closed") {
           clearInterval(keepAlive);
           try { res.end(); } catch { /* noop */ }
         }
       };
-      // The client waits for this before sending any CDP command, exactly as
-      // it waited for the old socket's {"type":"ready"} frame.
+      channel.sink = mine;
+      // "ready" means the stream is attached, NOT that chromium is running —
+      // it may not be yet. The client sends its first command on this signal,
+      // and that command is what starts chromium.
       writeSse(res, "ready");
 
       const done = () => {
         clearInterval(keepAlive);
-        if (channel.sink) {
+        // Only tear down if we are still the current stream; a takeover has
+        // already moved the channel on.
+        if (channel.sink === mine) {
           channel.sink = null;
           // A dropped stream means a gone client: don't leave chromium
-          // screencasting into nothing. Reconnecting means a fresh attach.
-          closeChannel(channel.id);
+          // screencasting into nothing. Reconnecting re-attaches.
+          closeChannel(channel.userId);
         }
         try { res.end(); } catch { /* noop */ }
       };
@@ -314,24 +392,34 @@ export function registerCdpBridgeRoutes(app: FastifyInstance): void {
       return reply;
     });
 
-    app.post<{ Querystring: { channel?: string }; Body: unknown }>(
-      `${base}/commands`,
-      async (request, reply) => {
-        const userId = await guard(request, reply);
-        if (!userId) return reply;
-        const channel = getChannel(request.query.channel, userId);
-        if (!channel) return reply.status(404).send({ error: "NO_CHANNEL" });
-        const sent = sendCommands(channel, request.body);
-        if (sent === null) return reply.status(400).send({ error: "BAD_COMMANDS" });
-        return reply.status(202).send({ sent });
-      }
-    );
-
-    app.post<{ Querystring: { channel?: string } }>(`${base}/detach`, async (request, reply) => {
+    app.post<{ Body: unknown }>(`${base}/commands`, async (request, reply) => {
       const userId = await guard(request, reply);
       if (!userId) return reply;
-      const channel = getChannel(request.query.channel, userId);
-      if (channel) closeChannel(channel.id);
+      if (!keyed(request, reply, userId)) return reply;
+      const channel = getOrCreateChannel(userId);
+      try {
+        // The first command through here spawns chromium and pins the session
+        // to this replica.
+        await ensureUpstream(channel);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        // A spawn already in flight for this user is transient, not fatal —
+        // say so with a retryable status instead of failing the view.
+        if (message.startsWith("BROWSER_SESSION_BUSY")) {
+          return reply.status(409).send({ error: "BROWSER_SESSION_BUSY" });
+        }
+        return reply.status(503).send({ error: "BROWSER_START_FAILED", message });
+      }
+      const sent = sendCommands(channel, request.body);
+      if (sent === null) return reply.status(400).send({ error: "BAD_COMMANDS" });
+      return reply.status(202).send({ sent });
+    });
+
+    app.post(`${base}/detach`, async (request, reply) => {
+      const userId = await guard(request, reply);
+      if (!userId) return reply;
+      if (!keyed(request, reply, userId)) return reply;
+      closeChannel(userId);
       return reply.status(204).send();
     });
   }

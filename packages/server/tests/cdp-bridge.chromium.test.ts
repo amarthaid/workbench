@@ -16,23 +16,26 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const { cfg, authorizeMock } = vi.hoisted(() => ({
+const { cfg, ensureMock } = vi.hoisted(() => ({
   cfg: {
     PORTAL_URL: "http://127.0.0.1:0",
     SERVER_PUBLIC_URL: "http://127.0.0.1:0",
     BROWSER_PROFILES_DIR: "",
     DATABASE_URL: "./data/tokens.db",
     BROWSER_DISK_CACHE_MB: 32,
+    SESSION_SECRET: "test-session-secret-32-chars-long!!",
   },
-  authorizeMock: vi.fn(),
+  ensureMock: vi.fn(),
 }));
 vi.mock("../src/config", () => ({ config: cfg }));
 vi.mock("../src/auth/session", () => ({
   verifySession: async () => ({ userId: "e2e-user" }),
 }));
-vi.mock("../src/auth/cdp-authz", () => ({ authorizeCdpAttach: authorizeMock }));
+// The bridge starts the browser itself on the first command; hand it the real
+// chromium this test spawned.
+vi.mock("../src/auth/browser-session", () => ({ ensureSession: ensureMock }));
 
-import { registerCdpBridgeRoutes } from "../src/auth/cdp-bridge";
+import { registerCdpBridgeRoutes, mintSessionKey, SESSION_HEADER } from "../src/auth/cdp-bridge";
 import { spawnProfileChromium } from "../src/auth/profile-chromium";
 
 const BASE = "/api/browser-session/cdp";
@@ -51,7 +54,7 @@ describe.skipIf(!ENABLED)("cdp bridge against a real chromium", () => {
     const spawned = await spawnProfileChromium("e2e-user", {
       startUrl: "data:text/html,<h1>hello</h1>",
     });
-    authorizeMock.mockResolvedValue(spawned.cdpPageWsUrl);
+    ensureMock.mockResolvedValue({ userId: "e2e-user", cdpPageWsUrl: spawned.cdpPageWsUrl });
 
     const app = Fastify();
     registerCdpBridgeRoutes(app);
@@ -63,15 +66,15 @@ describe.skipIf(!ENABLED)("cdp bridge against a real chromium", () => {
     const auth = { authorization: "Bearer jwt", origin };
 
     try {
-      const attached = await fetch(`${origin}${BASE}/attach`, {
-        method: "POST",
-        headers: { "content-type": "application/json", ...auth },
-        body: JSON.stringify({ sessionId: "e2e-user", cdpToken: "ctok" }),
-      });
+      const attached = await fetch(`${origin}${BASE}/attach`, { method: "POST", headers: auth });
       expect(attached.status).toBe(201);
-      const { channelId } = (await attached.json()) as { channelId: string };
+      const { sessionKey } = (await attached.json()) as { sessionKey: string };
+      expect(sessionKey).toBe(mintSessionKey("e2e-user"));
+      // Minting starts nothing: the real chromium is untouched so far.
+      expect(ensureMock).not.toHaveBeenCalled();
+      const keyed = { ...auth, [SESSION_HEADER]: sessionKey };
 
-      const stream = await fetch(`${origin}${BASE}/events?channel=${channelId}`, { headers: auth });
+      const stream = await fetch(`${origin}${BASE}/events`, { headers: keyed });
       expect(stream.status).toBe(200);
       const reader = stream.body!.getReader();
       const decoder = new TextDecoder();
@@ -98,12 +101,13 @@ describe.skipIf(!ENABLED)("cdp bridge against a real chromium", () => {
       expect((await next()).event).toBe("ready");
 
       const send = (msgs: unknown[]) =>
-        fetch(`${origin}${BASE}/commands?channel=${channelId}`, {
+        fetch(`${origin}${BASE}/commands`, {
           method: "POST",
-          headers: { "content-type": "application/json", ...auth },
+          headers: { "content-type": "application/json", ...keyed },
           body: JSON.stringify(msgs),
         });
 
+      // This first batch is what dials the real chromium.
       expect((await send([
         { id: 1, method: "Page.enable" },
         { id: 2, method: "Runtime.enable" },
@@ -138,7 +142,10 @@ describe.skipIf(!ENABLED)("cdp bridge against a real chromium", () => {
       }
       expect(title).toBe("driven");
 
-      expect((await fetch(`${origin}${BASE}/detach?channel=${channelId}`, { method: "POST", headers: auth })).status).toBe(204);
+      expect(ensureMock).toHaveBeenCalledWith("e2e-user");
+      expect(
+        (await fetch(`${origin}${BASE}/detach`, { method: "POST", headers: keyed })).status
+      ).toBe(204);
       expect((await next()).event).toBe("closed");
       await expect(next()).rejects.toThrow("stream ended");
     } finally {

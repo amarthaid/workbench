@@ -45,7 +45,7 @@ export default function BrowserView() {
         <div>You are driving the live browser. Close this tab to hand control back to your agent.</div>
       </div>
       <div style={{ padding: 0, background: "#000", marginTop: "var(--s-12)" }}>
-        <CdpScreencast cdpProxyUrl={info.cdpProxyUrl} sessionId={info.sessionId} cdpToken={info.cdpToken} width={1024} />
+        <CdpScreencast cdpProxyUrl={info.cdpProxyUrl} width={1024} />
       </div>
       {error && <div className="ui-form-error" style={{ marginTop: "var(--s-12)" }}>{error}</div>}
     </Modal>

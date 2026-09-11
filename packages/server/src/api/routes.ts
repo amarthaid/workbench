@@ -355,7 +355,6 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       return {
         type: "cookie",
         status: "login_required",
-        cdpToken: session.cdpToken,
         cdpProxyUrl: `/api/auth/cookie/${integration}/cdp`,
         loginUrl: integ.auth.loginUrl,
       };
@@ -660,12 +659,12 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
 
     if (payload.integration === "__browser__") {
       try {
-        const session = await ensureSession(user.userId);
+        // Warms the browser on this replica. The portal sends the routing key
+        // on this call too, so it lands where the live view will.
+        await ensureSession(user.userId);
         return {
           type: "browser",
           cdpProxyUrl: "/api/browser-session/cdp",
-          sessionId: user.userId,
-          cdpToken: session.cdpToken,
         };
       } catch (err) {
         return reply.status(400).send({ error: err instanceof Error ? err.message : String(err) });
@@ -684,9 +683,6 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
           integration: payload.integration,
           loginUrl: integ.auth.loginUrl,
           cdpProxyUrl: `/api/auth/cookie/${payload.integration}/cdp`,
-          sessionId: user.userId,
-          // From the warm session, not the link.
-          cdpToken: session.cdpToken,
         };
       } catch (err) {
         return reply.status(400).send({ error: err instanceof Error ? err.message : String(err) });
