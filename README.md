@@ -28,12 +28,19 @@ list stays the same size whether one integration is connected or all of them.
 ```mermaid
 flowchart LR
   Agent["Agent"] -->|JSON-RPC| MCP["POST /mcp"]
+  Script["Script / cron"] -->|plain JSON| REST["POST /rest/:integration"]
   MCP --> Meta["9 meta-tools"]
   Meta --> Reg["Plugin registry<br/>16 integrations · 194 tools"]
+  REST --> Reg
   Reg -->|credential injected| APIs["Jira · GitHub · Slack · Google · …"]
   Portal["Portal"] --> Store[("Encrypted tokens")]
   Meta -.-> Store
 ```
+
+Anything that is not an agent can skip MCP entirely:
+[`POST /rest/:integration`](docs/site/_content/reference/rest-endpoint.md) runs the
+same tools over plain JSON, on the same credentials, with no JSON-RPC framing and no
+60,000-character result cap.
 
 ## Quickstart
 

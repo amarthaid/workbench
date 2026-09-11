@@ -316,6 +316,10 @@
               "label": "MCP endpoint"
             },
             {
+              "path": "reference/rest-endpoint",
+              "label": "REST endpoint"
+            },
+            {
               "path": "reference/http-api",
               "label": "HTTP API",
               "layout": "wide"

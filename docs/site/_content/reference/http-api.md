@@ -14,7 +14,8 @@ flowchart TB
   C --> D["/metrics + hooks"]
   D --> E[CDP WebSocket proxies]
   E --> F["POST /mcp"]
-  F --> G["/c/:integration/* curl proxy"]
+  F --> F2["/rest/:integration"]
+  F2 --> G["/c/:integration/* curl proxy"]
   G --> H["/j/* jots"]
   H --> I[portal static + SPA fallback]
 ```
@@ -30,8 +31,8 @@ page.
 | Scheme | Carrier | Used by |
 |---|---|---|
 | Portal session JWT | `Authorization: Bearer <jwt>` | protected `/api/*` routes |
-| Workbench API key | `x-workbench-api-key: <hex>` | protected `/api/*` routes **and** `/mcp` |
-| OAuth 2.1 access token | `Authorization: Bearer <jwt>` | `/mcp` only |
+| Workbench API key | `x-workbench-api-key: <hex>` | protected `/api/*` routes, `/mcp`, `/rest/*` |
+| OAuth 2.1 access token | `Authorization: Bearer <jwt>` | `/mcp` and `/rest/*` only |
 | Connect JWT (link claim) | request body `token`, alongside a portal session | `/api/connect/redeem`, `/api/connect/capture` |
 | Curl-session JWT | `Authorization: Bearer <jwt>` | `/c/:integration/*` |
 | Jot password cookie | `Cookie` | `/j/:name/*` on password-gated jots |
@@ -295,6 +296,21 @@ exists.
 | Method | Path | Auth | Notes |
 |---|---|---|---|
 | POST | `/mcp` | api key, OAuth access token, or session JWT | See [MCP endpoint](mcp-endpoint.md) |
+
+## REST tool execution
+
+The same execution engine as `/mcp`, without JSON-RPC framing or the 60,000-character
+result cap. Same three credentials, same 401 challenge.
+
+| Method | Path | Auth | Notes |
+|---|---|---|---|
+| GET | `/rest` | api key, OAuth access token, or session JWT | Integrations + this user's connection status |
+| GET | `/rest/:integration` | same | That integration's tools, each with a JSON Schema |
+| POST | `/rest/:integration` | same | Run a tool named in the body. See [REST endpoint](rest-endpoint.md) |
+
+Body parsing is scoped to these routes: an empty body with a JSON content-type parses
+to `{}` instead of `FST_ERR_CTP_EMPTY_JSON_BODY`, and a non-JSON content type is
+refused with 415.
 
 ## Health, metrics, and the portal
 

@@ -63,10 +63,10 @@ async function startConnect(
 }
 
 // Core single-tool execution: connection check, schema validation, audit, run.
-// The per-item engine behind `execute_tools` (batch). Never throws — failures
-// come back as { error }.
-type ExecResult = { result: unknown } | { error: string; integration?: string; message?: string };
-async function executeSingle(
+// The per-item engine behind `execute_tools` (batch) and the REST endpoint
+// (`POST /rest/:integration`). Never throws — failures come back as { error }.
+export type ExecResult = { result: unknown } | { error: string; integration?: string; message?: string };
+export async function executeSingle(
   userId: string,
   toolName: string,
   rawArgs: Record<string, unknown>
@@ -207,6 +207,33 @@ async function executeSingle(
   );
 }
 
+// Batch execution engine, shared by the `execute_tools` meta-tool and the REST
+// endpoint so both get identical semantics: bounded concurrency, index-aligned
+// results, and one failing item never aborting the rest.
+export async function executeMany(
+  userId: string,
+  executions: { tool: string; args?: Record<string, unknown> }[]
+): Promise<{ results: ExecResult[] }> {
+  const results: ExecResult[] = new Array(executions.length);
+  // Bounded worker pool: cap concurrency so a large batch can't open an
+  // unbounded number of upstream connections at once. Results stay ordered
+  // because each worker writes to its claimed index.
+  const CONCURRENCY = 8;
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const i = next++;
+      if (i >= executions.length) return;
+      const ex = executions[i];
+      results[i] = await executeSingle(userId, ex.tool, ex.args ?? {});
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, executions.length) }, () => worker())
+  );
+  return { results };
+}
+
 // `satisfies` (not an explicit annotation) keeps each element's `name` as a
 // string literal, so `metaToolSchemas` below can require exactly these keys.
 export const metaTools = [
@@ -250,30 +277,10 @@ export const metaTools = [
         .array(z.object({ tool: z.string(), args: z.record(z.unknown()).default({}) }))
         .min(1),
     }),
-    handler: async (
+    handler: (
       ctx: { userId: string },
       args: { executions: { tool: string; args: Record<string, unknown> }[] }
-    ) => {
-      const { executions } = args;
-      const results: ExecResult[] = new Array(executions.length);
-      // Bounded worker pool: cap concurrency so a large batch can't open an
-      // unbounded number of upstream connections at once. Results stay ordered
-      // because each worker writes to its claimed index.
-      const CONCURRENCY = 8;
-      let next = 0;
-      const worker = async (): Promise<void> => {
-        for (;;) {
-          const i = next++;
-          if (i >= executions.length) return;
-          const ex = executions[i];
-          results[i] = await executeSingle(ctx.userId, ex.tool, ex.args ?? {});
-        }
-      };
-      await Promise.all(
-        Array.from({ length: Math.min(CONCURRENCY, executions.length) }, () => worker())
-      );
-      return { results };
-    },
+    ) => executeMany(ctx.userId, args.executions),
   },
   {
     name: "whoami",

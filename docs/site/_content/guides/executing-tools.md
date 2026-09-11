@@ -3,9 +3,13 @@ title: Executing tools
 description: How execute_tools runs plugin tools, what happens to each one, and every error shape it can return.
 ---
 
-`execute_tools` is the only way to run a plugin tool. Everything the catalog offers —
-all 194 tools across 16 plugins, plus the built-in `browser` and `jots` tools — is
-reached through this single meta-tool.
+`execute_tools` is the only way to run a plugin tool **over MCP**. Everything the
+catalog offers — all 194 tools across 16 plugins, plus the built-in `browser` and
+`jots` tools — is reached through this single meta-tool.
+
+A non-MCP caller — `curl`, a cron job, anything without an MCP SDK — can run the same
+tools over plain JSON at [`POST /rest/:integration`](../reference/rest-endpoint.md),
+which shares this engine but drops the JSON-RPC envelope and the result cap.
 
 > [!WARNING] There is no `execute_tool` (singular)
 > The single-tool variant was collapsed into the batch tool and no longer exists. Calling

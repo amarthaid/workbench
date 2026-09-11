@@ -9,6 +9,7 @@ import { registerOAuthRedirectRoute } from "./api/oauth-redirect";
 import { registerPortal } from "./portal";
 import { registerJotRoutes } from "./jots/routes";
 import { registerCurlProxy } from "./api/curl-proxy";
+import { registerRestRoutes } from "./api/rest-routes";
 import { startUploadReaper } from "./jots/pending";
 import { loadPlugins } from "./plugins/loader";
 import { verifySession } from "./auth/session";
@@ -327,6 +328,10 @@ async function main() {
     }
     reply.send(result);
   });
+
+  // Plain-REST twin of /mcp — same credentials and same execution engine,
+  // without JSON-RPC framing or the MCP result cap.
+  await registerRestRoutes(app);
 
   await registerCurlProxy(app);
   await registerJotRoutes(app);

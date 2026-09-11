@@ -76,4 +76,12 @@ describe("portal static serving", () => {
     expect(r.body).not.toContain("portal-root");
     await app.close();
   });
+
+  it("does NOT SPA-fallback unknown REST routes (JSON 404)", async () => {
+    const app = await build();
+    const r = await app.inject({ method: "GET", url: "/rest/github/nope" });
+    expect(r.statusCode).toBe(404);
+    expect(r.body).not.toContain("portal-root");
+    await app.close();
+  });
 });
