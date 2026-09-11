@@ -20,9 +20,9 @@ function findPortalDir(): string | undefined {
 }
 
 // Serve the built portal as static files with SPA fallback: any GET that isn't
-// an API/MCP route and doesn't map to a file resolves to index.html, so client
-// routes (e.g. the /connect/:integration magic-link page) load on hard refresh
-// or direct navigation. API/MCP 404s stay JSON.
+// an API/MCP/REST route and doesn't map to a file resolves to index.html, so
+// client routes (e.g. the /connect/:integration magic-link page) load on hard
+// refresh or direct navigation. API/MCP/REST 404s stay JSON.
 export async function registerPortal(app: FastifyInstance): Promise<void> {
   const dir = findPortalDir();
   if (!dir) return;
@@ -34,6 +34,7 @@ export async function registerPortal(app: FastifyInstance): Promise<void> {
       request.method === "GET" &&
       !request.url.startsWith("/api") &&
       !request.url.startsWith("/mcp") &&
+      !request.url.startsWith("/rest") &&
       !request.url.startsWith("/.well-known")
     ) {
       return reply.sendFile("index.html");

@@ -110,6 +110,11 @@ Truncated output is deliberately no longer valid JSON — a client cannot silent
 parse a half-result as if it were complete. Narrow the request instead: most plugin
 tools take a `limit`, a page cursor, or a field selector.
 
+The cap lives in this renderer, not in execution. A non-agent caller that genuinely
+needs the whole payload can run the same tool through
+[`POST /rest/:integration`](rest-endpoint.md), which returns it uncapped as plain
+JSON.
+
 One exception bypasses the text block entirely. If the result carries an
 `_mcpImage: { data, mimeType }` sentinel — directly, under a `{ result }` wrapper, or
 anywhere inside an `execute_tools` `{ results: [{ result }] }` batch — the content
