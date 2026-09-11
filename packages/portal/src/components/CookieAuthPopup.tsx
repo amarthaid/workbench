@@ -8,13 +8,11 @@ interface Props {
   integration: string;
   loginUrl: string;
   cdpProxyUrl: string;
-  cdpToken: string;
-  sessionId: string;
   onClose: () => void;
   onSuccess: () => void;
 }
 
-export default function CookieAuthPopup({ integration, cdpProxyUrl, cdpToken, sessionId, onClose, onSuccess }: Props) {
+export default function CookieAuthPopup({ integration, cdpProxyUrl, onClose, onSuccess }: Props) {
   const [capturing, setCapturing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -58,7 +56,7 @@ export default function CookieAuthPopup({ integration, cdpProxyUrl, cdpToken, se
       </div>
 
       <div style={{ padding: 0, background: "#000", marginTop: "var(--s-12)" }}>
-        <CdpScreencast cdpProxyUrl={cdpProxyUrl} sessionId={sessionId} cdpToken={cdpToken} width={1024} />
+        <CdpScreencast cdpProxyUrl={cdpProxyUrl} width={1024} />
       </div>
 
       {error && <div className="ui-form-error" style={{ marginTop: "var(--s-12)" }}>{error}</div>}

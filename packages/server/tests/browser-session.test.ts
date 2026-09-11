@@ -43,7 +43,6 @@ vi.mock("ws", async () => {
 import {
   ensureSession,
   getWarmSession,
-  getWarmCdpEndpoint,
   closeBrowserSession,
   reapIdleSessions,
   captureLiveCookies,
@@ -135,11 +134,13 @@ describe("ensureSession", () => {
     await expect(ensureSession("user-z")).rejects.toThrow("BROWSER_SESSION_BUSY");
   });
 
-  it("getWarmCdpEndpoint returns the page WS only for the right token", async () => {
+  it("exposes the page WS on the session and forgets it on close", async () => {
+    // The live-view bridge reads cdpPageWsUrl off the session it gets from
+    // ensureSession; there is no separate endpoint token to check any more —
+    // the portal bearer is the authority (see auth/cdp-bridge.ts).
     const s = await ensureSession("user-t");
-    expect(getWarmCdpEndpoint("user-t", s.cdpToken)).toBe("ws://127.0.0.1:9999/page");
-    expect(getWarmCdpEndpoint("user-t", "wrong")).toBeNull();
-    expect(getWarmCdpEndpoint("nobody", s.cdpToken)).toBeNull();
+    expect(s.cdpPageWsUrl).toBe("ws://127.0.0.1:9999/page");
+    expect(getWarmSession("user-t")).toBe(s);
     await closeBrowserSession("user-t");
     expect(getWarmSession("user-t")).toBeUndefined();
   });

@@ -181,7 +181,7 @@ The portal is the human half. The agent cannot do any of it.
   Revocation deletes refresh tokens and outstanding authorization codes. Access
   tokens already issued are self-contained JWTs and lapse at their TTL.
 - Drive a live browser session for cookie capture, over an origin-gated CDP
-  WebSocket proxy.
+  bridge (SSE down, REST up).
 
 In production the built SPA is served by the same process, so the portal origin and
 the `/mcp` origin are the same host.

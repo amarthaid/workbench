@@ -89,13 +89,13 @@ The full table is in [environment variables](../reference/environment.md).
 ## Dev ports
 
 The Vite dev server binds port 3000 with `strictPort: true` and proxies `/api`
-(with WebSocket upgrade) and `/callback` to `http://localhost:3001`. The intended
-dev layout is therefore **portal on 3000, server on 3001**.
+and `/callback` to `http://localhost:3001`. The intended dev layout is therefore
+**portal on 3000, server on 3001**.
 
 `PORTAL_URL` defaults to `http://localhost:5173`, which is Vite's stock port and
-not the one this repo uses. `PORTAL_URL` is half of the WebSocket origin
-allowlist for the CDP live-view proxies, so leaving the default in place makes
-browser-session capture fail with a 403.
+not the one this repo uses. `PORTAL_URL` is half of the origin allowlist for the
+CDP live-view endpoints, so leaving the default in place makes browser-session
+capture fail with a 403.
 
 ```bash
 cat >> .env <<'EOF'

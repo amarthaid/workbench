@@ -248,10 +248,24 @@ Two caveats:
   per worker, not on the primary. The primary dies on the default signal
   disposition.
 
-One piece of state is still per-process and not shared across workers: the
-transient connect-flow records that `connect` / `wait_for_connection` poll —
-use sticky routing for those. SSO nonces are stored in the `pending_auth` row
-beside their `state`, so they follow the database and need no stickiness.
+Some state is still per-process and not shared across workers:
+
+- The transient connect-flow records that `connect` / `wait_for_connection`
+  poll — use sticky routing for those.
+- **Browser sessions.** The per-user Chromium and its live-view channel live in
+  module-level maps beside the process that spawned them, and the browser
+  itself listens on loopback inside that container. Cookie capture, every
+  `browser_*` tool, and the live view only work on the owning process. Across
+  replicas the `X-Browser-Session` key makes that routable (see
+  [the proxy setup](docker.md#multiple-replicas)), but **stickiness cannot
+  route inside a worker pool** — so keep `CLUSTER_ENABLED` off wherever the
+  browser feature is used. Otherwise a second worker answering for the same
+  user spawns its own Chromium on the same profile directory and clears the
+  singleton lock the first one is holding. See
+  [browser session pod affinity](../field-notes/2026-09-10-browser-session-pod-affinity.md).
+
+SSO nonces are stored in the `pending_auth` row beside their `state`, so they
+follow the database and need no stickiness.
 
 ## PostgreSQL behaviours worth knowing
 

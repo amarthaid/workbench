@@ -87,7 +87,6 @@ export interface WarmSession {
   remotePort: number;
   cdpPageWsUrl: string;
   cdpBrowserWsUrl: string;
-  cdpToken: string;
   userId: string;
   lastActivity: number;
   lastShotHash?: string;
@@ -120,7 +119,6 @@ export async function ensureSession(userId: string): Promise<WarmSession> {
       remotePort: spawned.remotePort,
       cdpPageWsUrl: spawned.cdpPageWsUrl,
       cdpBrowserWsUrl: spawned.cdpBrowserWsUrl,
-      cdpToken: crypto.randomUUID(),
       userId,
       lastActivity: Date.now(),
       cdp,
@@ -174,14 +172,6 @@ export async function captureLiveCookies(
     cookies: filterCookies(result.cookies, [targetDomain, ...cookieDomains]),
     capturedAt: Math.floor(Date.now() / 1000),
   };
-}
-
-// Live-view proxy auth: page WS endpoint, gated on the session's cdpToken.
-export function getWarmCdpEndpoint(userId: string, cdpToken: string): string | null {
-  const s = warmSessions.get(userId);
-  if (!s) return null;
-  if (s.cdpToken !== cdpToken) return null;
-  return s.cdpPageWsUrl;
 }
 
 export async function closeBrowserSession(userId: string): Promise<void> {

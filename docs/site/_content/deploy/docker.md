@@ -175,7 +175,7 @@ HTTP API, the MCP endpoint, and the curl proxy.
 ```mermaid
 flowchart LR
   A[Agent / MCP client] -->|POST /mcp| P[Reverse proxy TLS]
-  B[Browser portal] -->|/api, wss CDP| P
+  B[Browser portal] -->|/api, CDP SSE| P
   C[OAuth provider] -->|redirect /api/auth/...| P
   P -->|HTTP :3000| S[workbench]
   S --> D[(Database)]
@@ -187,25 +187,74 @@ Set both public URLs to the externally reachable origin:
 | Variable | Set to | Why it matters |
 |---|---|---|
 | `SERVER_PUBLIC_URL` | The public origin of the server, e.g. `https://workbench.example.com` | Base for every OAuth redirect URI, the MCP protected-resource and authorization-server metadata, the `iss`/`aud` of OAuth access tokens, and whether the `awb_oauth_binding` cookie gets `Secure` (it does only when the value starts with `https://`) |
-| `PORTAL_URL` | The origin the browser loads the portal from — the same value, when the server serves the SPA | SSO and connect redirect target, and half of the WebSocket `Origin` allowlist |
+| `PORTAL_URL` | The origin the browser loads the portal from — the same value, when the server serves the SPA | SSO and connect redirect target, and half of the live-view `Origin` allowlist |
 
-The allowlist for the CDP live-view WebSockets is exactly the set
-`{PORTAL_URL, SERVER_PUBLIC_URL}`. Anything else is rejected with a 403 on the
-upgrade.
+The allowlist for the CDP live-view endpoints is exactly the set
+`{PORTAL_URL, SERVER_PUBLIC_URL}`. Anything else is rejected with a 403.
 
 > [!WARNING] Only the incoming `Origin` is normalized — the allowlist is compared verbatim
 > The browser's `Origin` header is reduced to `protocol//host` before the lookup,
 > but `PORTAL_URL` and `SERVER_PUBLIC_URL` go into the set exactly as you wrote
 > them. A trailing slash, a path suffix, or an explicit default port
 > (`https://workbench.example.com:443`) can therefore never match any real origin,
-> and every CDP upgrade 403s. Set both variables to a bare scheme-and-host origin
+> and every CDP attach 403s. Set both variables to a bare scheme-and-host origin
 > with no trailing slash.
 
 If cookie capture or the live browser view fails with a 403 behind your proxy,
 check the two variables for that exact shape first, then check that they match the
 origin the browser is actually using.
 
-Your proxy must also forward WebSocket upgrades for `/api/auth/cookie/:integration/cdp`
-and `/api/browser-session/cdp`, and preserve the `Origin` header.
+The live view needs no WebSocket support in your proxy — it is REST plus an
+SSE stream (`.../cdp/events`). Your proxy must preserve the `Origin` header, and
+must not buffer or compress that stream: the server sends
+`Cache-Control: no-transform` and `X-Accel-Buffering: no`, which nginx honours;
+other proxies may need response buffering disabled explicitly. Read
+timeouts should exceed the 15s keepalive comment the stream emits.
+
+### Multiple replicas
+
+A browser session is process-local, so a user's browser traffic has to reach the
+one replica that owns their Chromium. The server makes that routable: `POST
+<base>/cdp/attach` mints a per-user key and starts nothing, and the portal then
+sends it as **`X-Browser-Session`** on every call that touches a browser
+session. Hash that header to a pod and the design works; ignore it and cookie
+capture and the live view fail intermittently.
+
+nginx-ingress, on the browser-session paths:
+
+```yaml
+nginx.ingress.kubernetes.io/upstream-hash-by: "$http_x_browser_session"
+```
+
+Istio/Envoy:
+
+```yaml
+trafficPolicy:
+  loadBalancer:
+    consistentHash:
+      httpHeaderName: x-browser-session
+```
+
+Three things to get right, each of which silently breaks stickiness:
+
+- **Hash to pod endpoints, not to a `Service`.** A ClusterIP behind the hashing
+  hop re-round-robins and the hash is wasted. Use the controller's native
+  endpoint routing (nginx-ingress and Istio both target pod IPs by default) or
+  a headless service.
+- **Consistent hashing, not modulo.** `hash % N` remaps nearly every key when a
+  pod is added or removed, so one rollout breaks every live session at once.
+  Ring hash or maglev moves only the keys it must.
+- **`CLUSTER_ENABLED=false` wherever the browser feature is used.** It forks one
+  worker per core, each with its own session map, and no ingress can route
+  inside a worker pool.
+
+Agent traffic to `/mcp` is **not covered by this** — an MCP client sends no such
+header, and `Authorization` is not a usable substitute: `/mcp` accepts identity
+as an api key (no `Authorization` header at all, so every such agent hashes
+alike) or as an OAuth Bearer (which rotates at its TTL, moving the hash under a
+live session). So if you run `browser_*` tools with more than one replica, pin
+them — and that means pinning all `POST /mcp` traffic, since tool calls are not
+separable by path. Full reasoning:
+[browser session pod affinity](../field-notes/2026-09-10-browser-session-pod-affinity.md).
 
 Run TLS at the proxy. The server speaks plain HTTP.

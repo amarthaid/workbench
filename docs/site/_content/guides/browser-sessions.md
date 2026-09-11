@@ -29,7 +29,7 @@ sequenceDiagram
     U->>W: Connect (cookie integration)
     W->>C: ensure per-user profile, spawn if needed
     W->>C: navigate to loginUrl
-    W-->>U: live view over the CDP WebSocket proxy
+    W-->>U: live view over the CDP bridge (SSE + REST)
     U->>C: type credentials, complete MFA
     C->>S: sign in
     S-->>C: Set-Cookie

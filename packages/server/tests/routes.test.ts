@@ -614,8 +614,8 @@ describe("API routes", () => {
       const body = JSON.parse(res.body);
       expect(body.type).toBe("cookie");
       expect(body.status).toBe("login_required");
-      expect(body.cdpToken).toBe("tok-123");
       expect(body.cdpProxyUrl).toBe("/api/auth/cookie/legacy/cdp");
+      expect(body.cdpToken).toBeUndefined();
       expect(body.loginUrl).toBe("https://legacy.com/login");
       expect(navigate).toHaveBeenCalled();
       // No auto-connect on the connect path.
@@ -636,8 +636,8 @@ describe("API routes", () => {
       const body = JSON.parse(res.body);
       expect(body.type).toBe("cookie");
       expect(body.status).toBe("login_required");
-      expect(body.cdpToken).toBe("tok-123");
       expect(body.cdpProxyUrl).toBe("/api/auth/cookie/legacy/cdp");
+      expect(body.cdpToken).toBeUndefined();
       expect(body.loginUrl).toBe("https://legacy.com/login");
       expect(navigate).toHaveBeenCalled();
     });
@@ -1468,9 +1468,10 @@ describe("API routes", () => {
       expect(body.integration).toBe("legacy");
       expect(body.loginUrl).toBe("https://legacy.example.com/login");
       expect(body.cdpProxyUrl).toBe("/api/auth/cookie/legacy/cdp");
-      expect(body.sessionId).toBe("user-1");
-      // The cdpToken comes from the warm session, not from the link.
-      expect(body.cdpToken).toBe("cdp-1");
+      // Nothing identifying rides along: the live view authenticates with the
+      // portal bearer, and the bridge mints its own per-user routing key.
+      expect(body.sessionId).toBeUndefined();
+      expect(body.cdpToken).toBeUndefined();
       expect(navigate).toHaveBeenCalled();
     });
 
@@ -1618,9 +1619,9 @@ describe("API routes", () => {
       expect(res.json()).toEqual({
         type: "browser",
         cdpProxyUrl: "/api/browser-session/cdp",
-        sessionId: "user-1",
-        cdpToken: "cdp-1",
       });
+      // The link redeem still warms the browser on this replica.
+      expect(ensureSession).toHaveBeenCalledWith("user-1");
     });
   });
 });

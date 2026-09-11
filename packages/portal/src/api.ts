@@ -23,6 +23,47 @@ function authHeaders(): HeadersInit {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+// ─── Browser-session routing key ──────────────────────────────────────────
+// A per-user key the server mints on demand. It is NOT a credential — the
+// bearer still authorizes every request and the server always resolves the
+// session from that bearer, never from this key. It exists so that in a
+// multi-replica deployment an L7 proxy can hash it and land every request
+// that touches this user's Chromium on the one replica that owns it. See
+// docs/findings/2026-09-10-browser-session-pod-affinity.md.
+//
+// Kept in memory only: it is cheap to re-mint, and persisting it would strand
+// a stale key across a change of user in the same browser.
+const BROWSER_SESSION_HEADER = "X-Browser-Session";
+let browserSessionKey: string | null = null;
+
+export function setBrowserSessionKey(key: string): void {
+  browserSessionKey = key;
+}
+
+export function clearBrowserSessionKey(): void {
+  browserSessionKey = null;
+}
+
+// Mint the key. Deliberately unrouted — the caller has no key to route on yet
+// — which is why the endpoint starts no browser and holds no state.
+export async function ensureBrowserSessionKey(): Promise<string | null> {
+  if (browserSessionKey) return browserSessionKey;
+  const res = await fetch(`${API_URL}/api/browser-session/cdp/attach`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!res.ok) return null;
+  const { sessionKey } = (await res.json()) as { sessionKey?: string };
+  browserSessionKey = sessionKey ?? null;
+  return browserSessionKey;
+}
+
+// Spread into any request that reaches a browser session: cookie capture, the
+// live view, reset, and the connect flows that warm one.
+export function browserSessionHeaders(): Record<string, string> {
+  return browserSessionKey ? { [BROWSER_SESSION_HEADER]: browserSessionKey } : {};
+}
+
 export async function fetchIntegrations() {
   const res = await fetch(`${API_URL}/api/integrations`, { headers: getHeaders() });
   if (res.status === 401) {
@@ -164,7 +205,6 @@ export type StartAuthResult =
       type: "cookie";
       status: "login_required";
       cdpProxyUrl: string;
-      cdpToken: string;
       loginUrl: string;
     }
   | { type: "oauth2"; url: string }
@@ -176,7 +216,13 @@ export async function startIntegrationAuth(
   instanceUrl?: string
 ): Promise<StartAuthResult> {
   const qs = instanceUrl ? `?instanceUrl=${encodeURIComponent(instanceUrl)}` : "";
-  const res = await fetch(`${API_URL}/api/auth/${integration}${qs}`, { headers: getHeaders() });
+  // A cookie integration warms the browser inside this very call, so mint the
+  // routing key first — the auth type isn't known until the response, and one
+  // extra POST on a connect click is cheaper than a session on a stray replica.
+  await ensureBrowserSessionKey();
+  const res = await fetch(`${API_URL}/api/auth/${integration}${qs}`, {
+    headers: { ...getHeaders(), ...browserSessionHeaders() },
+  });
   if (res.status === 401) {
     localStorage.removeItem("awb_token");
     window.location.href = "/login";
@@ -216,7 +262,7 @@ export async function submitApiKey(
 export async function captureCookies(integration: string): Promise<{ success: boolean; cookieCount: number }> {
   const res = await fetch(`${API_URL}/api/auth/cookie/${integration}/capture`, {
     method: "POST",
-    headers: authHeaders(),
+    headers: { ...authHeaders(), ...browserSessionHeaders() },
   });
   if (!res.ok) throw new Error("Failed to capture cookies");
   return res.json();
@@ -225,14 +271,14 @@ export async function captureCookies(integration: string): Promise<{ success: bo
 export async function cancelCookieAuth(integration: string): Promise<void> {
   await fetch(`${API_URL}/api/auth/cookie/${integration}/cancel`, {
     method: "POST",
-    headers: authHeaders(),
+    headers: { ...authHeaders(), ...browserSessionHeaders() },
   });
 }
 
 export type RedeemResult =
-  | { type: "cookie"; integration: string; loginUrl: string; cdpProxyUrl: string; sessionId: string; cdpToken: string }
+  | { type: "cookie"; integration: string; loginUrl: string; cdpProxyUrl: string }
   | { type: "oauth2"; url: string }
-  | { type: "browser"; cdpProxyUrl: string; sessionId: string; cdpToken: string };
+  | { type: "browser"; cdpProxyUrl: string };
 
 export type ConnectLinkCode =
   | "AUTH_REQUIRED" | "LINK_INVALID" | "LINK_CONSUMED" | "ACCOUNT_MISMATCH" | "UNKNOWN";
@@ -255,9 +301,11 @@ async function connectLinkError(res: Response): Promise<ConnectLinkError> {
 }
 
 export async function redeemConnectLink(token: string): Promise<RedeemResult> {
+  // Redeeming a cookie or browser link warms the browser inside this call.
+  await ensureBrowserSessionKey();
   const res = await fetch(`${API_URL}/api/connect/redeem`, {
     method: "POST",
-    headers: getHeaders(),
+    headers: { ...getHeaders(), ...browserSessionHeaders() },
     body: JSON.stringify({ token }),
   });
   if (!res.ok) throw await connectLinkError(res);
@@ -267,7 +315,7 @@ export async function redeemConnectLink(token: string): Promise<RedeemResult> {
 export async function connectCapture(token: string) {
   const res = await fetch(`${API_URL}/api/connect/capture`, {
     method: "POST",
-    headers: getHeaders(),
+    headers: { ...getHeaders(), ...browserSessionHeaders() },
     body: JSON.stringify({ token }),
   });
   if (!res.ok) throw await connectLinkError(res);
@@ -326,7 +374,7 @@ export async function revokeApiKey(): Promise<{ success: boolean }> {
 export async function resetBrowserSession(): Promise<{ success: boolean }> {
   const res = await fetch(`${API_URL}/api/browser-session/reset`, {
     method: "POST",
-    headers: authHeaders(),
+    headers: { ...authHeaders(), ...browserSessionHeaders() },
   });
   if (!res.ok) {
     const msg = (await res.json().catch(() => ({}))).error || "Reset failed";
@@ -362,6 +410,8 @@ export async function logout() {
     headers: getHeaders(),
   });
   localStorage.removeItem("awb_token");
+  // The key is derived from the user — never carry one across a sign-out.
+  clearBrowserSessionKey();
 }
 
 export interface ActivityEvent {

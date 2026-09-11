@@ -32,15 +32,15 @@ values so the suite runs without setup.
 |---|---|---|---|---|
 | `PORT` | string | `3000` | no | Listen port. The server binds `0.0.0.0` |
 | `NODE_ENV` | `development` \| `production` \| `test` | `development` | no | Selects test defaults for the two secrets; also makes the jot cookie `Secure` in production |
-| `SERVER_PUBLIC_URL` | URL | `http://localhost:3000` | no | The server's own public origin. Drives every OAuth redirect URI, the OAuth metadata documents, the access token's `iss`/`aud`, and half the WebSocket origin allowlist |
-| `PORTAL_URL` | URL | `http://localhost:5173` | no | Where SSO and connect flows redirect the user; the other half of the WebSocket origin allowlist |
+| `SERVER_PUBLIC_URL` | URL | `http://localhost:3000` | no | The server's own public origin. Drives every OAuth redirect URI, the OAuth metadata documents, the access token's `iss`/`aud`, and half the live-view origin allowlist |
+| `PORTAL_URL` | URL | `http://localhost:5173` | no | Where SSO and connect flows redirect the user; the other half of the live-view origin allowlist |
 | `PORTAL_DIST_DIR` | string | `./portal` | no | First candidate path for the built portal SPA |
 | `PLUGINS_DIR` | string | `./plugins` | no | External plugin directory. Always resolved to an absolute path before import |
 
 > [!WARNING] The default `PORTAL_URL` does not match the dev portal
 > The Vite dev server binds port 3000 with `strictPort`, so the default
 > `http://localhost:5173` is wrong for local development. Unless you set
-> `PORTAL_URL=http://localhost:3000`, the CDP WebSocket origin allowlist rejects the
+> `PORTAL_URL=http://localhost:3000`, the CDP live-view origin allowlist rejects the
 > dev portal with a 403 and browser-session capture fails.
 
 ## Database

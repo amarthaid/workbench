@@ -60,7 +60,7 @@ undecryptable and requires a restart.
 
 The Vite dev server binds port 3000 with `strictPort`, and proxies `/api` to the
 server on 3001. So the server must move off 3000, and `PORTAL_URL` must name the
-portal's real origin — it is half of the WebSocket origin allowlist, and a wrong
+portal's real origin — it is half of the live-view origin allowlist, and a wrong
 value makes browser-session capture fail with a 403.
 
 Append to `.env`:
