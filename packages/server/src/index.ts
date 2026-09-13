@@ -8,7 +8,7 @@ import { registerPortal } from "./portal";
 import { registerJotRoutes } from "./jots/routes";
 import { registerCurlProxy } from "./api/curl-proxy";
 import { registerRestRoutes } from "./api/rest-routes";
-import { startUploadReaper } from "./jots/pending";
+import { startUploadReaper, MAX_TOKEN_CHARS } from "./jots/pending";
 import { loadPlugins } from "./plugins/loader";
 import { resolveMcpUser } from "./auth/oauth-server/resolve";
 import { startBrowserReaper } from "./auth/browser-session";
@@ -22,10 +22,18 @@ import { metricsRegistry, httpRequestsTotal, httpRequestDuration } from "./telem
 
 async function main() {
   const app = Fastify({
+    // The jot upload token is a JWE carried as a path parameter — ~320 chars
+    // for a plain deploy, more with a delete list — far over find-my-way's
+    // 100-char default, which rejects the request before the route runs.
+    // `mint` refuses to issue a token longer than this, so the router's bound
+    // and the mint bound are the same number.
+    routerOptions: { maxParamLength: MAX_TOKEN_CHARS },
     logger: {
-      // Redact secrets from logs. req.url is intentionally NOT redacted —
-      // tokens were once in URLs but no longer are; keeping the URL visible
-      // is necessary for request tracing.
+      // Redact secrets from logs. req.url is intentionally NOT redacted:
+      // keeping the URL visible is necessary for request tracing. The one
+      // credential still in a URL is the jot upload token (/j/upload/<token>),
+      // which is single-use, expires in minutes, and is encrypted rather than
+      // merely signed — but it does reach the logs, so treat them accordingly.
       redact: {
         paths: [
           "req.headers.authorization",

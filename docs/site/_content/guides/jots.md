@@ -209,8 +209,18 @@ Because the token carries everything, the upload endpoint takes no other authent
 It is the credential. A consumed or unknown token returns 404, and `expiresAt` is epoch
 milliseconds.
 
-Pending tokens are held in memory, not the database, so a server restart between the
-mint and the upload invalidates the token. Call `deploy_jot` again.
+The token is stateless: an encrypted JWT (a JWE, `dir` + `A256GCM`) whose claims carry
+the owner, name, mode, gating, and delete list. The server keeps no record of it, so it
+survives a restart and works on any worker or replica — nothing needs sticky routing.
+It is encrypted rather than merely signed because those claims include the owner's user
+id and a password jot's scrypt hash, and a signed JWT would publish both to anyone
+holding the URL.
+
+Single use is enforced by a per-process guard on the token's `jti`, kept only until the
+token would expire anyway. That guard is best-effort: under `CLUSTER_ENABLED` or across
+replicas a replayed token landing on another worker is still accepted. The short TTL,
+not the guard, is the boundary that matters — treat the upload URL as a live credential
+until it expires.
 
 ## Upload failures
 
@@ -223,6 +233,10 @@ mint and the upload invalidates the token. Call `deploy_jot` again.
 | 400 | `{"error":"NO_INDEX"}` | No `index.html` at the archive root |
 | 409 | `{"error":"JOT_NAME_TAKEN"}` | The name was claimed between mint and upload |
 | 500 | `{"error":"DEPLOY_FAILED"}` | The publish step failed |
+
+`update_jot` returns `{"error":"TOO_MANY_DELETES"}` at mint time, before any upload, when
+the `delete` list is long enough to push the token past the URL-length bound. Split the
+cleanup across two calls.
 
 `NO_INDEX` is the one that catches people. The archive root must contain `index.html`
 directly — that is what `/j/<name>/` serves. Archiving the directory itself instead of

@@ -16,13 +16,13 @@ vi.mock("../../src/config", () => ({
 import { registerJotRoutes } from "../../src/jots/routes";
 import { deployJot, readManifest, updateJotMeta } from "../../src/jots/store";
 import { hashPassword, makeToken, cookieName } from "../../src/jots/auth";
-import { mint } from "../../src/jots/pending";
+import { mint, MAX_TOKEN_CHARS } from "../../src/jots/pending";
 
 let app: FastifyInstance;
 
 beforeEach(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "jots-routes-"));
-  app = Fastify();
+  app = Fastify({ routerOptions: { maxParamLength: MAX_TOKEN_CHARS } });
   await registerJotRoutes(app);
   await app.ready();
 });
@@ -149,7 +149,7 @@ describe("jots/routes", () => {
   });
 
   it("does not throw when a urlencoded parser is already registered (boot order)", async () => {
-    const a = Fastify();
+    const a = Fastify({ routerOptions: { maxParamLength: MAX_TOKEN_CHARS } });
     a.addContentTypeParser("application/x-www-form-urlencoded", { parseAs: "string" }, (_r, b, d) => d(null, b));
     await expect(registerJotRoutes(a)).resolves.not.toThrow();
     await a.close();
@@ -159,7 +159,7 @@ describe("jots/routes", () => {
     // Mirror the real boot order: the OAuth route group registers a urlencoded
     // parser that yields an OBJECT, so the jot string parser is skipped and
     // __auth sees req.body as an object — password jots must still unlock.
-    const a = Fastify();
+    const a = Fastify({ routerOptions: { maxParamLength: MAX_TOKEN_CHARS } });
     a.addContentTypeParser(
       "application/x-www-form-urlencoded",
       { parseAs: "string" },
@@ -195,7 +195,7 @@ function tarGz(files: { name: string; content: string }[]): Promise<Buffer> {
 
 describe("jots/routes upload", () => {
   it("publishes an uploaded tarball and then serves it", async () => {
-    const { token } = mint({ owner: "u1", name: "uploaded", access: "public" });
+    const { token } = await mint({ owner: "u1", name: "uploaded", access: "public" });
     const body = await tarGz([{ name: "index.html", content: "<h1>UP</h1>" }]);
     const up = await app.inject({
       method: "POST",
@@ -211,7 +211,7 @@ describe("jots/routes upload", () => {
   });
 
   it("404s an unknown or already-used token", async () => {
-    const { token } = mint({ owner: "u1", name: "once", access: "public" });
+    const { token } = await mint({ owner: "u1", name: "once", access: "public" });
     const body = await tarGz([{ name: "index.html", content: "x" }]);
     const first = await app.inject({ method: "POST", url: `/j/upload/${token}`, payload: body, headers: { "content-type": "application/gzip" } });
     expect(first.statusCode).toBe(200);
@@ -222,21 +222,21 @@ describe("jots/routes upload", () => {
   });
 
   it("400s a traversal entry in the tarball", async () => {
-    const { token } = mint({ owner: "u1", name: "evil", access: "public" });
+    const { token } = await mint({ owner: "u1", name: "evil", access: "public" });
     const body = await tarGz([{ name: "../escape", content: "x" }]);
     const res = await app.inject({ method: "POST", url: `/j/upload/${token}`, payload: body, headers: { "content-type": "application/gzip" } });
     expect(res.statusCode).toBe(400);
   });
 
   it("413s an oversized archive", async () => {
-    const { token } = mint({ owner: "u1", name: "toobig", access: "public" });
+    const { token } = await mint({ owner: "u1", name: "toobig", access: "public" });
     const body = await tarGz([{ name: "big.bin", content: "x".repeat(1_000_001) }]);
     const res = await app.inject({ method: "POST", url: `/j/upload/${token}`, payload: body, headers: { "content-type": "application/gzip" } });
     expect(res.statusCode).toBe(413);
   });
 
   it("publishes a password jot via upload (locked until unlocked)", async () => {
-    const { token } = mint({ owner: "u1", name: "locked", access: "password", passwordHash: hashPassword("pw") });
+    const { token } = await mint({ owner: "u1", name: "locked", access: "password", passwordHash: hashPassword("pw") });
     const body = await tarGz([{ name: "index.html", content: "<h1>SECRET</h1>" }]);
     const up = await app.inject({ method: "POST", url: `/j/upload/${token}`, payload: body, headers: { "content-type": "application/gzip" } });
     expect(up.statusCode).toBe(200);
@@ -246,7 +246,7 @@ describe("jots/routes upload", () => {
   });
 
   it("400s an upload with no root index.html", async () => {
-    const { token } = mint({ owner: "u1", name: "noindex", access: "public" });
+    const { token } = await mint({ owner: "u1", name: "noindex", access: "public" });
     const body = await tarGz([{ name: "about.html", content: "x" }]);
     const res = await app.inject({ method: "POST", url: `/j/upload/${token}`, payload: body, headers: { "content-type": "application/gzip" } });
     expect(res.statusCode).toBe(400);
@@ -267,7 +267,7 @@ describe("jots/routes patch upload", () => {
 
   it("overlays uploaded files and leaves the rest of the tree alone", async () => {
     seed("site");
-    const { token } = mint({ owner: "u1", name: "site", mode: "patch" });
+    const { token } = await mint({ owner: "u1", name: "site", mode: "patch" });
     const body = await tarGz([{ name: "data.json", content: '{"v":2}' }]);
     const up = await app.inject({ method: "POST", url: `/j/upload/${token}`, payload: body, headers: gz });
     expect(up.statusCode).toBe(200);
@@ -277,14 +277,14 @@ describe("jots/routes patch upload", () => {
 
   it("accepts a patch whose archive has no index.html", async () => {
     seed("site");
-    const { token } = mint({ owner: "u1", name: "site", mode: "patch" });
+    const { token } = await mint({ owner: "u1", name: "site", mode: "patch" });
     const body = await tarGz([{ name: "data.json", content: "{}" }]);
     expect((await app.inject({ method: "POST", url: `/j/upload/${token}`, payload: body, headers: gz })).statusCode).toBe(200);
   });
 
   it("applies the delete list", async () => {
     seed("site", [{ path: "stale/old.txt", content: "x" }]);
-    const { token } = mint({ owner: "u1", name: "site", mode: "patch", deletes: ["stale"] });
+    const { token } = await mint({ owner: "u1", name: "site", mode: "patch", deletes: ["stale"] });
     const body = await tarGz([{ name: "data.json", content: "{}" }]);
     await app.inject({ method: "POST", url: `/j/upload/${token}`, payload: body, headers: gz });
     expect((await app.inject({ method: "GET", url: "/j/site/stale/old.txt" })).statusCode).toBe(404);
@@ -293,28 +293,28 @@ describe("jots/routes patch upload", () => {
 
   it("lets an uploaded path win over a delete of the same path", async () => {
     seed("site");
-    const { token } = mint({ owner: "u1", name: "site", mode: "patch", deletes: ["data.json"] });
+    const { token } = await mint({ owner: "u1", name: "site", mode: "patch", deletes: ["data.json"] });
     const body = await tarGz([{ name: "data.json", content: "kept" }]);
     await app.inject({ method: "POST", url: `/j/upload/${token}`, payload: body, headers: gz });
     expect((await app.inject({ method: "GET", url: "/j/site/data.json" })).body).toBe("kept");
   });
 
   it("404s a patch for a jot that no longer exists", async () => {
-    const { token } = mint({ owner: "u1", name: "gone", mode: "patch" });
+    const { token } = await mint({ owner: "u1", name: "gone", mode: "patch" });
     const body = await tarGz([{ name: "data.json", content: "{}" }]);
     expect((await app.inject({ method: "POST", url: `/j/upload/${token}`, payload: body, headers: gz })).statusCode).toBe(404);
   });
 
   it("403s a patch by a user who does not own the jot", async () => {
     seed("site");
-    const { token } = mint({ owner: "u2", name: "site", mode: "patch" });
+    const { token } = await mint({ owner: "u2", name: "site", mode: "patch" });
     const body = await tarGz([{ name: "data.json", content: "{}" }]);
     expect((await app.inject({ method: "POST", url: `/j/upload/${token}`, payload: body, headers: gz })).statusCode).toBe(403);
   });
 
   it("keeps the jot password-gated across a patch", async () => {
     deployJot({ name: "sec", owner: "u1", access: "password", passwordHash: hashPassword("pw"), files: [{ path: "index.html", content: "secret" }] });
-    const { token } = mint({ owner: "u1", name: "sec", mode: "patch" });
+    const { token } = await mint({ owner: "u1", name: "sec", mode: "patch" });
     const body = await tarGz([{ name: "data.json", content: "{}" }]);
     await app.inject({ method: "POST", url: `/j/upload/${token}`, payload: body, headers: gz });
     expect(readManifest("sec")?.access).toBe("password");
@@ -323,7 +323,7 @@ describe("jots/routes patch upload", () => {
 
   it("rejects a merged tree over the byte cap", async () => {
     deployJot({ name: "site", owner: "u1", access: "public", files: [{ path: "index.html", content: "x".repeat(600_000) }] });
-    const { token } = mint({ owner: "u1", name: "site", mode: "patch" });
+    const { token } = await mint({ owner: "u1", name: "site", mode: "patch" });
     const body = await tarGz([{ name: "big.bin", content: "y".repeat(600_000) }]);
     const res = await app.inject({ method: "POST", url: `/j/upload/${token}`, payload: body, headers: gz });
     expect(res.statusCode).toBe(413);
@@ -335,7 +335,7 @@ describe("jots/routes patch upload", () => {
   it("rejects a merged tree over the file-count cap", async () => {
     const many = Array.from({ length: 1000 }, (_, i) => ({ path: `f${i}.txt`, content: "x" }));
     deployJot({ name: "site", owner: "u1", access: "public", files: [{ path: "index.html", content: "x" }, ...many] });
-    const { token } = mint({ owner: "u1", name: "site", mode: "patch" });
+    const { token } = await mint({ owner: "u1", name: "site", mode: "patch" });
     const body = await tarGz([{ name: "one-more.txt", content: "x" }]);
     const res = await app.inject({ method: "POST", url: `/j/upload/${token}`, payload: body, headers: gz });
     expect(res.statusCode).toBe(413);
@@ -344,7 +344,7 @@ describe("jots/routes patch upload", () => {
 
   it("carries the cors flag from a patch token onto the manifest", async () => {
     seed("site");
-    const { token } = mint({ owner: "u1", name: "site", mode: "patch", cors: true });
+    const { token } = await mint({ owner: "u1", name: "site", mode: "patch", cors: true });
     const body = await tarGz([{ name: "data.json", content: "{}" }]);
     await app.inject({ method: "POST", url: `/j/upload/${token}`, payload: body, headers: gz });
     expect(readManifest("site")?.cors).toBe(true);
@@ -352,7 +352,7 @@ describe("jots/routes patch upload", () => {
 
   it("preserves an existing cors flag when the patch does not mention it", async () => {
     deployJot({ name: "site", owner: "u1", access: "public", cors: true, files: [{ path: "index.html", content: "x" }] });
-    const { token } = mint({ owner: "u1", name: "site", mode: "patch" });
+    const { token } = await mint({ owner: "u1", name: "site", mode: "patch" });
     const body = await tarGz([{ name: "data.json", content: "{}" }]);
     await app.inject({ method: "POST", url: `/j/upload/${token}`, payload: body, headers: gz });
     expect(readManifest("site")?.cors).toBe(true);
@@ -391,7 +391,7 @@ describe("jots/routes settings change without an upload", () => {
   it("keeps the new gating across a later patch upload", async () => {
     deployJot({ name: "site", owner: "u1", access: "public", files: [{ path: "index.html", content: "hi" }] });
     updateJotMeta("site", "u1", { access: "password", passwordHash: hashPassword("pw") });
-    const { token } = mint({ owner: "u1", name: "site", mode: "patch" });
+    const { token } = await mint({ owner: "u1", name: "site", mode: "patch" });
     const body = await tarGz([{ name: "data.json", content: "{}" }]);
     expect((await app.inject({ method: "POST", url: `/j/upload/${token}`, payload: body, headers: gz })).statusCode).toBe(200);
     const m = readManifest("site")!;
