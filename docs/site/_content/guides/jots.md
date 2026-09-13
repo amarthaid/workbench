@@ -201,26 +201,23 @@ failure.
 ## The upload token
 
 The token returned by `deploy_jot` is **single use** and expires after
-`JOTS_UPLOAD_TTL_SECONDS` (default 300). It carries the owner, the name, the access
-mode, and — for a password jot — the already-hashed password. The password itself is
-hashed at mint and never travels with the upload.
+`JOTS_UPLOAD_TTL_SECONDS` (default 300). The upload endpoint takes no other
+authentication: the token is the credential. A consumed, unknown, or expired token
+returns 404, and `expiresAt` is epoch milliseconds.
 
-Because the token carries everything, the upload endpoint takes no other authentication.
-It is the credential. A consumed or unknown token returns 404, and `expiresAt` is epoch
-milliseconds.
+The token itself is an opaque random handle and carries nothing. The pending deploy —
+owner, name, mode, gating, and delete list — is a row in the database, so the token
+survives a restart and is visible to every worker and replica; nothing here needs sticky
+routing. For a password jot the row holds the already-hashed password, and the password
+itself is hashed at mint and never travels with the upload.
 
-The token is stateless: an encrypted JWT (a JWE, `dir` + `A256GCM`) whose claims carry
-the owner, name, mode, gating, and delete list. The server keeps no record of it, so it
-survives a restart and works on any worker or replica — nothing needs sticky routing.
-It is encrypted rather than merely signed because those claims include the owner's user
-id and a password jot's scrypt hash, and a signed JWT would publish both to anyone
-holding the URL.
+Single use is enforced by the database, not by process memory: consuming deletes the row
+and only the caller whose `DELETE` actually removed it is served, so two concurrent
+uploads of one token cannot both succeed — on any worker, in any replica. Abandoned rows
+are swept once past their TTL.
 
-Single use is enforced by a per-process guard on the token's `jti`, kept only until the
-token would expire anyway. That guard is best-effort: under `CLUSTER_ENABLED` or across
-replicas a replayed token landing on another worker is still accepted. The short TTL,
-not the guard, is the boundary that matters — treat the upload URL as a live credential
-until it expires.
+Because the deploy lives in a row rather than in the URL, the delete list a single
+`update_jot` can carry is not bounded by URL length.
 
 ## Upload failures
 
@@ -233,10 +230,6 @@ until it expires.
 | 400 | `{"error":"NO_INDEX"}` | No `index.html` at the archive root |
 | 409 | `{"error":"JOT_NAME_TAKEN"}` | The name was claimed between mint and upload |
 | 500 | `{"error":"DEPLOY_FAILED"}` | The publish step failed |
-
-`update_jot` returns `{"error":"TOO_MANY_DELETES"}` at mint time, before any upload, when
-the `delete` list is long enough to push the token past the URL-length bound. Split the
-cleanup across two calls.
 
 `NO_INDEX` is the one that catches people. The archive root must contain `index.html`
 directly — that is what `/j/<name>/` serves. Archiving the directory itself instead of

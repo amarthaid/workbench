@@ -8,7 +8,7 @@ import { config } from "../../config";
 import { listJots, deleteJot, readManifest, listJotFiles, updateJotMeta } from "../../jots/store";
 import { hashPassword } from "../../jots/auth";
 import { isValidJotName, safeRelPath } from "../../jots/paths";
-import { mint, UploadTokenTooLargeError } from "../../jots/pending";
+import { mint } from "../../jots/pending";
 
 export const JOTS_INTEGRATION_NAME = "jots";
 
@@ -48,7 +48,7 @@ const tools: PluginTool[] = [
   {
     name: "update_jot",
     description:
-      "Begin a partial update of a jot you already own: the archive you upload is overlaid onto the live site instead of replacing it, so files you don't mention are left alone. Use this to refresh one data file (e.g. a weekly data.json) without re-uploading the whole site. Returns an upload URL and a single-use token (valid ~5 min); upload the same way as deploy_jot, e.g.: `tar czf - -C <dir> data.json | curl --data-binary @- -H 'Content-Type: application/gzip' <uploadUrl>`. Pass `delete` to remove paths (a directory removes its contents); a path that is both deleted and uploaded keeps the uploaded version. Call list_jot_files first if you need to see the current tree. `access` ('public' or 'password'), `password`, and `cors` change the live jot's settings immediately — they do NOT wait for an upload, so call update_jot with just a name and the settings to lock, unlock, or re-password a jot without touching its files; the response echoes them back under `applied`. Passing `password` alone implies access 'password'; switching to 'password' on a jot that is already gated keeps the current password unless you pass a new one, and any change to the password signs out everyone already unlocked. The merged tree still has to fit the <=5 MiB / <=1000 file limits. The `delete` list rides in the upload URL, so a very long one returns TOO_MANY_DELETES — split it across two calls.",
+      "Begin a partial update of a jot you already own: the archive you upload is overlaid onto the live site instead of replacing it, so files you don't mention are left alone. Use this to refresh one data file (e.g. a weekly data.json) without re-uploading the whole site. Returns an upload URL and a single-use token (valid ~5 min); upload the same way as deploy_jot, e.g.: `tar czf - -C <dir> data.json | curl --data-binary @- -H 'Content-Type: application/gzip' <uploadUrl>`. Pass `delete` to remove paths (a directory removes its contents); a path that is both deleted and uploaded keeps the uploaded version. Call list_jot_files first if you need to see the current tree. `access` ('public' or 'password'), `password`, and `cors` change the live jot's settings immediately — they do NOT wait for an upload, so call update_jot with just a name and the settings to lock, unlock, or re-password a jot without touching its files; the response echoes them back under `applied`. Passing `password` alone implies access 'password'; switching to 'password' on a jot that is already gated keeps the current password unless you pass a new one, and any change to the password signs out everyone already unlocked. The merged tree still has to fit the <=5 MiB / <=1000 file limits.",
     integration: JOTS_INTEGRATION_NAME,
     inputSchema: z.object({
       name: z.string(),
@@ -87,22 +87,12 @@ const tools: PluginTool[] = [
         applied = { access: meta.access, cors: meta.cors };
       }
 
-      let token: string;
-      let expiresAt: number;
-      try {
-        ({ token, expiresAt } = await mint({
-          owner: ctx.userId,
-          name: args.name,
-          mode: "patch",
-          deletes,
-        }));
-      } catch (e) {
-        // The delete list rides in the token, which rides in the URL. Settings
-        // above have already been applied; report the file half as failed so
-        // the caller can retry with fewer paths.
-        if (e instanceof UploadTokenTooLargeError) return { error: "TOO_MANY_DELETES" };
-        throw e;
-      }
+      const { token, expiresAt } = await mint({
+        owner: ctx.userId,
+        name: args.name,
+        mode: "patch",
+        deletes,
+      });
       return {
         uploadUrl: `${config.SERVER_PUBLIC_URL}/j/upload/${token}`,
         token,

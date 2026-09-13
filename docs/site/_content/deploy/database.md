@@ -263,14 +263,12 @@ Some state is still per-process and not shared across workers:
   user spawns its own Chromium on the same profile directory and clears the
   singleton lock the first one is holding. See
   [browser session pod affinity](../field-notes/2026-09-10-browser-session-pod-affinity.md).
-- The jot upload replay guard. Upload tokens themselves are stateless and need
-  no stickiness, but the per-process guard that makes one single-use only sees
-  the uploads that reach its own worker, so a replay inside the token's TTL can
-  land on another worker and succeed. See
-  [the jots guide](../guides/jots.md#the-upload-token).
 
 SSO nonces are stored in the `pending_auth` row beside their `state`, so they
-follow the database and need no stickiness.
+follow the database and need no stickiness. Jot upload tokens are rows in that
+same table (under a `__jot_upload__` sentinel `integration`), so they need none
+either, and their single-use guarantee holds across every worker and replica —
+see [the jots guide](../guides/jots.md#the-upload-token).
 
 ## PostgreSQL behaviours worth knowing
 

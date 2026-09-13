@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { EncryptJWT, jwtDecrypt } from "jose";
+import { db } from "../db";
 import { config } from "../config";
 
 export interface PendingDeploy {
@@ -22,51 +22,30 @@ export type MintInput = Omit<PendingDeploy, "expiresAt" | "mode"> & {
   mode?: "replace" | "patch";
 };
 
-const AUDIENCE = "a-workbench-jot-upload";
-const ISSUER = "a-workbench";
-
-// The token is a JWE (encrypted), not a JWS (merely signed): its claims carry
-// the owner's userId and — for a password jot — the scrypt hash of the jot
-// password. A signed JWT publishes its payload in plaintext to anyone holding
-// the URL, and that URL is handed to an agent, pasted into a curl command, and
-// kept in shell history. Encrypting keeps the token as opaque as the random
-// string it replaces. A256GCM authenticates as well as encrypts, so the
-// ciphertext tag is the integrity check — no separate signature needed.
+// Pending deploys live in `pending_auth` under a sentinel `integration`, the
+// same way the MCP /authorize ticket does (auth/oauth-server/resume.ts).
 //
-// HKDF derives the content key from SESSION_SECRET rather than using it raw:
-// `dir`/A256GCM needs exactly 32 bytes, and the distinct `info` keeps this key
-// separate from the HS256 signing uses of the same secret elsewhere.
-function contentKey(): Uint8Array {
-  const ikm = new TextEncoder().encode(config.SESSION_SECRET);
-  const info = new TextEncoder().encode("jot-upload-token-v1");
-  return new Uint8Array(crypto.hkdfSync("sha256", ikm, new Uint8Array(0), info, 32));
-}
-
-// A token rides in the URL path, so its length is bounded by what the router
-// and any proxy accept in a request line. Everything in the payload is
-// fixed-size (~320 chars) except `deletes`, so a large delete list is the only
-// way to reach this. Refuse at mint rather than hand back a URL that dies at
-// the router or proxy with no usable error.
+// Despite the name, pending_auth is the server's general short-TTL handshake
+// table rather than an OAuth-only one: four generic columns (state, user_id,
+// integration, expires_at) plus nullable per-flow extras, with `integration`
+// as the discriminator. A jot upload is not auth, but it is exactly that shape
+// — a single-use ticket that expires in minutes — and riding the table means
+// the token survives a restart and is visible to every worker and replica,
+// which a process-local Map never was.
 //
-// The server passes this to Fastify as `maxParamLength`, so the router's bound
-// and the mint bound are the same number by construction. It stays well under
-// nginx's default 8 KiB request-line buffer.
-export const MAX_TOKEN_CHARS = 2048;
+// EVERY read and delete here is scoped to the sentinel, so this flow can
+// neither see nor consume an SSO or plugin-OAuth row.
+const SENTINEL = "__jot_upload__";
 
-export class UploadTokenTooLargeError extends Error {
-  constructor() {
-    super("Upload token exceeds the maximum URL-safe length");
-    this.name = "UploadTokenTooLargeError";
-  }
+/** The per-flow payload stored in `session_data`. */
+interface StoredPayload {
+  name: string;
+  mode: "replace" | "patch";
+  access?: "public" | "password";
+  passwordHash?: string;
+  cors?: boolean;
+  deletes?: string[];
 }
-
-// Replay guard. The token is stateless, so nothing but this stops a captured
-// URL being uploaded twice inside its TTL. Keyed by `jti` and held only until
-// the token would have expired anyway. Best-effort by design: it is per
-// process, so under CLUSTER_ENABLED or multiple replicas a replay landing on
-// another worker still succeeds. It is defence in depth, not the security
-// boundary — the TTL is.
-const consumed = new Map<string, number>();
 
 // Clock seam: overridable in tests so TTL expiry is testable without sleeping.
 let now: () => number = () => Date.now();
@@ -75,91 +54,91 @@ export function _setNowForTest(fn: () => number): void {
 }
 
 export async function mint(input: MintInput): Promise<{ token: string; expiresAt: number }> {
+  const token = crypto.randomBytes(32).toString("hex");
   const expiresAt = now() + config.JOTS_UPLOAD_TTL_SECONDS * 1000;
-  const token = await new EncryptJWT({
-    owner: input.owner,
+  const payload: StoredPayload = {
     name: input.name,
     mode: input.mode ?? "replace",
     access: input.access,
     passwordHash: input.passwordHash,
     cors: input.cors,
     deletes: input.deletes,
-  })
-    .setProtectedHeader({ alg: "dir", enc: "A256GCM" })
-    .setAudience(AUDIENCE)
-    .setIssuer(ISSUER)
-    .setJti(crypto.randomUUID())
-    .setIssuedAt(Math.floor(now() / 1000))
-    // Round up so the token never expires marginally before the `expiresAt`
-    // milliseconds handed back to the caller.
-    .setExpirationTime(Math.ceil(expiresAt / 1000))
-    .encrypt(contentKey());
-
-  if (token.length > MAX_TOKEN_CHARS) throw new UploadTokenTooLargeError();
+  };
+  await db.run(
+    "INSERT INTO pending_auth (state, user_id, integration, expires_at, session_data) VALUES (?, ?, ?, ?, ?)",
+    [
+      token,
+      input.owner,
+      SENTINEL,
+      // The column is whole seconds; round up so the row never dies marginally
+      // before the millisecond `expiresAt` handed back to the caller.
+      Math.ceil(expiresAt / 1000),
+      JSON.stringify(payload),
+    ]
+  );
   return { token, expiresAt };
 }
 
-// Single-use within this process. Returns null for a token that is malformed,
-// forged, expired, or already consumed here.
+// Single use, enforced by the database rather than by process memory. Returns
+// null for a token that is unknown, expired, or already consumed anywhere.
 export async function consume(token: string): Promise<PendingDeploy | null> {
-  if (typeof token !== "string" || token.length > MAX_TOKEN_CHARS) return null;
+  if (typeof token !== "string" || token === "") return null;
 
-  let claims: Record<string, unknown>;
+  const row = await db.get<{ user_id: string; session_data: string | null; expires_at: number }>(
+    "SELECT user_id, session_data, expires_at FROM pending_auth WHERE state = ? AND integration = ? AND expires_at > ?",
+    [token, SENTINEL, Math.floor(now() / 1000)]
+  );
+  if (!row) return null;
+
+  // The DELETE, not the SELECT, is what makes this single-use: two concurrent
+  // uploads of the same token both read the row, but the database serialises
+  // the deletes and exactly one of them reports a row removed. The loser is
+  // told the token is spent, which is true.
+  const { changes } = await db.run("DELETE FROM pending_auth WHERE state = ? AND integration = ?", [
+    token,
+    SENTINEL,
+  ]);
+  if (changes !== 1) return null;
+
+  let payload: StoredPayload;
   try {
-    const { payload } = await jwtDecrypt(token, contentKey(), {
-      audience: AUDIENCE,
-      issuer: ISSUER,
-      clockTolerance: 0,
-      // Threads the clock seam through jose's own `exp` check, so expiry stays
-      // testable without sleeping.
-      currentDate: new Date(now()),
-    });
-    claims = payload as Record<string, unknown>;
+    payload = JSON.parse(row.session_data ?? "") as StoredPayload;
   } catch {
-    // Wrong key, tampered ciphertext, wrong audience/issuer, or expired.
     return null;
   }
-
-  const jti = claims.jti;
-  if (typeof jti !== "string") return null;
-  if (consumed.has(jti)) return null;
-
-  const owner = claims.owner;
-  const name = claims.name;
-  const mode = claims.mode;
-  if (typeof owner !== "string" || typeof name !== "string") return null;
-  if (mode !== "replace" && mode !== "patch") return null;
-
-  const expiresAt = typeof claims.exp === "number" ? claims.exp * 1000 : now();
-  consumed.set(jti, expiresAt);
+  if (!payload || typeof payload.name !== "string") return null;
+  if (payload.mode !== "replace" && payload.mode !== "patch") return null;
 
   return {
-    owner,
-    name,
-    mode,
-    access: claims.access === "public" || claims.access === "password" ? claims.access : undefined,
-    passwordHash: typeof claims.passwordHash === "string" ? claims.passwordHash : undefined,
-    cors: claims.cors === true ? true : undefined,
-    deletes: Array.isArray(claims.deletes) ? (claims.deletes as string[]) : undefined,
-    expiresAt,
+    owner: row.user_id,
+    name: payload.name,
+    mode: payload.mode,
+    access: payload.access === "public" || payload.access === "password" ? payload.access : undefined,
+    passwordHash: typeof payload.passwordHash === "string" ? payload.passwordHash : undefined,
+    cors: payload.cors === true ? true : undefined,
+    deletes: Array.isArray(payload.deletes) ? payload.deletes : undefined,
+    expiresAt: Number(row.expires_at) * 1000,
   };
 }
 
-// Drops replay-guard entries whose token has expired on its own. Past that
-// point the token is refused by the `exp` check, so remembering it adds
-// nothing.
-export function reapExpired(): void {
-  const t = now();
-  for (const [jti, exp] of consumed) {
-    if (exp < t) consumed.delete(jti);
-  }
+// Drops abandoned rows once they are past their TTL. Scoped to the sentinel so
+// it can never reap another flow's handshake, even an expired one.
+export async function reapExpired(): Promise<void> {
+  await db.run("DELETE FROM pending_auth WHERE integration = ? AND expires_at < ?", [
+    SENTINEL,
+    Math.floor(now() / 1000),
+  ]);
 }
 
-// Periodic cleanup of the replay guard. Mirrors auth/connections reaper.
+// Periodic cleanup of abandoned tokens. Mirrors auth/connections reaper.
 let timer: ReturnType<typeof setInterval> | null = null;
 export function startUploadReaper(intervalMs = 60_000): void {
   if (timer) return;
-  timer = setInterval(() => reapExpired(), intervalMs);
+  timer = setInterval(() => {
+    // A sweep failure is not worth crashing the process: the rows are already
+    // dead to `consume`, and the next tick tries again.
+    void reapExpired().catch((e) => console.warn("[jots] upload reaper failed:", e));
+  }, intervalMs);
   timer.unref?.();
 }
 export function stopUploadReaper(): void {

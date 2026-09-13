@@ -10,19 +10,19 @@ let tmp: string;
 
 vi.mock("../../src/jots/dir", () => ({ jotsRoot: () => tmp }));
 vi.mock("../../src/config", () => ({
-  config: { JOTS_MAX_BYTES: 1_000_000, JOTS_MAX_FILES: 1000, JOTS_UPLOAD_TTL_SECONDS: 300, SERVER_PUBLIC_URL: "https://wb.test", SESSION_SECRET: "test-secret-32-chars-long-xxxxxx", NODE_ENV: "test" },
+  config: { JOTS_MAX_BYTES: 1_000_000, JOTS_MAX_FILES: 1000, JOTS_UPLOAD_TTL_SECONDS: 300, SERVER_PUBLIC_URL: "https://wb.test", SESSION_SECRET: "test-secret-32-chars-long-xxxxxx", NODE_ENV: "test", DATABASE_URL: "./data/tokens.db" },
 }));
 
 import { registerJotRoutes } from "../../src/jots/routes";
 import { deployJot, readManifest, updateJotMeta } from "../../src/jots/store";
 import { hashPassword, makeToken, cookieName } from "../../src/jots/auth";
-import { mint, MAX_TOKEN_CHARS } from "../../src/jots/pending";
+import { mint } from "../../src/jots/pending";
 
 let app: FastifyInstance;
 
 beforeEach(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "jots-routes-"));
-  app = Fastify({ routerOptions: { maxParamLength: MAX_TOKEN_CHARS } });
+  app = Fastify();
   await registerJotRoutes(app);
   await app.ready();
 });
@@ -149,7 +149,7 @@ describe("jots/routes", () => {
   });
 
   it("does not throw when a urlencoded parser is already registered (boot order)", async () => {
-    const a = Fastify({ routerOptions: { maxParamLength: MAX_TOKEN_CHARS } });
+    const a = Fastify();
     a.addContentTypeParser("application/x-www-form-urlencoded", { parseAs: "string" }, (_r, b, d) => d(null, b));
     await expect(registerJotRoutes(a)).resolves.not.toThrow();
     await a.close();
@@ -159,7 +159,7 @@ describe("jots/routes", () => {
     // Mirror the real boot order: the OAuth route group registers a urlencoded
     // parser that yields an OBJECT, so the jot string parser is skipped and
     // __auth sees req.body as an object — password jots must still unlock.
-    const a = Fastify({ routerOptions: { maxParamLength: MAX_TOKEN_CHARS } });
+    const a = Fastify();
     a.addContentTypeParser(
       "application/x-www-form-urlencoded",
       { parseAs: "string" },

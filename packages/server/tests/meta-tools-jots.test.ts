@@ -10,8 +10,6 @@ vi.mock("../src/jots/store", () => ({
 }));
 vi.mock("../src/jots/pending", () => ({
   mint: vi.fn(() => ({ token: "tok123", expiresAt: 42 })),
-  // Declared inside the factory: vi.mock is hoisted above top-level bindings.
-  UploadTokenTooLargeError: class UploadTokenTooLargeError extends Error {},
 }));
 vi.mock("../src/jots/auth", () => ({
   hashPassword: vi.fn(() => "scrypt$salt$hash"),
@@ -20,7 +18,7 @@ vi.mock("../src/jots/auth", () => ({
 import { jotsPlugin } from "../src/plugins/internal/jots";
 import * as store from "../src/jots/store";
 import { hashPassword } from "../src/jots/auth";
-import { mint, UploadTokenTooLargeError } from "../src/jots/pending";
+import { mint } from "../src/jots/pending";
 import { readManifest, updateJotMeta } from "../src/jots/store";
 
 function findTool(name: string) {
@@ -170,16 +168,6 @@ describe("jots plugin update_jot", () => {
       error: "INVALID_PATH",
     });
     expect(updateJotMeta).not.toHaveBeenCalled();
-  });
-
-  it("reports TOO_MANY_DELETES when the delete list outgrows the upload URL", async () => {
-    vi.mocked(readManifest).mockReturnValue(owned);
-    vi.mocked(mint).mockImplementationOnce(() => {
-      throw new UploadTokenTooLargeError();
-    });
-    expect(await findTool("update_jot").handler({ userId: "u1" }, { name: "site", delete: ["a.json"] })).toEqual({
-      error: "TOO_MANY_DELETES",
-    });
   });
 });
 

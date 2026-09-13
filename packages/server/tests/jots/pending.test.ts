@@ -1,9 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 
-vi.mock("../../src/config", () => ({
-  config: { JOTS_UPLOAD_TTL_SECONDS: 300, SESSION_SECRET: "test-session-secret-32-chars-long!!" },
-}));
-
+import { db } from "../../src/db";
 import {
   mint,
   consume,
@@ -11,22 +8,24 @@ import {
   _setNowForTest,
   startUploadReaper,
   stopUploadReaper,
-  MAX_TOKEN_CHARS,
-  UploadTokenTooLargeError,
 } from "../../src/jots/pending";
-import { config } from "../../src/config";
 
-const SECRET = "test-session-secret-32-chars-long!!";
+const SENTINEL = "__jot_upload__";
+
+async function countRows(integration = SENTINEL): Promise<number> {
+  const row = await db.get<{ n: number }>(
+    "SELECT COUNT(*) AS n FROM pending_auth WHERE integration = ?",
+    [integration]
+  );
+  return Number(row?.n ?? 0);
+}
 
 describe("jots/pending", () => {
   let t = 1_000_000;
-  beforeEach(() => {
+  beforeEach(async () => {
     t = 1_000_000;
     _setNowForTest(() => t);
-    reapExpired();
-  });
-  afterEach(() => {
-    config.SESSION_SECRET = SECRET;
+    await db.exec("DELETE FROM pending_auth");
   });
 
   it("mints a token and consumes it once", async () => {
@@ -40,6 +39,7 @@ describe("jots/pending", () => {
 
   it("returns null for an unknown token", async () => {
     expect(await consume("nope")).toBeNull();
+    expect(await consume("")).toBeNull();
   });
 
   it("does not return an expired token", async () => {
@@ -48,13 +48,13 @@ describe("jots/pending", () => {
     expect(await consume(token)).toBeNull();
   });
 
-  it("reapExpired drops only replayable entries that have expired anyway", async () => {
+  it("reapExpired drops only expired rows", async () => {
     const a = await mint({ owner: "u1", name: "a", access: "public" });
     t += 100_000;
     const b = await mint({ owner: "u1", name: "b", access: "public" });
     t += 250_000;
-    reapExpired();
-    // `a` is past its own exp, so it is refused on its merits, not by the guard.
+    await reapExpired();
+    expect(await countRows()).toBe(1);
     expect(await consume(a.token)).toBeNull();
     expect(await consume(b.token)).toMatchObject({ name: "b" });
   });
@@ -88,75 +88,74 @@ describe("jots/pending", () => {
     expect(await consume(token)).toMatchObject({ cors: true });
   });
 
-  // --- stateless-token properties ---
-
-  it("is a compact JWE, so the payload is opaque to whoever holds the URL", async () => {
-    const { token } = await mint({
-      owner: "user-42",
-      name: "site",
-      access: "password",
-      passwordHash: "scrypt$deadbeef$cafe",
-    });
-    // header..iv.ciphertext.tag — `dir` leaves the encrypted-key part empty.
-    expect(token.split(".")).toHaveLength(5);
-    // Neither the owner nor the password hash is readable from the token.
-    expect(token).not.toContain("user-42");
-    expect(token).not.toContain("cafe");
-    expect(Buffer.from(token.split(".")[3], "base64url").toString("utf8")).not.toContain("scrypt");
-  });
-
-  it("is URL-path safe", async () => {
-    const { token } = await mint({ owner: "u1", name: "site", access: "public" });
-    expect(token).toMatch(/^[A-Za-z0-9_.-]+$/);
-    expect(encodeURIComponent(token)).toBe(token);
-  });
-
-  it("survives a process restart — a fresh module consumes a token it never minted", async () => {
-    _setNowForTest(() => Date.now());
-    const { token } = await mint({ owner: "u1", name: "survivor", access: "public" });
-
-    vi.resetModules();
-    const fresh = await import("../../src/jots/pending");
-    expect(await fresh.consume(token)).toMatchObject({ owner: "u1", name: "survivor" });
-  });
-
-  it("rejects a token minted under a different SESSION_SECRET", async () => {
-    const { token } = await mint({ owner: "u1", name: "site", access: "public" });
-    config.SESSION_SECRET = "a-completely-different-secret-32c!!";
-    expect(await consume(token)).toBeNull();
-  });
-
-  it("rejects a tampered ciphertext", async () => {
-    const { token } = await mint({ owner: "u1", name: "site", access: "public" });
-    const parts = token.split(".");
-    const ct = Buffer.from(parts[3], "base64url");
-    ct[0] ^= 0xff;
-    parts[3] = ct.toString("base64url");
-    expect(await consume(parts.join("."))).toBeNull();
-  });
-
-  it("rejects a token whose claims were re-signed with no encryption", async () => {
-    // A bare JWS-style token — the shape an attacker would forge if the token
-    // were merely signed — is not a JWE and must not decrypt.
-    const forged = Buffer.from(JSON.stringify({ owner: "attacker", name: "site", mode: "replace" })).toString("base64url");
-    expect(await consume(`eyJhbGciOiJub25lIn0.${forged}.`)).toBeNull();
-  });
-
-  it("refuses to mint a token too long for a URL", async () => {
-    const deletes = Array.from({ length: 500 }, (_, i) => `some/reasonably/long/path/segment/file-${i}.json`);
-    await expect(mint({ owner: "u1", name: "site", mode: "patch", deletes })).rejects.toBeInstanceOf(
-      UploadTokenTooLargeError
-    );
-  });
-
-  it("mints a delete list that fits", async () => {
-    const deletes = Array.from({ length: 20 }, (_, i) => `data/file-${i}.json`);
+  it("stores an arbitrarily long delete list — the token is a handle, not the payload", async () => {
+    const deletes = Array.from({ length: 400 }, (_, i) => `some/reasonably/long/path/segment/file-${i}.json`);
     const { token } = await mint({ owner: "u1", name: "site", mode: "patch", deletes });
-    expect(token.length).toBeLessThanOrEqual(MAX_TOKEN_CHARS);
+    expect(token).toHaveLength(64);
     expect(await consume(token)).toMatchObject({ deletes });
   });
 
-  it("refuses an over-long token without attempting to decrypt it", async () => {
-    expect(await consume("x".repeat(MAX_TOKEN_CHARS + 1))).toBeNull();
+  // --- the properties the database buys us ---
+
+  it("is durable: the row outlives the process that minted it", async () => {
+    const { token } = await mint({ owner: "u1", name: "survivor", access: "public" });
+    // A fresh module instance holds no memory of the mint, as after a restart
+    // or on a second worker, and still consumes the token.
+    vi.resetModules();
+    const fresh = await import("../../src/jots/pending");
+    fresh._setNowForTest(() => t);
+    expect(await fresh.consume(token)).toMatchObject({ owner: "u1", name: "survivor" });
+  });
+
+  it("only one of two concurrent consumes wins", async () => {
+    const { token } = await mint({ owner: "u1", name: "race", access: "public" });
+    const results = await Promise.all([consume(token), consume(token), consume(token)]);
+    expect(results.filter((r) => r !== null)).toHaveLength(1);
+    expect(await countRows()).toBe(0);
+  });
+
+  it("consuming leaves no row behind", async () => {
+    const { token } = await mint({ owner: "u1", name: "site", access: "public" });
+    expect(await countRows()).toBe(1);
+    await consume(token);
+    expect(await countRows()).toBe(0);
+  });
+
+  // --- sentinel scoping: this flow must not touch the OAuth/SSO rows ---
+
+  it("cannot consume another flow's pending_auth row", async () => {
+    await db.run(
+      "INSERT INTO pending_auth (state, user_id, integration, expires_at, session_data) VALUES (?, ?, ?, ?, ?)",
+      ["sso-state", "u9", "__oauth_authorize__", Math.floor(t / 1000) + 600, JSON.stringify({ clientId: "c1" })]
+    );
+    expect(await consume("sso-state")).toBeNull();
+    // and the row is untouched
+    expect(await countRows("__oauth_authorize__")).toBe(1);
+  });
+
+  it("reapExpired leaves another flow's expired rows alone", async () => {
+    await db.run(
+      "INSERT INTO pending_auth (state, user_id, integration, expires_at) VALUES (?, ?, ?, ?)",
+      ["stale-oauth", "u9", "jira", Math.floor(t / 1000) - 60]
+    );
+    await reapExpired();
+    expect(await countRows("jira")).toBe(1);
+  });
+
+  it("stores the owner in user_id and the deploy in session_data", async () => {
+    const { token } = await mint({ owner: "u-42", name: "site", access: "public", cors: true });
+    const row = await db.get<{ user_id: string; integration: string; session_data: string }>(
+      "SELECT user_id, integration, session_data FROM pending_auth WHERE state = ?",
+      [token]
+    );
+    expect(row?.user_id).toBe("u-42");
+    expect(row?.integration).toBe(SENTINEL);
+    expect(JSON.parse(row!.session_data)).toMatchObject({ name: "site", mode: "replace", cors: true });
+  });
+
+  it("returns null when the stored payload is unreadable", async () => {
+    const { token } = await mint({ owner: "u1", name: "site", access: "public" });
+    await db.run("UPDATE pending_auth SET session_data = ? WHERE state = ?", ["not json", token]);
+    expect(await consume(token)).toBeNull();
   });
 });

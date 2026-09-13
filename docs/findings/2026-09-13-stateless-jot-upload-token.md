@@ -1,4 +1,4 @@
-# The jot upload token: from a heap Map to an encrypted JWT
+# `pending_auth` is not the SSO table: durable jot upload tokens
 
 ## What was wrong
 
@@ -16,65 +16,86 @@ Two consequences, one documented and one not:
   `X-Browser-Session` consistent hashing — the upload succeeded roughly 1/N of the
   time and otherwise returned a bare 404 with nothing to explain it.
 
-The OAuth side had already solved the same problem the other way: PKCE verifiers,
-state, and SSO nonces live in `pending_auth`, so they survive restarts and need no
-stickiness.
+## The table was already the answer
 
-## Why encrypted, not signed
+The instinct is that `pending_auth` is the SSO/OAuth table and that putting a jot
+deploy in it would be a large, invasive change. It isn't, on either count.
 
-The obvious fix is a signed token — a JWT, the house idiom (`jose` + HS256 + `aud`/`iss`,
-as in `auth/connect-token.ts`). It is the wrong primitive here.
+The base schema is four generic columns — `state` (PK), `user_id`, `integration`,
+`expires_at` — plus four **nullable** per-flow extras bolted on over time by the
+idempotent `ALTER` list in `db.ts`: `session_data`, `code_verifier`, `config`, `nonce`.
+Nothing is `NOT NULL`, and `integration` is the discriminator. Three flows already
+shared it before this change:
 
-A JWS publishes its payload. Anyone holding the token can base64-decode the claims.
-This token's claims are the owner's user id and, for a password jot, the scrypt hash of
-the jot password — and this token is pasted into a `curl` one-liner, handed to an agent,
-and kept in shell history. Today's opaque random string leaks neither. A signed token
-would leak both, and would turn a weak jot password into an offline cracking target.
+| Flow | `integration` | Columns used |
+|---|---|---|
+| Plugin OAuth (`auth/oauth.ts`) | the plugin's name | `code_verifier`, `config`, `nonce` |
+| Workbench SSO (google / keycloak) | same path | `nonce` |
+| MCP `/authorize` ticket (`api/oauth-routes.ts`) | `'__oauth_authorize__'` | `session_data` |
 
-So the token is a **JWE**: `dir` key management, `A256GCM` content encryption. GCM
-authenticates as well as encrypts, so the ciphertext tag is the integrity check and no
-separate signature is needed. The token stays as opaque as the random string it replaced.
+That third one is not an OAuth handshake at all. It is a sentinel row with an empty
+`user_id` and one JSON blob, and `oauth-server/resume.ts` scopes its read with
+`WHERE state = ? AND integration = '__oauth_authorize__'`. So the precedent for "a
+short-TTL single-use ticket that isn't auth" was already in the table.
 
-The content key is HKDF-derived from `SESSION_SECRET` rather than used raw — `dir`/A256GCM
-needs exactly 32 bytes, and a distinct `info` string keeps this key separate from the
-HS256 signing that the same secret does elsewhere.
+A jot upload is the fourth, under `'__jot_upload__'`: `state` is the token,
+`user_id` is the owner, `expires_at` is the TTL, and `session_data` holds the deploy.
+**Zero DDL** — no new table, no migration, no change to `migrate/plan.ts`, which
+already copies `pending_auth` (and already advises `--skip`ping it, since these rows
+are dead within minutes either way).
 
-## The part that bit: find-my-way's 100-char `maxParamLength`
+Every read and delete is scoped to the sentinel, so the flow can neither see nor reap
+another flow's row. Two tests hold that line: consuming an `__oauth_authorize__` row by
+its state returns null and leaves it in place, and the reaper leaves an expired plugin
+row alone.
 
-A JWE carrying these claims is ~320 characters. A path parameter over **100** characters
-is rejected by Fastify's router before the route handler runs — the tests went red with
-`414 URI Too Long`, not a jots error. The default exists to bound param work, and 100 is
-far below anything real: nginx's default request-line buffer is 8 KiB.
+## Single use is now a real guarantee
 
-The fix is one server option, but it is set at Fastify construction rather than per route
-(`maxParamLength` belongs to the find-my-way instance; Fastify plugin encapsulation does
-not create a new router). In Fastify 5 it goes under `routerOptions` — passing it at the
-top level still works but warns with `FSTDEP022`.
+Storing the payload as a row buys the property that no stateless token can have.
+`consume` selects the row and then deletes it — and **the delete, not the select, is the
+arbiter**:
 
-`maxParamLength` is fed from `MAX_TOKEN_CHARS`, the same constant `mint` refuses to
-exceed, so the router's bound and the mint bound are one number by construction.
+```ts
+const { changes } = await db.run(
+  "DELETE FROM pending_auth WHERE state = ? AND integration = ?", [token, SENTINEL]);
+if (changes !== 1) return null;
+```
 
-## What this cost
+Two concurrent uploads of one token both read the row, but the database serialises the
+deletes and exactly one reports `changes === 1`. The loser is told the token is spent,
+which is true. No transaction is needed: the `DELETE` is a single atomic statement, so
+the read-then-write hazard on a pooled PostgreSQL connection (see the 2026-08-06
+dialect notes) never arises. `DbAdapter.run` returning `{ changes }` is what makes this
+expressible on both backends.
 
-Everything in the payload is fixed-size except `update_jot`'s `deletes`, which is now
-bounded by what fits in a URL rather than by available memory. Past the bound `update_jot`
-returns `TOO_MANY_DELETES` at mint time, before any upload — the settings half of the call
-has already been applied, so the caller retries only the file half with a shorter list.
-~2 KiB of token holds on the order of 50 paths; the tool is pitched at refreshing one data
-file, so this is a bound in name more than in practice.
+This is worth stating because the obvious alternative — a signed or encrypted
+self-contained token (JWS/JWE) — is strictly worse here. It also survives restarts and
+needs no stickiness, but it *cannot* be spent: single use degrades to a per-process
+`jti` guard that a second worker knows nothing about. It also has to carry the owner id
+and a password jot's scrypt hash inside a string that gets pasted into `curl` and kept
+in shell history (so it must be encrypted, not merely signed), and a ~320-character
+token in a path parameter trips find-my-way's 100-character `maxParamLength` — a 414
+before the route handler ever runs — which then has to be raised at Fastify
+construction, and bounds `update_jot`'s delete list by URL length. A row in a table has
+none of those problems: the token stays a 64-character opaque handle that carries
+nothing.
 
-## Single use is now best-effort
+## Storage notes
 
-A stateless token cannot be spent. What remains is a per-process `Map` keyed by the
-token's `jti`, held only until the token would expire anyway — so replay is blocked on the
-worker that saw the upload, and not on its siblings. This is defence in depth; **the TTL
-is the actual boundary.** The upload URL should be treated as a live credential until it
-expires, which was already true — the endpoint takes no other authentication.
+`expires_at` is whole seconds, while the API hands back `expiresAt` in milliseconds.
+Mint rounds **up** when storing, so the row never dies marginally before the timestamp
+the caller was given.
+
+The payload is a JSON blob rather than typed columns on purpose: `cors` is a boolean,
+and the 2026-08-06 dialect notes record that PostgreSQL rejects `1`/`0` for a real
+BOOLEAN column while better-sqlite3 rejects booleans. Keeping it inside `session_data`
+sidesteps the whole question.
 
 ## Still open: the token is in the logs
 
 `req.url` is deliberately not redacted in the Fastify logger, and the comment there
 claimed "tokens were once in URLs but no longer are". That was never true of
-`/j/upload/<token>`. Encrypting the token does not help — the URL *is* the credential, so
-a log reader can replay it within the TTL on a worker that has not seen it. The comment
-is now accurate about what the URL carries; redacting the path segment is unfinished work.
+`/j/upload/<token>`. The token is now an opaque handle that carries nothing, but the URL
+*is* the credential, so a log reader can still replay it within the TTL — until someone
+consumes it, which is now genuinely once. The comment is corrected; redacting the path
+segment is unfinished work.
