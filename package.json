@@ -1,6 +1,6 @@
 {
   "name": "a-workbench",
-  "version": "0.28.0-rc.2",
+  "version": "0.28.0-rc.3",
   "private": true,
   "packageManager": "npm@10.2.0",
   "workspaces": [
