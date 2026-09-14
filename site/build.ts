@@ -37,8 +37,8 @@ if (inventory.totals.integrations === 0 || inventory.totals.tools === 0 || inven
 const replay = JSON.parse(readFileSync(join(here, "data", "replay.json"), "utf8")) as ReplayStep[];
 const html = renderPage({
   inventory, replay: fillReplay(replay, inventory.totals),
-  docsUrl: process.env.SITE_DOCS_URL ?? "https://barockok.github.io/workbench/docs/",
-  repoUrl: "https://github.com/barockok/workbench",
+  docsUrl: process.env.SITE_DOCS_URL ?? "https://amarthaid.github.io/workbench/docs/",
+  repoUrl: "https://github.com/amarthaid/workbench",
   image: process.env.SITE_URL ? `${process.env.SITE_URL}/og-1200x630.png` : (process.env.URL ?? "") + "/og-1200x630.png",
   shots: { apps: "shots/apps.png", connect: "shots/connect.png", result: "shots/result.png" },
 });

@@ -13,7 +13,7 @@ You need Node 20 or 22 (what CI and the Docker image build against) and npm 10.
 ### Clone and install
 
 ```bash
-git clone https://github.com/barockok/workbench.git
+git clone https://github.com/amarthaid/workbench.git
 cd workbench
 npm install
 ```

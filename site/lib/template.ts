@@ -18,7 +18,7 @@ export interface PageData { inventory: Inventory; replay: ReplayStep[]; docsUrl:
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
-const DOCKER = "docker run -p 3001:3001 -v workbench-data:/app/data ghcr.io/barockok/workbench";
+const DOCKER = "docker run -p 3001:3001 -v workbench-data:/app/data ghcr.io/amarthaid/workbench";
 
 export function renderPage(d: PageData): string {
   const { totals, integrations } = d.inventory;
