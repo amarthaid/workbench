@@ -11,7 +11,7 @@ The Jira integration gives an agent the issue lifecycle. It can discover project
 |---|---|
 | Plugin id | `atlassian-jira` |
 | Auth | OAuth 2.0 (3LO) |
-| Tools | 12 |
+| Tools | 13 |
 | Authorization URL | `https://auth.atlassian.com/authorize` |
 | Token URL | `https://auth.atlassian.com/oauth/token` |
 | Proxy base | `https://api.atlassian.com/ex/jira/cloud-id` |
@@ -101,10 +101,10 @@ Open the returned `url` to consent. The pending connection expires after `CONNEC
 | Tool | Purpose |
 |---|---|
 | `jira_list_projects` | List visible projects as `{ key, id, name, projectTypeKey }`; the way to discover a project key |
-| `jira_create_issue` | Create an issue and return `{ id, key, self }`; issue type defaults to Task |
+| `jira_create_issue` | Create an issue and return `{ id, key, self }`; issue type defaults to Task; pass `fields` to include custom or project-required fields |
 | `jira_search_issues` | JQL search returning slim rows plus a `nextPageToken` for paging |
 | `jira_get_issue` | One issue in detail, description flattened from ADF to plain text |
-| `jira_update_issue` | Change summary, description, assignee, or labels — only the fields you pass |
+| `jira_update_issue` | Change summary, description, assignee, labels, or any custom field — only the fields you pass; pass `fields` for custom fields |
 | `jira_get_transitions` | List the transitions currently legal for an issue, with their ids |
 | `jira_transition_issue` | Apply a transition id to move an issue's status |
 | `jira_add_comment` | Add a plain-text comment, wrapped in ADF automatically |
@@ -112,6 +112,54 @@ Open the returned `url` to consent. The pending connection expires after `CONNEC
 | `jira_search_users` | Find users by name or email; returns the `accountId` assignment needs |
 | `jira_get_boards` | List agile boards, optionally filtered by project key |
 | `jira_project_types` | List the site's project types with icons stripped |
+| `jira_get_create_meta` | List the fields (required and optional) for creating an issue in a project; filter by issue type |
+
+## Custom fields
+
+Many Jira projects require fields beyond the built-in set — priority tiers, team labels, work categories, story points, and so on. Both `jira_create_issue` and `jira_update_issue` accept a `fields` object for these.
+
+**Discover what a project needs:**
+
+```
+jira_get_create_meta({ projectKey: "DEMO" })
+```
+
+Returns every issue type with its required and optional fields, their `fieldId` keys (`customfield_NNNNN`), and for enum-style fields an `allowedValues` list with the `id` each value needs.
+
+Filter down to one issue type to reduce the output:
+
+```
+jira_get_create_meta({ projectKey: "DEMO", issueType: "Task" })
+```
+
+**Pass custom fields when creating:**
+
+Merge extra fields into the `fields` object. Named arguments (`summary`, `description`, `issueType`) take precedence over anything in `fields` on conflict.
+
+```
+jira_create_issue({
+  projectKey: "DEMO",
+  summary: "Example issue",
+  issueType: "Task",
+  fields: {
+    "customfield_10016": 3,
+    "customfield_10014": { "id": "42" }
+  }
+})
+```
+
+**Update custom fields on an existing issue:**
+
+Same `fields` pattern; named args win on conflict.
+
+```
+jira_update_issue({
+  issueKey: "DEMO-123",
+  fields: {
+    "customfield_10016": 5
+  }
+})
+```
 
 ## Notes and gotchas
 

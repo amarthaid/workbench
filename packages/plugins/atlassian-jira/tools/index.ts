@@ -66,26 +66,27 @@ function shapeIssueRow(issue: any, requestedFields: string[]) {
 export const createIssue = {
   name: "jira_create_issue",
   description:
-    "Create a Jira issue and return its { id, key, self }. description is plain text (wrapped in ADF automatically); issueType defaults to \"Task\". Find a valid projectKey with jira_list_projects first.",
+    "Create a Jira issue and return its { id, key, self }. description is plain text (wrapped in ADF automatically); issueType defaults to \"Task\". Find a valid projectKey with jira_list_projects first. Pass fields to include additional or required custom fields (e.g. { \"customfield_10016\": { \"id\": \"123\" } }) — keys in fields are merged in, with named args taking precedence on conflict.",
   integration: "atlassian-jira",
   inputSchema: z.object({
     projectKey: z.string(),
     summary: z.string(),
     description: z.string().optional(),
     issueType: z.string().default("Task"),
+    fields: z.record(z.string(), z.unknown()).optional(),
   }),
   handler: async (ctx: any, args: any) => {
+    const fields: Record<string, unknown> = {
+      ...(args.fields ?? {}),
+      project: { key: args.projectKey },
+      summary: args.summary,
+      issuetype: { name: args.issueType },
+    };
+    if (args.description !== undefined) fields.description = textToAdf(args.description);
     const res = await ctx.http(`${BASE}/issue`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        fields: {
-          project: { key: args.projectKey },
-          summary: args.summary,
-          description: args.description ? textToAdf(args.description) : undefined,
-          issuetype: { name: args.issueType },
-        },
-      }),
+      body: JSON.stringify({ fields }),
     });
     return res.json();
   },
@@ -231,7 +232,7 @@ export const getProjectTypes = {
 export const updateIssue = {
   name: "jira_update_issue",
   description:
-    "Update a Jira issue's summary, description (plain text, wrapped in ADF), assignee (assigneeAccountId from jira_search_users), and/or labels — only the args you pass are changed; returns { success: true }. To change status use jira_transition_issue instead (status is not a field).",
+    "Update a Jira issue's summary, description (plain text, wrapped in ADF), assignee (assigneeAccountId from jira_search_users), and/or labels — only the args you pass are changed; returns { success: true }. To change status use jira_transition_issue instead (status is not a field). Pass fields to set additional custom fields (e.g. { \"customfield_10016\": { \"id\": \"123\" } }) — named args take precedence on conflict.",
   integration: "atlassian-jira",
   inputSchema: z.object({
     issueKey: z.string(),
@@ -239,9 +240,10 @@ export const updateIssue = {
     description: z.string().optional(),
     assigneeAccountId: z.string().optional(),
     labels: z.array(z.string()).optional(),
+    fields: z.record(z.string(), z.unknown()).optional(),
   }),
   handler: async (ctx: any, args: any) => {
-    const fields: any = {};
+    const fields: Record<string, unknown> = { ...(args.fields ?? {}) };
     if (args.summary !== undefined) fields.summary = args.summary;
     if (args.description !== undefined) fields.description = textToAdf(args.description);
     if (args.assigneeAccountId !== undefined) fields.assignee = { accountId: args.assigneeAccountId };
@@ -363,5 +365,49 @@ export const listProjects = {
       total: data.total,
       isLast: data.isLast,
     };
+  },
+};
+
+export const getCreateMeta = {
+  name: "jira_get_create_meta",
+  description:
+    "Return the fields required (and allowed) when creating a Jira issue. Pass projectKey and optionally issueType to scope the result. Each field entry includes { fieldId, name, required, schema, allowedValues } — use the fieldId as the key and an allowedValues entry's id/value as the value in jira_create_issue's fields arg.",
+  integration: "atlassian-jira",
+  inputSchema: z.object({
+    projectKey: z.string(),
+    issueType: z.string().optional(),
+  }),
+  handler: async (ctx: any, args: any) => {
+    // Fetch issue types for the project (returns their field schemas inline).
+    const res = await ctx.http(`${BASE}/issue/createmeta/${args.projectKey}/issuetypes`);
+    const data = await res.json();
+    const issueTypes: any[] = data.issueTypes ?? data.values ?? [];
+
+    const target = args.issueType
+      ? issueTypes.filter((t: any) => t.name.toLowerCase() === args.issueType!.toLowerCase())
+      : issueTypes;
+
+    // For each matching issue type, fetch its field schema.
+    const results = await Promise.all(
+      target.map(async (issueType: any) => {
+        const fr = await ctx.http(
+          `${BASE}/issue/createmeta/${args.projectKey}/issuetypes/${issueType.id}`
+        );
+        const fd = await fr.json();
+        const fields = (fd.fields ?? fd.values ?? []).map((f: any) => ({
+          fieldId: f.fieldId,
+          name: f.name,
+          required: f.required,
+          schema: f.schema,
+          allowedValues: f.allowedValues?.map((v: any) => ({
+            id: v.id,
+            value: v.value ?? v.name,
+          })),
+        }));
+        return { issueType: issueType.name, issueTypeId: issueType.id, fields };
+      })
+    );
+
+    return results;
   },
 };
