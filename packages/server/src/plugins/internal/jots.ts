@@ -30,7 +30,7 @@ const tools: PluginTool[] = [
       const existing = readManifest(args.name);
       if (existing && existing.owner !== ctx.userId) return { error: "JOT_NAME_TAKEN" };
       const passwordHash = args.access === "password" ? hashPassword(args.password as string) : undefined;
-      const { token, expiresAt } = mint({
+      const { token, expiresAt } = await mint({
         owner: ctx.userId,
         name: args.name,
         access: args.access,
@@ -87,7 +87,7 @@ const tools: PluginTool[] = [
         applied = { access: meta.access, cors: meta.cors };
       }
 
-      const { token, expiresAt } = mint({
+      const { token, expiresAt } = await mint({
         owner: ctx.userId,
         name: args.name,
         mode: "patch",

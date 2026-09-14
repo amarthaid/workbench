@@ -23,9 +23,12 @@ import { metricsRegistry, httpRequestsTotal, httpRequestDuration } from "./telem
 async function main() {
   const app = Fastify({
     logger: {
-      // Redact secrets from logs. req.url is intentionally NOT redacted —
-      // tokens were once in URLs but no longer are; keeping the URL visible
-      // is necessary for request tracing.
+      // Redact secrets from logs. req.url is intentionally NOT redacted:
+      // keeping the URL visible is necessary for request tracing. The one
+      // credential still in a URL is the jot upload token (/j/upload/<token>),
+      // which is an opaque handle carrying nothing — the deploy it authorises
+      // lives in the database — and is single-use with a few minutes' TTL. It
+      // does still reach the logs, so treat them accordingly.
       redact: {
         paths: [
           "req.headers.authorization",

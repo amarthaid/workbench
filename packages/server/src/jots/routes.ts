@@ -175,7 +175,7 @@ export async function registerJotRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post<{ Params: { token: string } }>("/j/upload/:token", async (req, reply) => {
-    const pending = consume(req.params.token);
+    const pending = await consume(req.params.token);
     if (!pending) return reply.code(404).send("Not found");
 
     // A patch inherits gating from the live jot rather than from the token, so

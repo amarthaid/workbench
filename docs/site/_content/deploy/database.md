@@ -265,7 +265,10 @@ Some state is still per-process and not shared across workers:
   [browser session pod affinity](../field-notes/2026-09-10-browser-session-pod-affinity.md).
 
 SSO nonces are stored in the `pending_auth` row beside their `state`, so they
-follow the database and need no stickiness.
+follow the database and need no stickiness. Jot upload tokens are rows in that
+same table (under a `__jot_upload__` sentinel `integration`), so they need none
+either, and their single-use guarantee holds across every worker and replica —
+see [the jots guide](../guides/jots.md#the-upload-token).
 
 ## PostgreSQL behaviours worth knowing
 

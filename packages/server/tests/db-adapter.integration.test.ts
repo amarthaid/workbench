@@ -215,6 +215,30 @@ for (const backend of backends) {
         const [a, b] = await Promise.all([claim(), claim()]);
         expect([a, b].filter(Boolean)).toHaveLength(1);
       });
+
+      // The same arbitration without a transaction — the shape the jot upload
+      // token relies on (jots/pending.ts). The transaction above is what keeps
+      // a whole claim-and-mint sequence atomic; for deciding *who* consumed a
+      // single-use row, the `changes === 1` check is sufficient on its own:
+      // both callers see the row, the database serialises the deletes, and only
+      // one of them reports removing it.
+      //
+      // Worth pinning on both backends rather than just SQLite: this is what
+      // makes a single-use token single-use across workers, and CLUSTER_ENABLED
+      // only ever runs on PostgreSQL.
+      it("lets exactly one of three concurrent claims delete the row without a transaction", async () => {
+        await db.run("INSERT INTO users (id, email) VALUES (?, ?)", ["contested", "c@example.com"]);
+
+        const claim = async () => {
+          const row = await db.get<{ id: string }>("SELECT id FROM users WHERE id = ?", ["contested"]);
+          if (!row) return false;
+          const { changes } = await db.run("DELETE FROM users WHERE id = ?", ["contested"]);
+          return changes === 1;
+        };
+
+        const results = await Promise.all([claim(), claim(), claim()]);
+        expect(results.filter(Boolean)).toHaveLength(1);
+      });
     });
   });
 }

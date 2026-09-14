@@ -201,16 +201,23 @@ failure.
 ## The upload token
 
 The token returned by `deploy_jot` is **single use** and expires after
-`JOTS_UPLOAD_TTL_SECONDS` (default 300). It carries the owner, the name, the access
-mode, and — for a password jot — the already-hashed password. The password itself is
-hashed at mint and never travels with the upload.
+`JOTS_UPLOAD_TTL_SECONDS` (default 300). The upload endpoint takes no other
+authentication: the token is the credential. A consumed, unknown, or expired token
+returns 404, and `expiresAt` is epoch milliseconds.
 
-Because the token carries everything, the upload endpoint takes no other authentication.
-It is the credential. A consumed or unknown token returns 404, and `expiresAt` is epoch
-milliseconds.
+The token itself is an opaque random handle and carries nothing. The pending deploy —
+owner, name, mode, gating, and delete list — is a row in the database, so the token
+survives a restart and is visible to every worker and replica; nothing here needs sticky
+routing. For a password jot the row holds the already-hashed password, and the password
+itself is hashed at mint and never travels with the upload.
 
-Pending tokens are held in memory, not the database, so a server restart between the
-mint and the upload invalidates the token. Call `deploy_jot` again.
+Single use is enforced by the database, not by process memory: consuming deletes the row
+and only the caller whose `DELETE` actually removed it is served, so two concurrent
+uploads of one token cannot both succeed — on any worker, in any replica. Abandoned rows
+are swept once past their TTL.
+
+Because the deploy lives in a row rather than in the URL, the delete list a single
+`update_jot` can carry is not bounded by URL length.
 
 ## Upload failures
 
