@@ -53,12 +53,17 @@ const SettingsIcon = () => (
   </Icon>
 );
 
-const NAV = [
-  { to: "/", label: "Home", end: true, Glyph: HomeIcon },
-  { to: "/apps", label: "Apps", end: false, Glyph: AppsIcon },
-  { to: "/agents", label: "Agents", end: false, Glyph: AgentsIcon },
-  { to: "/files", label: "Files", end: false, Glyph: FilesIcon },
-  { to: "/activity", label: "Activity", end: false, Glyph: ActivityIcon },
+// Groups render with a separator between them. Files sits apart from the
+// rest: the others are about the agents and what they connect to, Files is
+// a transfer buffer with a 24h clock on it.
+const NAV_GROUPS = [
+  [
+    { to: "/", label: "Home", end: true, Glyph: HomeIcon },
+    { to: "/apps", label: "Apps", end: false, Glyph: AppsIcon },
+    { to: "/agents", label: "Agents", end: false, Glyph: AgentsIcon },
+    { to: "/activity", label: "Activity", end: false, Glyph: ActivityIcon },
+  ],
+  [{ to: "/files", label: "Files", end: false, Glyph: FilesIcon }],
 ];
 
 function itemClass({ isActive }: { isActive: boolean }) {
@@ -75,14 +80,17 @@ export function Sidebar() {
       </div>
 
       <ul className="wb-nav">
-        {NAV.map(({ to, label, end, Glyph }) => (
-          <li key={to}>
-            <NavLink to={to} end={end} className={itemClass}>
-              <Glyph />
-              {label}
-            </NavLink>
-          </li>
-        ))}
+        {NAV_GROUPS.map((group, i) => [
+          i > 0 ? <li key={`sep-${i}`} role="separator" className="wb-nav-sep" /> : null,
+          ...group.map(({ to, label, end, Glyph }) => (
+            <li key={to}>
+              <NavLink to={to} end={end} className={itemClass}>
+                <Glyph />
+                {label}
+              </NavLink>
+            </li>
+          )),
+        ])}
       </ul>
 
       <div className="wb-sidebar-foot">

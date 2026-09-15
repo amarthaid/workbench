@@ -613,6 +613,12 @@ body {
 
 .wb-nav-icon { flex: none; }
 
+.wb-nav-sep {
+  height: 1px;
+  margin: var(--s-4) var(--s-8);
+  background: var(--border);
+}
+
 .wb-sidebar-foot {
   margin-top: auto;
   display: grid;
