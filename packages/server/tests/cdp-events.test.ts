@@ -6,7 +6,7 @@ vi.mock("../src/config", () => ({
   config: {
     NODE_ENV: "test",
     ENCRYPTION_KEY: "0".repeat(64),
-    DATABASE_URL: "./data/tokens.db",
+    DATABASE_URL: process.env.DATABASE_URL, // pinned to a temp dir by vitest.config.ts
     BROWSER_SESSION_TTL_SECONDS: 300,
     BROWSER_PROFILE_TTL_DAYS: 30,
     WORKSPACE_DIR: "./data/workspace",

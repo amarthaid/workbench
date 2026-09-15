@@ -30,6 +30,10 @@ const configSchema = z.object({
   OAUTH_ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(3600),
   BROWSER_PROFILES_DIR: z.string().optional(),
   BROWSER_SESSION_TTL_SECONDS: z.coerce.number().int().positive().default(300),
+  // How long a chromium launch may take to bring DevTools up. A cold start in
+  // a container measured 5.3s; the old fixed 40×100ms budget failed the first
+  // call of every fresh container and passed the second.
+  BROWSER_LAUNCH_TIMEOUT_MS: z.coerce.number().int().positive().default(15_000),
   // Whole-profile deletion after this many days unused. Deleting a profile logs
   // that user out of every cookie-auth integration, so it is deliberately far
   // more conservative than the cache trim, which costs nothing. 0 = never.

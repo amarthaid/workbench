@@ -64,7 +64,7 @@ const tools: PluginTool[] = [
   },
   {
     name: "files_read",
-    description: `Read a workspace file. Use encoding 'utf8' for text and 'base64' for anything binary — a binary file read as utf8 comes back corrupted. Bytes pass through your context, so this is for files small enough to be worth that; for anything large use the REST endpoint or a presigned URL instead. Oversize reads return TOO_LARGE rather than truncating, because a CSV cut off mid-row still parses. ${RETENTION}`,
+    description: `Read a workspace file. Use encoding 'utf8' for text and 'base64' for anything binary — a binary file read as utf8 comes back corrupted. Bytes pass through your context, so this is for files small enough to be worth that — a few KB of text, a config, a short CSV. For anything large, or anything you only need to grep or hand to another service, do NOT read it here: call files_presign({ name, op: 'download' }) and fetch the URL from wherever the bytes are actually needed. Oversize reads return TOO_LARGE rather than truncating, because a CSV cut off mid-row still parses. ${RETENTION}`,
     integration: FILES_INTEGRATION_NAME,
     inputSchema: z.object({
       name: z.string(),
@@ -87,7 +87,7 @@ const tools: PluginTool[] = [
   },
   {
     name: "files_write",
-    description: `Write a file into your workspace, so it can be uploaded into a page with browser_upload_file or handed to another integration. Use encoding 'base64' for binary content. ${RETENTION}`,
+    description: `Write a file into your workspace, so it can be uploaded into a page with browser_upload_file or handed to another integration. Use encoding 'base64' for binary content. The content passes through your context, so this is for small files you are composing yourself. For large content, or bytes that already exist somewhere else, do NOT paste them here: call files_presign({ name, op: 'upload' }) and PUT the raw body to the URL from where the bytes are. ${RETENTION}`,
     integration: FILES_INTEGRATION_NAME,
     inputSchema: z.object({
       name: z.string(),

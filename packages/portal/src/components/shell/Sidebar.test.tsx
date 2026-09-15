@@ -28,6 +28,16 @@ describe("Sidebar", () => {
     }
   });
 
+  it("lists Files last, after Activity, set off by a separator", () => {
+    renderAt("/");
+    const nav = screen.getByRole("navigation", { name: "Main" });
+    const list = nav.querySelector("ul.wb-nav")!;
+    const items = Array.from(list.querySelectorAll("li"));
+    const labels = items.map((li) => li.textContent?.trim() ?? "");
+    expect(labels).toEqual(["Home", "Apps", "Agents", "Activity", "", "Files"]);
+    expect(items[4]).toHaveAttribute("role", "separator");
+  });
+
   it("marks only the current route as the current page", () => {
     renderAt("/apps");
     expect(screen.getByRole("link", { name: "Apps" })).toHaveAttribute("aria-current", "page");

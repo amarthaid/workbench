@@ -10,7 +10,7 @@ vi.mock("../src/config", () => ({
     SESSION_SECRET: "test-session-secret-32-chars-long!!",
     ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000",
     NODE_ENV: "test",
-    DATABASE_URL: "./data/tokens.db",
+    DATABASE_URL: process.env.DATABASE_URL, // pinned to a temp dir by vitest.config.ts
     PLUGINS_DIR: "./plugins",
     CONNECT_TTL_SECONDS: 600,
     AUDIT_LOG_DEST: "sqlite",

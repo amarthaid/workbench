@@ -324,12 +324,15 @@ token cannot be redirected out.
 
 ## browser (internal)
 
-Nine tools driving one warm, per-user Chromium session. Always connected — this is an
-`auth: none` integration. Every action tool ensures the session exists and marks it
-active, so an idle session is reaped but a working one is not.
+Fourteen tools driving one warm, per-user Chromium session. Always connected — this is
+an `auth: none` integration. Every action tool ensures the session exists and marks it
+active, so an idle session is reaped but a working one is not. Every tool except
+`browser_start` takes the `session_id` it returns; it is a per-user routing key, not a
+handle to a second browser (see [Browser](../integrations/browser.md)).
 
 | Tool | Purpose |
 |---|---|
+| `browser_start` | Mint the per-user `session_id` |
 | `browser_navigate` | Navigate the session. `http`/`https` only |
 | `browser_screenshot` | Downscaled JPEG of the viewport; returns `{ unchanged: true }` when pixels are identical to the last shot |
 | `browser_click` | Click at coordinates — left, right, or middle |
@@ -337,6 +340,10 @@ active, so an idle session is reaped but a working one is not.
 | `browser_key` | Press a key or chord |
 | `browser_scroll` | Scroll a direction, 600px by default |
 | `browser_read_text` | `document.body.innerText`, optionally truncated |
+| `browser_evaluate` | Run JavaScript in the page, get a JSON value back; `EVALUATION_FAILED` / `RESULT_TOO_LARGE` instead of a mangled result |
+| `browser_expect_download` | Arm a wait before the click that downloads |
+| `browser_await_download` | Wait for it; the file is in the workspace |
+| `browser_upload_file` | Put a workspace file into a file input |
 | `browser_close` | Close the session, keep the profile |
 | `browser_live_url` | Mint a link that hands the live browser to a human |
 

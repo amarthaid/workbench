@@ -57,3 +57,40 @@ describe("clearStaleSingletonLocks", () => {
     }
   });
 });
+
+describe("launch budget", () => {
+  it("defaults BROWSER_LAUNCH_TIMEOUT_MS to 15 seconds", async () => {
+    const { config } = await import("../src/config");
+    expect(config.BROWSER_LAUNCH_TIMEOUT_MS).toBe(15_000);
+  });
+
+  it("pollJson keeps polling until the deadline, not a fixed attempt count", async () => {
+    // A cold chromium in a container took 5.3s to bring DevTools up; the old
+    // budget was 40 attempts × 100ms ≈ 4s, so the first call of a fresh
+    // container failed with "Failed to reach .../json/version" while chromium
+    // was still starting, and the second call worked. Budget in time, not
+    // attempts, and let the operator raise it.
+    const { pollJson } = await import("../src/auth/profile-chromium");
+    let calls = 0;
+    const fetchImpl = async () => {
+      calls++;
+      if (calls < 8) throw new Error("ECONNREFUSED");
+      return { ok: true, json: async () => ({ ok: true }) } as Response;
+    };
+    const out = await pollJson("http://127.0.0.1:1/json/version", {
+      deadlineMs: 2_000,
+      intervalMs: 10,
+      fetchImpl,
+    });
+    expect(out).toEqual({ ok: true });
+    expect(calls).toBe(8);
+  });
+
+  it("pollJson gives up at the deadline with the last error", async () => {
+    const { pollJson } = await import("../src/auth/profile-chromium");
+    const fetchImpl = async () => { throw new Error("ECONNREFUSED"); };
+    await expect(
+      pollJson("http://127.0.0.1:1/json/version", { deadlineMs: 50, intervalMs: 10, fetchImpl })
+    ).rejects.toThrow(/Failed to reach .*ECONNREFUSED/);
+  });
+});

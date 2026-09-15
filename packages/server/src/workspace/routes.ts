@@ -119,10 +119,14 @@ export async function receiveWorkspaceFile(
 export async function registerWorkspaceRoutes(app: FastifyInstance): Promise<void> {
   await app.register(async (scope) => {
     // Uploads arrive as a raw body of arbitrary type. Fastify's exact-match
-    // parsers beat any regex one, so the built-ins have to be removed before a
-    // catch-all can win — same ordering trap as the REST tool endpoint
-    // (docs/findings/2026-09-11-rest-tool-execution-endpoint.md).
-    scope.removeContentTypeParser(["application/json", "text/plain"]);
+    // parsers beat any regex one, so every parser this scope inherits has to be
+    // removed before a catch-all can win — same ordering trap as the REST tool
+    // endpoint (docs/findings/2026-09-11-rest-tool-execution-endpoint.md).
+    // Not just the two built-ins: any route group registered earlier on the app
+    // (OAuth's application/x-www-form-urlencoded, jots' gzip types) is inherited
+    // too, and a parser that turns the body into an object leaves the route with
+    // nothing to stream — a 0-byte file and a 201.
+    scope.removeAllContentTypeParsers();
     scope.addContentTypeParser("*", (_req, payload, done) => done(null, payload));
 
     scope.get("/api/files", async (request, reply) => {

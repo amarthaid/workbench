@@ -415,3 +415,44 @@ export async function readText(s: WarmSession, maxChars = 20000): Promise<{ text
   const truncated = full.length > maxChars;
   return { text: truncated ? full.slice(0, maxChars) : full, truncated };
 }
+
+// Bound on the serialized value handed back from evaluate. Past it the
+// answer is an error, not a truncated value: a sliced JSON string is not
+// JSON, and a sliced outerHTML is exactly the kind of thing that parses
+// and misleads.
+export const EVALUATE_MAX_CHARS = 100_000;
+
+export interface EvaluateOpts { awaitPromise?: boolean; timeoutMs?: number }
+
+export type EvaluateResult =
+  | { value: unknown; type: string }
+  | { error: "EVALUATION_FAILED"; detail: string }
+  | { error: "RESULT_TOO_LARGE"; chars: number; max: number };
+
+// Run JavaScript in the page and return its value — the Playwright
+// `page.evaluate` shape. returnByValue means DOM nodes and functions come
+// back as {} rather than a handle; return a plain value from the expression.
+export async function evaluate(
+  s: WarmSession,
+  expression: string,
+  opts: EvaluateOpts = {}
+): Promise<EvaluateResult> {
+  const r = (await s.cdp.send("Runtime.evaluate", {
+    expression,
+    returnByValue: true,
+    awaitPromise: opts.awaitPromise ?? true,
+    userGesture: true,
+    ...(opts.timeoutMs ? { timeout: opts.timeoutMs } : {}),
+  })) as {
+    result?: { type?: string; value?: unknown; description?: string };
+    exceptionDetails?: { text?: string; exception?: { description?: string } };
+  };
+  if (r.exceptionDetails) {
+    const detail = r.exceptionDetails.exception?.description ?? r.exceptionDetails.text ?? "evaluation threw";
+    return { error: "EVALUATION_FAILED", detail };
+  }
+  const value = r.result?.value;
+  const chars = value === undefined ? 0 : JSON.stringify(value).length;
+  if (chars > EVALUATE_MAX_CHARS) return { error: "RESULT_TOO_LARGE", chars, max: EVALUATE_MAX_CHARS };
+  return { value, type: r.result?.type ?? "undefined" };
+}

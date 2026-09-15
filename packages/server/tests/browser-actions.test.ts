@@ -7,6 +7,8 @@ import {
   pressKey,
   scroll,
   readText,
+  evaluate,
+  EVALUATE_MAX_CHARS,
   type WarmSession,
 } from "../src/auth/browser-session";
 
@@ -124,5 +126,31 @@ describe("browser actions", () => {
     const send = vi.fn(async () => ({ result: { value: "abcdefghij" } }));
     const out = await readText({ cdp: { send } } as any, 4);
     expect(out).toEqual({ text: "abcd", truncated: true });
+  });
+
+  it("evaluate returns the expression's value by value, awaiting promises", async () => {
+    const send = vi.fn(async () => ({ result: { type: "number", value: 42 } }));
+    const out = await evaluate({ cdp: { send } } as any, "Promise.resolve(42)");
+    expect(send).toHaveBeenCalledWith(
+      "Runtime.evaluate",
+      expect.objectContaining({ expression: "Promise.resolve(42)", returnByValue: true, awaitPromise: true })
+    );
+    expect(out).toEqual({ value: 42, type: "number" });
+  });
+
+  it("evaluate reports a thrown exception instead of a value", async () => {
+    const send = vi.fn(async () => ({
+      result: { type: "object", subtype: "error" },
+      exceptionDetails: { text: "Uncaught", exception: { description: "TypeError: x is not a function\n  at <anonymous>" } },
+    }));
+    const out = await evaluate({ cdp: { send } } as any, "x()");
+    expect(out).toEqual({ error: "EVALUATION_FAILED", detail: "TypeError: x is not a function\n  at <anonymous>" });
+  });
+
+  it("evaluate refuses a result too large to hand back rather than truncating it", async () => {
+    const send = vi.fn(async () => ({ result: { type: "string", value: "x".repeat(EVALUATE_MAX_CHARS + 1) } }));
+    const out = await evaluate({ cdp: { send } } as any, "document.documentElement.outerHTML");
+    expect(out).toMatchObject({ error: "RESULT_TOO_LARGE" });
+    expect(out).not.toHaveProperty("value");
   });
 });
