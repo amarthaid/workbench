@@ -9,6 +9,7 @@
     "test:coverage": "NODE_ENV=test vitest run --coverage",
     "typecheck:tests": "tsc -p tsconfig.test.json",
     "gap": "tsx src/gap/cli.ts",
+    "reap": "tsx src/reap/cli.ts",
     "migrate:sqlite-to-postgres": "tsx src/migrate/sqlite-to-postgres.ts"
   },
   "dependencies": {

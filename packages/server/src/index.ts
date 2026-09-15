@@ -13,7 +13,6 @@ import { startUploadReaper } from "./jots/pending";
 import { loadPlugins } from "./plugins/loader";
 import { resolveMcpUser } from "./auth/oauth-server/resolve";
 import { startBrowserReaper } from "./auth/browser-session";
-import { startProfileDiskReaper } from "./auth/profile-disk";
 import { registerCdpBridgeRoutes, startChannelReaper } from "./auth/cdp-bridge";
 import cluster from "node:cluster";
 import { availableParallelism } from "node:os";
@@ -50,7 +49,6 @@ async function main() {
   await registerOAuthRoutes(app);
   await registerOAuthRedirectRoute(app);
   startBrowserReaper();
-  startProfileDiskReaper();
   startChannelReaper();
 
   // HTTP metrics — track every request except /metrics itself.

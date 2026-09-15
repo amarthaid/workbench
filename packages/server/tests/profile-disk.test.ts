@@ -70,18 +70,35 @@ describe("profileLastUsed", () => {
 
 describe("reapProfileDisk", () => {
   it("deletes profiles unused past the TTL and trims the rest", async () => {
-    const fresh = makeProfile(base, "fresh");
+    const idle = makeProfile(base, "idle");
     const stale = makeProfile(base, "stale");
     const old = new Date(Date.now() - 400 * 86_400_000);
     utimesSync(join(stale, "Default", "Cookies"), old, old);
+    // Idle but well inside the TTL: eligible for a trim, not for deletion.
+    // It has to be older than LIVE_WINDOW_MS, since a profile whose use-marker
+    // moved in the last hour is assumed to have a live chromium holding it.
+    const yesterday = new Date(Date.now() - 86_400_000);
+    utimesSync(join(idle, "Default", "Cookies"), yesterday, yesterday);
 
     const r = await reapProfileDisk({ baseDir: base });
 
     expect(existsSync(stale)).toBe(false);
     expect(r.deleted).toEqual([stale]);
-    expect(existsSync(fresh)).toBe(true);
-    expect(existsSync(join(fresh, "Default", "Cache"))).toBe(false);
-    expect(existsSync(join(fresh, "Default", "Cookies"))).toBe(true);
+    expect(existsSync(idle)).toBe(true);
+    expect(existsSync(join(idle, "Default", "Cache"))).toBe(false);
+    expect(existsSync(join(idle, "Default", "Cookies"))).toBe(true);
+  });
+
+  it("skips a profile whose use-marker moved inside the live window", async () => {
+    // The out-of-process substitute for activeProfiles: a running chromium
+    // rewrites Cookies/Preferences continuously, so a recent marker means a
+    // live session whose caches must not be pulled out from under it.
+    const busy = makeProfile(base, "busy");
+
+    const r = await reapProfileDisk({ baseDir: base });
+
+    expect(r.skippedActive).toBe(1);
+    expect(existsSync(join(busy, "Default", "Cache"))).toBe(true);
   });
 
   it("never touches a profile with a live session", async () => {
