@@ -160,13 +160,36 @@ Mirroring `POST /rest/:integration` (finding
 - `POST /api/files` — multipart in
 - `DELETE /api/files/:name`
 
-Plus a short-TTL signed link per file for the human-in-the-loop case (someone
-wants the CSV themselves without an API client): a `pending_auth` row under a
-`__file_link__` sentinel, single use arbitrated by the `DELETE`'s
-`changes === 1`, exactly as the jot upload token does. Zero DDL.
-
 Streaming, not buffering — a 100 MB file must not be read into memory to be
 served.
+
+**No signed links.** Every read is authorized by the same credential as the
+rest of the API. An earlier draft had a short-TTL `pending_auth` link per file,
+for a human who wants the CSV without an API client; it is dropped. It would
+have been the only bearer-free capability URL in the system pointing at user
+data — anyone holding the link holds the file — and the files in question are
+things like account statements. That is the shape finding
+`2026-09-02-connect-link-account-mismatch.md` moved away from one release
+earlier, where a link stopped authorizing on its own precisely because whoever
+ends up holding it could spend it.
+
+### Downloading from the portal
+
+The portal is a **bearer client**, not a cookie session: `authHeaders()` builds
+`Authorization: Bearer <token>` from its own token store
+(`packages/portal/src/api.ts:21`). A top-level navigation cannot carry that
+header, so `<a href="/api/files/statement.csv">` does not work — the same
+constraint as finding `2026-09-04-oauth-authorize-cross-origin-cookie.md`,
+where only a real top-level POST could reach a cookie a fetch could not see.
+
+So a portal download is client-side: `fetch` with `authHeaders()` →
+`res.blob()` → `URL.createObjectURL` → a programmatic `<a download>` click.
+
+The ceiling is browser memory: the whole file is buffered before it is saved.
+At the 100 MB per-file cap that is tolerable, and for the CSV-sized files this
+is actually for it is irrelevant. If that ever hurts, the answer is a
+short-TTL signed URL for native streaming — added then, as a considered
+trade against the reasoning above, rather than now because it is convenient.
 
 ### Path resolution
 
@@ -334,7 +357,8 @@ browser-local scratch dir.
   trimmed; one older than that is
 - both sweeps against temp dirs with no env set — proves the CLI runs without
   `ENCRYPTION_KEY`, and that nothing in its import graph reaches Playwright
-- REST: user A cannot `GET /api/files/<B's file>`; signed link is single-use
+- REST: user A cannot `GET /api/files/<B's file>`; an unauthenticated request
+  is refused; no route serves a file without a credential
 
 ## Notes
 
