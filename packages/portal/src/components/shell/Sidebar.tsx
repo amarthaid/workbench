@@ -39,6 +39,11 @@ const AgentsIcon = () => (
   </Icon>
 );
 const ActivityIcon = () => <Icon><path d="M1 8h3l2-5.5L10 13l2-5h3" /></Icon>;
+const FilesIcon = () => (
+  <Icon>
+    <path d="M2.5 4.5a1 1 0 0 1 1-1h3l1.5 2h4.5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z" />
+  </Icon>
+);
 // A toothed cog, not a hub-and-rays mark: the rayed version read as the sun
 // glyph the theme toggle already uses, two rows below it in the same column.
 const SettingsIcon = () => (
@@ -52,6 +57,7 @@ const NAV = [
   { to: "/", label: "Home", end: true, Glyph: HomeIcon },
   { to: "/apps", label: "Apps", end: false, Glyph: AppsIcon },
   { to: "/agents", label: "Agents", end: false, Glyph: AgentsIcon },
+  { to: "/files", label: "Files", end: false, Glyph: FilesIcon },
   { to: "/activity", label: "Activity", end: false, Glyph: ActivityIcon },
 ];
 
