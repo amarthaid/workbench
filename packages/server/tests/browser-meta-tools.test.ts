@@ -25,6 +25,23 @@ vi.mock("../src/auth/browser-session", () => ({
   scroll: scrollMock,
   readText: readMock,
   closeBrowserSession: closeMock,
+  browserClient: vi.fn(),
+  ensureDownloadRouting: vi.fn(),
+}));
+
+vi.mock("../src/auth/browser-downloads", () => ({
+  expectDownload: vi.fn(),
+  awaitDownload: vi.fn(),
+}));
+
+vi.mock("../src/auth/browser-upload", () => ({
+  uploadWorkspaceFile: vi.fn(),
+  BrowserUploadError: class BrowserUploadError extends Error {},
+}));
+
+vi.mock("../src/auth/cdp-bridge", () => ({
+  mintSessionKey: vi.fn().mockReturnValue("test-session-id"),
+  SESSION_HEADER: "x-browser-session",
 }));
 
 import { browserPlugin } from "../src/plugins/internal/browser";
@@ -55,8 +72,8 @@ describe("browser plugin tools", () => {
     expect(() => schema.parse({ url: "ftp://example.com" })).toThrow();
     expect(() => schema.parse({ url: "data:text/html,<script>" })).toThrow();
     expect(() => schema.parse({ url: "javascript:alert(1)" })).toThrow();
-    expect(() => schema.parse({ url: "http://example.com" })).not.toThrow();
-    expect(() => schema.parse({ url: "https://example.com" })).not.toThrow();
+    expect(() => schema.parse({ session_id: "s", url: "http://example.com" })).not.toThrow();
+    expect(() => schema.parse({ session_id: "s", url: "https://example.com" })).not.toThrow();
   });
 
   it("browser_screenshot forwards opts and returns the helper result", async () => {
