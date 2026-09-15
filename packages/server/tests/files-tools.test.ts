@@ -54,6 +54,16 @@ describe("files integration", () => {
     }
   });
 
+  it("points files_read and files_write at files_presign for anything large", () => {
+    // The model decides between the tools from their descriptions alone. A
+    // read that says "use the REST endpoint" names nothing it can call; the
+    // thing it can call is files_presign, so the description has to say so.
+    expect(tool("files_read").description).toMatch(/files_presign/);
+    expect(tool("files_read").description).toMatch(/download/);
+    expect(tool("files_write").description).toMatch(/files_presign/);
+    expect(tool("files_write").description).toMatch(/upload/);
+  });
+
   it("writes then reads text", async () => {
     await run("files_write", "u1", { name: "a.csv", content: "x,y" });
     const read = await run("files_read", "u1", { name: "a.csv" });
