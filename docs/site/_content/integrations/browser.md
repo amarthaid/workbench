@@ -35,6 +35,9 @@ Because the profile persists, sites the user logged into stay logged in across s
 | `browser_type` | Type text into the focused element |
 | `browser_key` | Press a key or chord — `Enter`, `Tab`, `ctrl+a`, `ArrowDown` |
 | `browser_scroll` | Scroll up, down, left, or right; default 600 pixels |
+| `browser_expect_download` | Arm a wait for a download, **before** the click that triggers it |
+| `browser_await_download` | Wait for that download and get the file now in your [workspace](files.md) |
+| `browser_upload_file` | Put a workspace file into an `<input type="file">` |
 | `browser_close` | Close the session, keep the profile |
 | `browser_live_url` | Mint a short-lived URL for a human to watch and take over |
 
@@ -62,5 +65,21 @@ The live-view connection is authorized by an `Authorization` header on every req
 > The URL is validated as a URL and then explicitly required to start with `http://` or `https://`, which rules out `file://` and other schemes. There is no private-IP or metadata-endpoint block, so a session can reach anything on the network the server sits on. Treat a URL an agent picked up from untrusted page content as untrusted, and run the server where that reachability is acceptable.
 
 Clicks are coordinates, not selectors. Take a screenshot to find a target, then click it — and click a field before `browser_type`, which types into whatever currently has focus.
+
+## Moving files in and out
+
+A download is a side effect of a click, not something you can ask for by URL — the agent does not know the URL, that is the whole reason it is clicking. So the sequence is arm, act, await:
+
+```
+browser_expect_download()   ->  { handle }
+browser_click(x, y)             the download button
+browser_await_download()    ->  { name, bytes, expiresAt }
+```
+
+Arming first is deliberate. If `browser_click` waited implicitly, every click would pay a timeout for a download that usually is not coming.
+
+Downloads land in the [files workspace](files.md) **whether or not a wait was armed** — routing is set when the session starts, so a download nobody waited for still shows up in `files_list` instead of vanishing into a temp directory. Captured files are deleted 24 hours after they land, so hand anything worth keeping to a durable destination in the same run.
+
+Going the other way, `browser_upload_file({ selector, name })` puts a workspace file into a file input. `name` is a workspace-relative filename and never a path: it is resolved server-side against your own directory, symlinks included. Chromium will upload whatever path it is given to whatever form is on the page, so that resolution is load-bearing rather than decorative.
 
 `browser_close` is worth calling when the agent is done. It ends the Chromium process early rather than waiting for the idle reaper, and the profile is untouched.

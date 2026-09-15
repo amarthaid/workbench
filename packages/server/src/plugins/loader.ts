@@ -5,6 +5,7 @@ import { config } from "../config";
 import { registry, PluginTool } from "./registry";
 import { browserPlugin } from "./internal/browser";
 import { jotsPlugin } from "./internal/jots";
+import { filesPlugin } from "./internal/files";
 
 const builtinPlugins = [
   "google-gmail",
@@ -144,13 +145,18 @@ export async function loadPlugins(): Promise<void> {
 
 }
 
-const internalNames = [browserPlugin.integration.name, jotsPlugin.integration.name];
+const internalNames = [
+  browserPlugin.integration.name,
+  jotsPlugin.integration.name,
+  filesPlugin.integration.name,
+];
 
 // Internal capabilities (auth type "none") whose handlers reach into server
-// modules (browser-session, jots store) — deliberately NOT part of the plugin
-// ToolContext, so third-party plugins can never drive the user's browser or
-// touch the jots filesystem.
+// modules (browser-session, jots store, the file workspace) — deliberately NOT
+// part of the plugin ToolContext, so third-party plugins can never drive the
+// user's browser or touch those filesystems.
 export function registerInternalPlugins(): void {
   registry.register(browserPlugin);
   registry.register(jotsPlugin);
+  registry.register(filesPlugin);
 }

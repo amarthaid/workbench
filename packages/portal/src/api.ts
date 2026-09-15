@@ -480,3 +480,87 @@ export async function fetchStats(): Promise<Stats> {
   if (!res.ok) throw new Error("Failed to fetch stats");
   return res.json();
 }
+
+// ─── Agent file workspace ────────────────────────────────────────────────
+// The per-user scratch area: browser downloads land here, uploads are read
+// from here. Retention is age only — a file is deleted 24h after it is
+// written, whether or not anything is using it, and reading does not extend
+// that. The UI surfaces the countdown because that is the part people are
+// surprised by.
+
+export interface WorkspaceFile {
+  name: string;
+  bytes: number;
+  mtime: string;
+  expiresAt: string;
+}
+
+export interface WorkspaceListing {
+  files: WorkspaceFile[];
+  usedBytes: number;
+  quotaBytes: number;
+  maxFileBytes: number;
+  ttlHours: number;
+}
+
+export async function fetchWorkspaceFiles(): Promise<WorkspaceListing> {
+  const res = await fetch(`${API_URL}/api/files`, { headers: authHeaders() });
+  if (!res.ok) throw new Error("Failed to load files");
+  return res.json();
+}
+
+/**
+ * Download a workspace file in the browser.
+ *
+ * Not an <a href>: the portal authenticates with a bearer from its own token
+ * store, and a top-level navigation cannot carry an Authorization header —
+ * the same constraint as docs/findings/2026-09-04-oauth-authorize-cross-origin-cookie.md.
+ * So the bytes come back through fetch and are handed to the browser as a blob.
+ *
+ * The portal deliberately does NOT mint itself a presigned URL here. It already
+ * holds a credential, and a blob keeps the bytes out of the URL bar and out of
+ * every access log between here and the server.
+ *
+ * The cost is that the whole file is buffered in memory before it is saved,
+ * which is fine at the 100MB per-file cap and irrelevant at CSV sizes.
+ */
+export async function downloadWorkspaceFile(name: string): Promise<void> {
+  const res = await fetch(`${API_URL}/api/files/${encodeURIComponent(name)}`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error("Download failed");
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+export async function uploadWorkspaceFile(file: File): Promise<WorkspaceFile> {
+  const res = await fetch(`${API_URL}/api/files/${encodeURIComponent(file.name)}`, {
+    method: "POST",
+    // Raw body, not multipart: the server streams the request straight to disk.
+    headers: { ...authHeaders(), "Content-Type": "application/octet-stream" },
+    body: file,
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error ?? "Upload failed");
+  }
+  return res.json();
+}
+
+export async function deleteWorkspaceFile(name: string): Promise<void> {
+  const res = await fetch(`${API_URL}/api/files/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error("Delete failed");
+}

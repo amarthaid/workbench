@@ -40,6 +40,18 @@ const configSchema = z.object({
   JOTS_MAX_BYTES: z.coerce.number().int().positive().default(5_242_880),
   JOTS_MAX_FILES: z.coerce.number().int().positive().default(1000),
   JOTS_UPLOAD_TTL_SECONDS: z.coerce.number().int().positive().default(300),
+  // The agent file workspace. Its own mount, deliberately: RWX on a shared PVC
+  // solves visibility between pods, not capacity, and a growing per-user tree
+  // sharing a volume with tokens.db is
+  // docs/findings/2026-08-06-browser-profile-disk-growth.md all over again.
+  WORKSPACE_DIR: z.string().default("./data/workspace"),
+  // Retention is age only: a file older than this is deleted whether or not
+  // anything is using it, and a read does not extend its life. That is what
+  // lets the reaper run out of process with no liveness state.
+  WORKSPACE_TTL_HOURS: z.coerce.number().int().positive().default(24),
+  WORKSPACE_MAX_FILE_BYTES: z.coerce.number().int().positive().default(104_857_600),
+  WORKSPACE_MAX_BYTES_PER_USER: z.coerce.number().int().positive().default(268_435_456),
+  WORKSPACE_PRESIGN_TTL_SECONDS: z.coerce.number().int().positive().default(300),
   // Maximum connections per worker pool. With CLUSTER_ENABLED the total
   // connection count is PG_POOL_MAX × worker count — keep this low enough
   // that (workers × PG_POOL_MAX) stays well under Postgres max_connections.

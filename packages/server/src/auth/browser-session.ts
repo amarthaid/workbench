@@ -5,16 +5,18 @@ import { config } from "../config";
 import { activeProfiles, spawnProfileChromium, cdpCall, userProfileDir } from "./profile-chromium";
 import { trimProfileCaches } from "./profile-disk";
 import { startProxyAuth, filterCookies } from "./cookie";
+import { configureDownloads, cancelDownloads } from "./browser-downloads";
 import type { CookieData, RawCookie } from "./cookie";
 
 // Persistent CDP client: one long-lived socket to a page target, many
 // request/response commands multiplexed by auto-incrementing id.
-class CdpClient {
+export class CdpClient {
   private ws: WebSocket;
   private id = 0;
   private pending = new Map<number, { resolve: (v: Record<string, unknown>) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private gone = false;
   private onGone?: () => void;
+  private listeners = new Map<string, Set<(p: Record<string, unknown>) => void>>();
   readonly ready: Promise<void>;
 
   constructor(wsUrl: string, onGone?: () => void) {
@@ -30,9 +32,28 @@ class CdpClient {
       this.ws.once("error", reject);
     });
     this.ws.on("message", (raw: WebSocket.RawData) => {
-      let msg: { id?: number; result?: Record<string, unknown>; error?: { message: string } };
+      let msg: {
+        id?: number;
+        result?: Record<string, unknown>;
+        error?: { message: string };
+        method?: string;
+        params?: Record<string, unknown>;
+      };
       try { msg = JSON.parse(raw.toString()); } catch { return; }
-      if (typeof msg.id !== "number") return;
+      if (typeof msg.id !== "number") {
+        // An event frame. Every CDP event used to be dropped on this line —
+        // Browser.downloadProgress, Network.responseReceived, all of it — which
+        // is why nothing could observe the browser, only command it.
+        const set = msg.method ? this.listeners.get(msg.method) : undefined;
+        if (set) {
+          for (const fn of [...set]) {
+            // One misbehaving listener must not take the socket down with it.
+            try { fn(msg.params ?? {}); }
+            catch (e) { console.warn(`[cdp] listener for ${msg.method} threw:`, e); }
+          }
+        }
+        return;
+      }
       const p = this.pending.get(msg.id);
       if (!p) return;
       this.pending.delete(msg.id);
@@ -54,10 +75,31 @@ class CdpClient {
     this.pending.clear();
   }
 
+  /**
+   * Subscribe to a CDP event. Returns an unsubscribe, which callers must use —
+   * a long-lived warm session would otherwise accumulate one handler per
+   * download.
+   */
+  on(method: string, fn: (p: Record<string, unknown>) => void): () => void {
+    let set = this.listeners.get(method);
+    if (!set) { set = new Set(); this.listeners.set(method, set); }
+    set.add(fn);
+    return () => {
+      const current = this.listeners.get(method);
+      if (!current) return;
+      current.delete(fn);
+      if (current.size === 0) this.listeners.delete(method);
+    };
+  }
+
   private handleGone(): void {
     if (this.gone) return;
     this.gone = true;
     this.drainPending(new Error("cdp socket closed"));
+    // Listeners go too. A waiter subscribed to Browser.downloadProgress has no
+    // command in flight, so drainPending cannot reach it and the 10s command
+    // timeout does not apply — without this it would hang until its own.
+    this.listeners.clear();
     try { this.ws.close(); } catch { /* noop */ }
     this.onGone?.();
   }
@@ -92,6 +134,19 @@ export interface WarmSession {
   lastShotHash?: string;
   cdp: CdpClient;
   authWs?: WebSocket;
+  /**
+   * Second client, on the BROWSER target rather than the page target.
+   * Browser.setDownloadBehavior and the Browser.download* events live there,
+   * and the page-level equivalents are deprecated. Lazy: a session that never
+   * downloads should not pay for a second socket.
+   */
+  browserCdp?: CdpClient;
+  /**
+   * Memoized download-routing setup. Started in the background at session
+   * creation so opening a browser never waits on a second socket, and awaited
+   * by anything that actually needs a download to land in the right place.
+   */
+  downloadRouting?: Promise<void>;
 }
 
 const warmSessions = new Map<string, WarmSession>();
@@ -125,10 +180,17 @@ export async function ensureSession(userId: string): Promise<WarmSession> {
       authWs,
     };
     warmSessions.set(userId, session);
+    // Kick off download routing, but do not block on it: opening a browser
+    // must not wait on a second socket, and must not hang if that socket never
+    // comes up. Anything that needs a download to land calls
+    // ensureDownloadRouting and awaits the same promise.
+    void ensureDownloadRouting(session).catch(() => undefined);
     spawned.proc.on("exit", () => {
       activeProfiles.delete(userId);
       warmSessions.delete(userId);
+      cancelDownloads(userId);
       try { session.cdp.close(); } catch { /* noop */ }
+      try { session.browserCdp?.close(); } catch { /* noop */ }
       try { session.authWs?.close(); } catch { /* noop */ }
       // The profile outlives the process on purpose — that's what keeps the user
       // logged in. Its caches don't: reclaim them here so disk cost tracks the
@@ -143,6 +205,36 @@ export async function ensureSession(userId: string): Promise<WarmSession> {
     activeProfiles.delete(userId);
     throw e;
   }
+}
+
+/**
+ * Point this session's downloads at its owner's workspace, once.
+ *
+ * Memoized on the session: every caller awaits the same promise, so arming a
+ * download is cheap after the first and correct on the first.
+ */
+export function ensureDownloadRouting(s: WarmSession): Promise<void> {
+  if (!s.downloadRouting) {
+    s.downloadRouting = (async () => {
+      const client = await browserClient(s);
+      await configureDownloads(s.userId, client);
+    })().catch((e) => {
+      // Let a later attempt retry rather than caching the failure forever.
+      s.downloadRouting = undefined;
+      console.warn(`[browser] download routing unavailable for ${s.userId}:`, e);
+      throw e;
+    });
+  }
+  return s.downloadRouting;
+}
+
+/** The browser-target client, created on first use and cached on the session. */
+export async function browserClient(s: WarmSession): Promise<CdpClient> {
+  if (s.browserCdp) return s.browserCdp;
+  const client = new CdpClient(s.cdpBrowserWsUrl);
+  await client.ready;
+  s.browserCdp = client;
+  return client;
 }
 
 export function touch(userId: string): void {
@@ -179,7 +271,9 @@ export async function closeBrowserSession(userId: string): Promise<void> {
   if (!s) return;
   warmSessions.delete(userId);
   activeProfiles.delete(userId);
+  cancelDownloads(userId);
   try { s.cdp.close(); } catch { /* noop */ }
+  try { s.browserCdp?.close(); } catch { /* noop */ }
   try { s.authWs?.close(); } catch { /* noop */ }
   try { s.proc.kill("SIGKILL"); } catch { /* noop */ }
 }
