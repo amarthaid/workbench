@@ -19,7 +19,11 @@ import {
   scroll as browserScroll,
   readText as browserReadText,
   closeBrowserSession,
+  browserClient,
+  ensureDownloadRouting,
 } from "../../auth/browser-session";
+import { expectDownload, awaitDownload } from "../../auth/browser-downloads";
+import { uploadWorkspaceFile, BrowserUploadError } from "../../auth/browser-upload";
 
 export const BROWSER_INTEGRATION_NAME = "browser";
 
@@ -119,6 +123,59 @@ const tools: PluginTool[] = [
       const s = await ensureSession(ctx.userId);
       touch(ctx.userId);
       return browserReadText(s, args.maxChars);
+    },
+  },
+  {
+    name: "browser_expect_download",
+    description:
+      "Arm a wait for a file download BEFORE the click that triggers it, then call browser_await_download after. A download is a side effect of a click, not something you can request by URL, so the order matters: arm, click, await. Returns a handle. Downloads always land in your files workspace whether or not you armed a wait, so if you forget, check files_list. Captured files are deleted 24 hours after they land — move anything you need to keep to a durable destination in the same run.",
+    integration: BROWSER_INTEGRATION_NAME,
+    inputSchema: z.object({}),
+    handler: async (ctx: any) => {
+      const s = await ensureSession(ctx.userId);
+      touch(ctx.userId);
+      // Arming is the point at which routing has to be real, so wait for it
+      // here rather than at session creation.
+      await ensureDownloadRouting(s);
+      const client = await browserClient(s);
+      return expectDownload(ctx.userId, client, () => touch(ctx.userId));
+    },
+  },
+  {
+    name: "browser_await_download",
+    description:
+      "Wait for the download armed by browser_expect_download to finish, and return { name, bytes, expiresAt } for the file now in your workspace. Read it with files_read, hand it on with files_presign, or upload it into another page with browser_upload_file.",
+    integration: BROWSER_INTEGRATION_NAME,
+    inputSchema: z.object({
+      handle: z.string(),
+      timeoutMs: z.number().int().positive().max(600_000).default(120_000),
+    }),
+    handler: async (_ctx: any, args: any) => {
+      try {
+        return await awaitDownload(args.handle, args.timeoutMs);
+      } catch (e) {
+        return { error: (e as Error).message };
+      }
+    },
+  },
+  {
+    name: "browser_upload_file",
+    description:
+      "Put a file from your workspace into a file input on the current page. `name` is a workspace-relative filename (see files_list) — not a path; absolute paths and anything outside your workspace are refused. `selector` is a CSS selector for the <input type=\"file\">. Write the file first with files_write, or capture it with browser_expect_download.",
+    integration: BROWSER_INTEGRATION_NAME,
+    inputSchema: z.object({ selector: z.string(), name: z.string() }),
+    handler: async (ctx: any, args: any) => {
+      const s = await ensureSession(ctx.userId);
+      touch(ctx.userId);
+      try {
+        const done = await uploadWorkspaceFile(s.cdp, ctx.userId, args.selector, args.name);
+        return { ok: true, name: done.name };
+      } catch (e) {
+        if (e instanceof BrowserUploadError) {
+          return e.message !== e.code ? { error: e.code, detail: e.message } : { error: e.code };
+        }
+        throw e;
+      }
     },
   },
   {

@@ -5,6 +5,7 @@ import { config } from "../config";
 import { activeProfiles, spawnProfileChromium, cdpCall, userProfileDir } from "./profile-chromium";
 import { trimProfileCaches } from "./profile-disk";
 import { startProxyAuth, filterCookies } from "./cookie";
+import { configureDownloads, cancelDownloads } from "./browser-downloads";
 import type { CookieData, RawCookie } from "./cookie";
 
 // Persistent CDP client: one long-lived socket to a page target, many
@@ -133,6 +134,19 @@ export interface WarmSession {
   lastShotHash?: string;
   cdp: CdpClient;
   authWs?: WebSocket;
+  /**
+   * Second client, on the BROWSER target rather than the page target.
+   * Browser.setDownloadBehavior and the Browser.download* events live there,
+   * and the page-level equivalents are deprecated. Lazy: a session that never
+   * downloads should not pay for a second socket.
+   */
+  browserCdp?: CdpClient;
+  /**
+   * Memoized download-routing setup. Started in the background at session
+   * creation so opening a browser never waits on a second socket, and awaited
+   * by anything that actually needs a download to land in the right place.
+   */
+  downloadRouting?: Promise<void>;
 }
 
 const warmSessions = new Map<string, WarmSession>();
@@ -166,10 +180,17 @@ export async function ensureSession(userId: string): Promise<WarmSession> {
       authWs,
     };
     warmSessions.set(userId, session);
+    // Kick off download routing, but do not block on it: opening a browser
+    // must not wait on a second socket, and must not hang if that socket never
+    // comes up. Anything that needs a download to land calls
+    // ensureDownloadRouting and awaits the same promise.
+    void ensureDownloadRouting(session).catch(() => undefined);
     spawned.proc.on("exit", () => {
       activeProfiles.delete(userId);
       warmSessions.delete(userId);
+      cancelDownloads(userId);
       try { session.cdp.close(); } catch { /* noop */ }
+      try { session.browserCdp?.close(); } catch { /* noop */ }
       try { session.authWs?.close(); } catch { /* noop */ }
       // The profile outlives the process on purpose — that's what keeps the user
       // logged in. Its caches don't: reclaim them here so disk cost tracks the
@@ -184,6 +205,36 @@ export async function ensureSession(userId: string): Promise<WarmSession> {
     activeProfiles.delete(userId);
     throw e;
   }
+}
+
+/**
+ * Point this session's downloads at its owner's workspace, once.
+ *
+ * Memoized on the session: every caller awaits the same promise, so arming a
+ * download is cheap after the first and correct on the first.
+ */
+export function ensureDownloadRouting(s: WarmSession): Promise<void> {
+  if (!s.downloadRouting) {
+    s.downloadRouting = (async () => {
+      const client = await browserClient(s);
+      await configureDownloads(s.userId, client);
+    })().catch((e) => {
+      // Let a later attempt retry rather than caching the failure forever.
+      s.downloadRouting = undefined;
+      console.warn(`[browser] download routing unavailable for ${s.userId}:`, e);
+      throw e;
+    });
+  }
+  return s.downloadRouting;
+}
+
+/** The browser-target client, created on first use and cached on the session. */
+export async function browserClient(s: WarmSession): Promise<CdpClient> {
+  if (s.browserCdp) return s.browserCdp;
+  const client = new CdpClient(s.cdpBrowserWsUrl);
+  await client.ready;
+  s.browserCdp = client;
+  return client;
 }
 
 export function touch(userId: string): void {
@@ -220,7 +271,9 @@ export async function closeBrowserSession(userId: string): Promise<void> {
   if (!s) return;
   warmSessions.delete(userId);
   activeProfiles.delete(userId);
+  cancelDownloads(userId);
   try { s.cdp.close(); } catch { /* noop */ }
+  try { s.browserCdp?.close(); } catch { /* noop */ }
   try { s.authWs?.close(); } catch { /* noop */ }
   try { s.proc.kill("SIGKILL"); } catch { /* noop */ }
 }
