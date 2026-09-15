@@ -56,6 +56,8 @@ In:
 - MCP tools to list/read/write/delete within it
 - REST endpoints to stream files in and out without the model in the path
 - one exported path resolver, shared by every caller that needs the directory
+- short-TTL presigned URLs, both directions, for callers that cannot hold a
+  bearer
 - quota + TTL semantics
 - an **out-of-process** reaper, shipped as a CLI subcommand, sweeping both
   the workspace and the browser profiles, replacing the in-server interval
@@ -163,33 +165,75 @@ Mirroring `POST /rest/:integration` (finding
 Streaming, not buffering — a 100 MB file must not be read into memory to be
 served.
 
-**No signed links.** Every read is authorized by the same credential as the
-rest of the API. An earlier draft had a short-TTL `pending_auth` link per file,
-for a human who wants the CSV without an API client; it is dropped. It would
-have been the only bearer-free capability URL in the system pointing at user
-data — anyone holding the link holds the file — and the files in question are
-things like account statements. That is the shape finding
-`2026-09-02-connect-link-account-mismatch.md` moved away from one release
-earlier, where a link stopped authorizing on its own precisely because whoever
-ends up holding it could spend it.
+### Presigned URLs
 
-### Downloading from the portal
+A bearer covers the agent and the portal. It does not cover the case a
+presigned URL exists for: handing a *fetchable URL* to something that must not
+hold a workbench credential — a service that ingests by URL, an upload target,
+a transfer that should not pass through the agent at all. Slack's own
+`files.getUploadURLExternal` is the same pattern from the other side.
 
-The portal is a **bearer client**, not a cookie session: `authHeaders()` builds
-`Authorization: Bearer <token>` from its own token store
-(`packages/portal/src/api.ts:21`). A top-level navigation cannot carry that
-header, so `<a href="/api/files/statement.csv">` does not work — the same
-constraint as finding `2026-09-04-oauth-authorize-cross-origin-cookie.md`,
-where only a real top-level POST could reach a cookie a fetch could not see.
+Both directions, minted by an authenticated caller:
 
-So a portal download is client-side: `fetch` with `authHeaders()` →
-`res.blob()` → `URL.createObjectURL` → a programmatic `<a download>` click.
+- `files_presign({ name, op: "download" | "upload", ttlSeconds })` (MCP), and
+  `POST /api/files/presign` (REST)
+- `GET /api/files/dl/:token` — redeem for bytes
+- `PUT /api/files/ul/:token` — redeem to write bytes
 
-The ceiling is browser memory: the whole file is buffered before it is saved.
-At the 100 MB per-file cap that is tolerable, and for the CSV-sized files this
-is actually for it is irrelevant. If that ever hurts, the answer is a
-short-TTL signed URL for native streaming — added then, as a considered
-trade against the reasoning above, rather than now because it is convenient.
+**Storage: a `pending_auth` row, not a self-contained token.** Sentinels
+`__file_dl__` and `__file_ul__`, zero DDL — the table is the generic short-TTL
+handshake store and already carries `__oauth_authorize__` and
+`__jot_upload__` (finding `2026-09-13-stateless-jot-upload-token.md`). Stateful
+buys three things a JWS cannot: single use that is *real* (the `DELETE`
+arbitrates on `changes === 1`, atomic on both backends with no transaction),
+revocation, and no owner id or hash leaking into a URL.
+
+**Token shape: 32 hex characters, opaque.** Not a JWT. find-my-way caps a route
+param at 100 characters and answers 414 over it — the jot upload flow hit
+exactly this.
+
+**The filename is in the row, never in the request.** An upload URL that takes
+a name at `PUT` time is a write-anywhere primitive; the name is fixed when the
+token is minted and the redeem path reads it from the row.
+
+Lifetimes differ by direction, because the failure modes do:
+
+| | TTL | Uses |
+|---|---|---|
+| download | 300s | multiple — a fetch gets retried, some clients `HEAD` then `GET` |
+| upload | 300s | exactly one |
+
+Quota is checked at mint **and** again at redeem; state moves in between. Size
+is enforced during the streamed write and the partial file is unlinked on
+overflow — `Content-Length` is a claim, not a measurement. Deleting a file
+revokes its outstanding tokens.
+
+### Serving bytes from this origin
+
+`registerPortal` (`portal.ts:30`) serves the portal SPA at `/` on the same
+Fastify instance as `/api`, and the portal keeps its bearer in a client-side
+token store (`portal/src/api.ts:21`). So **user-controlled bytes served inline
+from this origin are stored XSS against the portal's own credential** — and a
+presigned URL is designed to be opened in a browser, which is precisely the
+dangerous case.
+
+Every file response, presigned or bearer:
+
+```
+Content-Type: application/octet-stream      # never sniffed, never the real type
+Content-Disposition: attachment; filename=…  # never inline
+X-Content-Type-Options: nosniff
+Content-Security-Policy: sandbox
+Cross-Origin-Resource-Policy: same-origin
+```
+
+`sandbox` and `nosniff` mirror `setJotSecurityHeaders` (`jots/routes.ts:78-88`),
+which exists for this same reason. These headers bind browsers only, so a
+server-side consumer fetching a presigned URL is unaffected.
+
+**One cost, accepted rather than solved:** a token in a path lands in access
+logs and any intermediary's logs. That is what the 300-second TTL is for. If
+these ever need to live longer, they need a different carrier.
 
 ### Path resolution
 
@@ -358,7 +402,17 @@ browser-local scratch dir.
 - both sweeps against temp dirs with no env set — proves the CLI runs without
   `ENCRYPTION_KEY`, and that nothing in its import graph reaches Playwright
 - REST: user A cannot `GET /api/files/<B's file>`; an unauthenticated request
-  is refused; no route serves a file without a credential
+  without a presigned token is refused
+- presign: a download token works twice inside its TTL and not after it; an
+  upload token works exactly once; a token for a deleted file is refused
+- presign: the upload redeem writes only the name in the row — a name in the
+  request body or query is ignored, not honoured
+- presign: an upload exceeding the per-file cap mid-stream aborts and leaves no
+  file; one exceeding the user's quota is refused at redeem even though it
+  passed at mint
+- headers: an uploaded `.html` comes back `application/octet-stream` with
+  `attachment` and `nosniff` — never inline, on both the bearer and presigned
+  routes
 
 ## Notes
 
