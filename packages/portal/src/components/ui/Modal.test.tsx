@@ -39,4 +39,39 @@ describe("Modal", () => {
     render(<Modal open onClose={vi.fn()}>Body</Modal>);
     expect(document.activeElement).toHaveClass("ui-modal");
   });
+
+  it("returns focus to the trigger on close", () => {
+    // Matters for a dialog the page outlives — a delete confirmation that is
+    // cancelled must not strand a keyboard user on document.body.
+    function Harness({ open }: { open: boolean }) {
+      return (
+        <>
+          <button type="button">Delete</button>
+          <Modal open={open} onClose={vi.fn()}>Body</Modal>
+        </>
+      );
+    }
+    const { rerender } = render(<Harness open={false} />);
+    const trigger = screen.getByRole("button", { name: "Delete" });
+    trigger.focus();
+
+    rerender(<Harness open />);
+    expect(document.activeElement).toHaveClass("ui-modal");
+
+    rerender(<Harness open={false} />);
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("does not throw when the trigger is gone by close time", () => {
+    function Harness({ open }: { open: boolean }) {
+      return (
+        <>
+          {open && <button type="button">Transient</button>}
+          <Modal open={open} onClose={vi.fn()}>Body</Modal>
+        </>
+      );
+    }
+    const { rerender } = render(<Harness open />);
+    expect(() => rerender(<Harness open={false} />)).not.toThrow();
+  });
 });

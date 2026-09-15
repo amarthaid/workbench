@@ -13,6 +13,7 @@ import { DataTable } from "../components/ui/DataTable";
 import { EmptyState } from "../components/ui/EmptyState";
 import { Button } from "../components/ui/Button";
 import { Badge } from "../components/ui/Badge";
+import { Modal } from "../components/ui/Modal";
 
 export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -44,6 +45,19 @@ export function expiryLabel(expiresAt: string, now: Date = new Date()): string {
   return `${Math.floor(hours / 24)}d left`;
 }
 
+/**
+ * The same countdown phrased for a sentence rather than a badge.
+ *
+ * Returns null when there is nothing sensible to say — an unparseable date, or
+ * a file already past its expiry — so the caller drops the line rather than
+ * printing "deleted on its own expiring".
+ */
+export function expiresInPhrase(expiresAt: string, now: Date = new Date()): string | null {
+  const label = expiryLabel(expiresAt, now);
+  if (!label.endsWith(" left")) return null;
+  return label.slice(0, -" left".length);
+}
+
 function isUrgent(expiresAt: string, now: Date = new Date()): boolean {
   return Date.parse(expiresAt) - now.getTime() < 3_600_000;
 }
@@ -53,6 +67,14 @@ export default function Files() {
   const fileInput = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  // The file pending confirmation. Deleting is immediate and irreversible, and
+  // the file may be the result of twenty minutes of driving a browser, so a
+  // misclick must not be enough to lose it.
+  const [pendingDelete, setPendingDelete] = useState<WorkspaceFile | null>(null);
+  // Separate from `error` on purpose: a failed delete belongs inside the dialog
+  // the user is looking at, and showing it in both places at once would be two
+  // copies of one problem.
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["workspace-files"],
@@ -72,9 +94,20 @@ export default function Files() {
 
   const remove = useMutation({
     mutationFn: deleteWorkspaceFile,
-    onSuccess: () => void invalidate(),
-    onError: (e: Error) => setError(e.message),
+    onSuccess: () => {
+      setPendingDelete(null);
+      void invalidate();
+    },
+    // Keep the dialog open on failure so the message lands somewhere the user
+    // is already looking, rather than behind a panel that just closed.
+    onError: (e: Error) => setDeleteError(e.message),
   });
+
+  function closeDeleteDialog() {
+    if (remove.isPending) return;
+    setPendingDelete(null);
+    setDeleteError(null);
+  }
 
   async function download(name: string) {
     setBusy(name);
@@ -169,8 +202,10 @@ export default function Files() {
                   </Button>
                   <Button
                     variant="ghost"
-                    onClick={() => remove.mutate(f.name)}
-                    disabled={remove.isPending}
+                    onClick={() => {
+                      setDeleteError(null);
+                      setPendingDelete(f);
+                    }}
                   >
                     Delete
                   </Button>
@@ -180,6 +215,38 @@ export default function Files() {
           </DataTable>
         )}
       </Box>
+
+      <Modal
+        open={pendingDelete !== null}
+        onClose={closeDeleteDialog}
+        title="Delete this file?"
+        size="sm"
+        footer={
+          <>
+            <Button variant="ghost" onClick={closeDeleteDialog} disabled={remove.isPending}>
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => pendingDelete && remove.mutate(pendingDelete.name)}
+              disabled={remove.isPending}
+            >
+              {remove.isPending ? "Deleting…" : "Delete"}
+            </Button>
+          </>
+        }
+      >
+        <p>
+          <strong>{pendingDelete?.name}</strong> will be removed immediately. This cannot be
+          undone.
+        </p>
+        {pendingDelete && expiresInPhrase(pendingDelete.expiresAt) && (
+          <p className="ui-stat-note">
+            It would have expired on its own in {expiresInPhrase(pendingDelete.expiresAt)}.
+          </p>
+        )}
+        {deleteError && <div className="ui-form-error">{deleteError}</div>}
+      </Modal>
     </>
   );
 }

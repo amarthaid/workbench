@@ -13,14 +13,29 @@ export interface ModalProps {
 export function Modal({ open, onClose, title, size = "md", dismissible = true, children, footer }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
 
+  const triggerRef = useRef<Element | null>(null);
+
   useEffect(() => {
     if (!open) return;
+    // Remember what had focus so it can be restored on close. Captured here
+    // rather than in a handler because by close time the trigger may already
+    // have re-rendered.
+    triggerRef.current = document.activeElement;
     panelRef.current?.focus();
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
     }
     document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      // Return focus to the trigger. A call site that navigates or replaces the
+      // page on close has no live trigger left, and focus() on a detached node
+      // is a no-op — so this is safe there and load-bearing for a dialog the
+      // page outlives, e.g. cancelling a delete confirmation.
+      const trigger = triggerRef.current;
+      triggerRef.current = null;
+      if (trigger instanceof HTMLElement && trigger.isConnected) trigger.focus();
+    };
   }, [open, onClose]);
 
   if (!open) return null;
@@ -52,8 +67,8 @@ export function Modal({ open, onClose, title, size = "md", dismissible = true, c
   );
 }
 
-// Note: focus does not return to the trigger element on close in this implementation —
-// the spec's contract ("focus returns to the trigger on close") is deferred. Every current
-// call site replaces a page that reloads or navigates away on close (or re-renders the whole
-// panel), so there is no live trigger element to return focus to in practice. Flagging this
-// as a known simplification, not a silent drop — revisit if a future call site needs it.
+// Focus returns to the trigger on close. This was originally deferred, because every call
+// site at the time replaced or navigated away from the page on close and so had no live
+// trigger to return to. The delete confirmation on the Files page is the call site that
+// needed it: the page outlives the dialog, so cancelling used to drop focus to the document
+// body and leave a keyboard user stranded at the top of the page.

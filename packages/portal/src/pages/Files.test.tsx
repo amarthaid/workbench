@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import Files, { formatBytes, expiryLabel } from "./Files";
+import Files, { formatBytes, expiryLabel, expiresInPhrase } from "./Files";
 
 vi.mock("../api", () => ({
   fetchWorkspaceFiles: vi.fn(),
@@ -84,6 +84,23 @@ describe("expiryLabel", () => {
   });
 });
 
+describe("expiresInPhrase", () => {
+  const now = new Date("2026-09-15T12:00:00Z");
+
+  it("drops the trailing 'left' so it reads in a sentence", () => {
+    expect(expiresInPhrase("2026-09-16T06:00:00Z", now)).toBe("18h");
+  });
+
+  it.each([
+    ["2026-09-15T11:00:00Z", "already past"],
+    ["not a date", "unparseable"],
+  ])("returns null for %s (%s)", (at) => {
+    // The caller drops the whole line rather than printing
+    // "would have expired on its own in expiring".
+    expect(expiresInPhrase(at, now)).toBeNull();
+  });
+});
+
 describe("Files page", () => {
   it("lists files with size and time to expiry", async () => {
     vi.mocked(fetchWorkspaceFiles).mockResolvedValue(listing() as never);
@@ -124,18 +141,73 @@ describe("Files page", () => {
     await waitFor(() => expect(downloadWorkspaceFile).toHaveBeenCalledWith("statement.csv"));
   });
 
-  it("deletes a file", async () => {
+  it("asks before deleting, and does nothing until confirmed", async () => {
+    // Deleting is immediate and irreversible, and the file may be the result of
+    // a long browser session. A single misclick must not be enough.
     vi.mocked(fetchWorkspaceFiles).mockResolvedValue(listing() as never);
     renderPage();
 
     const row = (await screen.findByText("statement.csv")).closest("tr")!;
     fireEvent.click(within(row, "Delete"));
 
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(deleteWorkspaceFile).not.toHaveBeenCalled();
+  });
+
+  it("deletes once confirmed", async () => {
+    vi.mocked(fetchWorkspaceFiles).mockResolvedValue(listing() as never);
+    renderPage();
+
+    const row = (await screen.findByText("statement.csv")).closest("tr")!;
+    fireEvent.click(within(row, "Delete"));
+
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog, "Delete"));
+
     // TanStack Query v5 hands mutationFn a context object as a second
     // argument, so assert on the first argument rather than the whole call.
     await waitFor(() =>
       expect(vi.mocked(deleteWorkspaceFile).mock.calls[0]?.[0]).toBe("statement.csv")
     );
+  });
+
+  it("cancelling leaves the file alone", async () => {
+    vi.mocked(fetchWorkspaceFiles).mockResolvedValue(listing() as never);
+    renderPage();
+
+    const row = (await screen.findByText("statement.csv")).closest("tr")!;
+    fireEvent.click(within(row, "Delete"));
+
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog, "Cancel"));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(deleteWorkspaceFile).not.toHaveBeenCalled();
+  });
+
+  it("names the file being deleted, so the wrong row is obvious", async () => {
+    vi.mocked(fetchWorkspaceFiles).mockResolvedValue(listing() as never);
+    renderPage();
+
+    const row = (await screen.findByText("nearly-gone.csv")).closest("tr")!;
+    fireEvent.click(within(row, "Delete"));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("nearly-gone.csv");
+    expect(dialog).toHaveTextContent(/cannot be undone/i);
+  });
+
+  it("keeps a failed delete on screen instead of closing over the error", async () => {
+    vi.mocked(fetchWorkspaceFiles).mockResolvedValue(listing() as never);
+    vi.mocked(deleteWorkspaceFile).mockRejectedValue(new Error("Delete failed"));
+    renderPage();
+
+    const row = (await screen.findByText("statement.csv")).closest("tr")!;
+    fireEvent.click(within(row, "Delete"));
+    fireEvent.click(within(await screen.findByRole("dialog"), "Delete"));
+
+    expect(await screen.findByText("Delete failed")).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
   it("surfaces a download failure instead of failing silently", async () => {
