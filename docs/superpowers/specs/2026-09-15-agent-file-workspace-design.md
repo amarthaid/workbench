@@ -122,6 +122,13 @@ a bare sanitized name is not.
 
 ### Isolation rules
 
+The model is an **allowlist, by construction**: the only input accepted is a
+relative name, and the only path produced is one that resolves inside the
+calling user's directory. There is no list of forbidden patterns anywhere, and
+none should be added — a denylist is a claim that you enumerated every way out,
+which nobody has ever been able to make stick. Traversal strings appear in this
+design only as *test cases*, never as a mechanism.
+
 1. `userId` comes from the credential, never from a path segment, query
    parameter or body field — on every tool call and every REST route.
 2. Tools and routes accept a **relative name only**. `safeRelPath` from
@@ -130,11 +137,23 @@ a bare sanitized name is not.
 3. After `path.resolve`, re-check the prefix (`resolveInside`'s pattern) before
    any syscall. Two guards, because the first is about the input and the second
    is about the result.
-4. Directories are created `mode: 0o700` **and** explicitly `chmodSync`'d —
+4. **Before reading bytes, re-check against the real path.** `path.resolve` is
+   string arithmetic and does not follow symlinks, so a symlink sitting inside
+   the workspace and pointing at `/data/tokens.db` satisfies rules 2 and 3 and
+   still escapes. Every read path — the REST download, a presigned redeem, and
+   above all `browser_upload_file`, which hands an absolute path to a process
+   that will upload whatever it is given — resolves with `fs.realpath` and
+   re-applies the prefix check to the result.
+
+   Nothing in this design writes a symlink, so this is defence in depth rather
+   than a live hole. It is cheap, the workspace lives on a volume other things
+   can reach, and the failure mode is silent exfiltration of the token
+   database.
+5. Directories are created `mode: 0o700` **and** explicitly `chmodSync`'d —
    `mkdir` mode alone is subject to umask. This is why
    `profile-chromium.ts:154-155` does both, and the reason is worth a comment
    at the new call site too.
-5. A plugin never receives an absolute path and never supplies one.
+6. A plugin never receives an absolute path and never supplies one.
 
 ### Tools
 
@@ -242,9 +261,13 @@ function:
 
 ```ts
 export function userFilePath(userId: string, name: string): string | null;
+export function resolveExistingFile(userId: string, name: string): Promise<string | null>;
 ```
 
 `name` is relative; the result is absolute; `null` means the name was rejected.
+The first is pure path arithmetic and is what names a file being *created*. The
+second adds the `fs.realpath` check from isolation rule 4 and is what every
+caller about to *read* bytes must use.
 Callers import it — `plugins/internal/browser.ts` for downloads and uploads,
 the REST routes, the `files_*` tools.
 

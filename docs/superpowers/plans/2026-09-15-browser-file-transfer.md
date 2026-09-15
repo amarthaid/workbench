@@ -10,7 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-15-browser-file-transfer-design.md`
 
-**Depends on:** `docs/superpowers/plans/2026-09-15-agent-file-workspace.md` Tasks 1-2. `userFilePath` and the store must exist before Task 3 here.
+**Depends on:** `docs/superpowers/plans/2026-09-15-agent-file-workspace.md` Tasks 1-2. `userFilePath`, `resolveExistingFile` and the store must exist
+before Task 3 here.
 
 ## Global Constraints
 
@@ -291,7 +292,7 @@ an `objectId` avoids the nodeId staleness that bites across navigations.
 - Test: `packages/server/tests/browser-upload.test.ts`
 
 **Interfaces:**
-- Consumes: `userFilePath` (workspace plan Task 1), Task 1's client.
+- Consumes: `resolveExistingFile` (workspace plan Task 1), Task 1's client.
 - Produces:
   - `uploadFile(s, selector, absPath): Promise<void>`
   - Tool `browser_upload_file({ selector, name })`
@@ -303,6 +304,9 @@ Cover:
 - **a `name` of `../../../data/tokens.db` is refused before any CDP call is
   made** — this is the whole security case for the task
 - an absolute `name` is refused
+- **a symlink inside the workspace pointing at a file outside it is refused** —
+  path arithmetic alone accepts it, so this is what proves the read went
+  through `resolveExistingFile` and not `userFilePath`
 - a `name` that does not exist in the workspace is refused with `NOT_FOUND`
 - a selector matching nothing returns a clear error
 - a selector matching a non-`input[type=file]` node returns a clear error
@@ -313,11 +317,19 @@ Cover:
 
 - [ ] **Step 3: Implement**
 
+This is an **allowlist**, not a pattern check: the only thing accepted is a
+relative name, and the only path produced is one that resolves — through
+symlinks — inside the calling user's workspace directory. Do not add a list of
+forbidden prefixes; the traversal strings in the tests are cases that prove the
+allowlist, not a mechanism.
+
 ```typescript
 // The agent supplies a workspace-relative name; the server resolves it. An
 // absolute path from a tool argument would make this an arbitrary-file-read
-// primitive — chromium would happily upload /etc/passwd to a remote form.
-const abs = userFilePath(ctx.userId, args.name);
+// primitive — chromium will upload whatever path it is handed, to whatever
+// remote form is on the page. resolveExistingFile, not userFilePath: this is a
+// read, so the symlink check applies.
+const abs = await resolveExistingFile(ctx.userId, args.name);
 if (!abs) return { error: "INVALID_NAME" };
 ```
 

@@ -62,7 +62,11 @@ for is isolation, not isolation-until-the-id-format-changes. Hash instead.
   - `userKey(userId: string): string`
   - `userWorkspaceDir(userId: string): string`
   - `userFilePath(userId: string, name: string): string | null` — absolute path,
-    or `null` if the name is rejected.
+    or `null` if the name is rejected. Pure path arithmetic; names a file being
+    *created*.
+  - `resolveExistingFile(userId: string, name: string): Promise<string | null>`
+    — the same, plus an `fs.realpath` check. Every caller about to *read* bytes
+    uses this one.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -70,7 +74,16 @@ Create `packages/server/tests/workspace-paths.test.ts`:
 
 ```typescript
 import { describe, it, expect } from "vitest";
-import { userKey, userFilePath, userWorkspaceDir } from "../src/workspace/paths";
+import { mkdir, writeFile, symlink } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
+import {
+  userKey,
+  userFilePath,
+  userWorkspaceDir,
+  resolveExistingFile,
+} from "../src/workspace/paths";
 
 describe("workspace paths", () => {
   it("maps distinct user ids to distinct keys where profileDirName collides", () => {
@@ -105,8 +118,33 @@ describe("workspace paths", () => {
   it("keeps two users apart for the same relative name", () => {
     expect(userFilePath("u1", "x.csv")).not.toBe(userFilePath("u2", "x.csv"));
   });
+
+  it("refuses a symlink pointing outside the workspace", async () => {
+    // path.resolve is string arithmetic and does not follow symlinks, so this
+    // name passes userFilePath. Only the realpath check catches it.
+    const dir = userWorkspaceDir("u1");
+    await mkdir(dir, { recursive: true });
+    const outside = join(tmpdir(), `escape-${randomUUID()}`);
+    await writeFile(outside, "secret");
+    await symlink(outside, join(dir, "link.csv"));
+
+    expect(userFilePath("u1", "link.csv")).not.toBeNull();
+    await expect(resolveExistingFile("u1", "link.csv")).resolves.toBeNull();
+  });
+
+  it("accepts a real file inside the workspace", async () => {
+    const dir = userWorkspaceDir("u1");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "real.csv"), "a,b");
+    await expect(resolveExistingFile("u1", "real.csv")).resolves.not.toBeNull();
+  });
 });
 ```
+
+The symlink case is the reason `resolveExistingFile` exists. Nothing in this
+design writes a symlink, so it is defence in depth — but the workspace lives on
+a volume other things can reach, and the failure mode is silent exfiltration of
+the token database through `browser_upload_file`.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -135,6 +173,7 @@ Create `packages/server/src/workspace/paths.ts`:
 
 ```typescript
 import { createHash } from "node:crypto";
+import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { config } from "../config";
 import { safeRelPath } from "../jots/paths";
@@ -171,7 +210,28 @@ export function userFilePath(userId: string, name: string): string | null {
   if (target !== base && !target.startsWith(base + path.sep)) return null;
   return target;
 }
+
+/**
+ * The same, for a file that already exists and is about to be read. Adds the
+ * one check path arithmetic cannot make: a symlink inside the workspace
+ * pointing at /data/tokens.db resolves cleanly above and still escapes, so the
+ * real path is re-checked against the same prefix. Returns null for a missing
+ * file too — a caller cannot tell the difference, and should not be able to.
+ */
+export async function resolveExistingFile(userId: string, name: string): Promise<string | null> {
+  const target = userFilePath(userId, name);
+  if (!target) return null;
+  const base = await realpath(userWorkspaceDir(userId)).catch(() => null);
+  const real = await realpath(target).catch(() => null);
+  if (!base || !real) return null;
+  if (real !== base && !real.startsWith(base + path.sep)) return null;
+  return real;
+}
 ```
+
+`realpath` the base too: on macOS `/tmp` is itself a symlink to `/private/tmp`,
+so comparing a resolved target against an unresolved base fails for every file
+in a tmpdir-backed test.
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
@@ -205,7 +265,9 @@ produce — an agent reports the download landed, and the file is gone.
 - Test: `packages/server/tests/workspace-store.test.ts`
 
 **Interfaces:**
-- Consumes: `userFilePath`, `userWorkspaceDir` (Task 1).
+- Consumes: `userFilePath`, `resolveExistingFile`, `userWorkspaceDir` (Task 1).
+  Every read path goes through `resolveExistingFile`; `userFilePath` is for
+  naming a file being created.
 - Produces:
   - `interface FileEntry { name: string; bytes: number; mtime: string; expiresAt: string }`
   - `listFiles(userId): Promise<FileEntry[]>`
