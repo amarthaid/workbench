@@ -113,6 +113,39 @@ describe("workspace routes", () => {
     expect(back.body).toBe("x,y\n3,4\n");
   });
 
+  it("stores a form-urlencoded upload byte-for-byte when an app-level parser owns that type", async () => {
+    // Boot order in app.ts: registerOAuthRoutes registers an exact-match
+    // application/x-www-form-urlencoded parser on the app before the workspace
+    // scope adds its "*" catch-all, and Fastify's exact match beats the catch-all.
+    // The body then arrived as a parsed object, the route streamed nothing and
+    // committed a 0-byte file with a 201. curl --data-binary sends this type by
+    // default, so the loss was silent and common.
+    const strict = Fastify();
+    strict.addContentTypeParser(
+      "application/x-www-form-urlencoded",
+      { parseAs: "string" },
+      (_req, body, done) => done(null, Object.fromEntries(new URLSearchParams(body as string)))
+    );
+    await registerWorkspaceRoutes(strict);
+    await strict.ready();
+    try {
+      const payload = Buffer.from("twenty-one bytes here\n");
+      const res = await strict.inject({
+        method: "POST",
+        url: "/api/files/form.txt",
+        headers: { ...U1, "content-type": "application/x-www-form-urlencoded" },
+        payload,
+      });
+      expect(res.statusCode).toBe(201);
+      expect(res.json().bytes).toBe(payload.length);
+
+      const back = await strict.inject({ method: "GET", url: "/api/files/form.txt", headers: U1 });
+      expect(back.body).toBe(payload.toString());
+    } finally {
+      await strict.close();
+    }
+  });
+
   it("refuses an upload over the per-file cap and leaves nothing behind", async () => {
     const res = await app.inject({
       method: "POST",
