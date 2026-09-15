@@ -64,6 +64,12 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0"])
     .default("false")
     .transform((v) => v === "true" || v === "1"),
+  // Internal URL for /mcp — used to route browser tools/call requests through
+  // the mesh so that Istio's consistent-hash DestinationRule (keyed on
+  // X-Browser-Session) places Chromium on the same replica for every call.
+  // Set to the k8s ClusterIP service URL, e.g. http://a-workbench/mcp.
+  // Leave unset for single-replica or local-dev deployments.
+  INTERNAL_MCP_URL: z.string().url().optional(),
 });
 
 export const config = configSchema.parse(process.env);

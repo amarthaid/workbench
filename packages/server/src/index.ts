@@ -13,7 +13,7 @@ import { startUploadReaper } from "./jots/pending";
 import { loadPlugins } from "./plugins/loader";
 import { resolveMcpUser } from "./auth/oauth-server/resolve";
 import { startBrowserReaper } from "./auth/browser-session";
-import { registerCdpBridgeRoutes, startChannelReaper } from "./auth/cdp-bridge";
+import { registerCdpBridgeRoutes, startChannelReaper, SESSION_HEADER } from "./auth/cdp-bridge";
 import cluster from "node:cluster";
 import { availableParallelism } from "node:os";
 import { db } from "./db.js";
@@ -99,6 +99,72 @@ async function main() {
       });
     }
     const body = request.body as Record<string, unknown>;
+
+    // Forward browser_* tools/call requests through the mesh so that Istio's
+    // consistent-hash DestinationRule (keyed on X-Browser-Session) routes them
+    // to the replica that owns this user's Chromium. Without this, each call
+    // may land on a different replica and spawn a second Chromium that fights
+    // the first over the profile directory's SingletonLock.
+    //
+    // The agent first calls browser_start (no session_id → handled locally,
+    // returns session_id = HMAC(SESSION_SECRET, userId)). Every subsequent
+    // browser_* call is wrapped by the execute_tools meta-tool:
+    //   { name:"execute_tools", arguments:{ executions:[{ tool:"browser_*",
+    //     args:{ session_id:"...", ... } }] } }
+    // session_id is in executions[i].args — NOT at the top-level arguments.
+    // We scan executions for the first session_id and proxy to INTERNAL_MCP_URL
+    // with X-Browser-Session set from it. Istio hashes on that header and routes
+    // to the owning replica. The target pod sees the header and handles locally
+    // (no second proxy).
+    //
+    // Auth is passed through transparently (Bearer / api-key). INTERNAL_MCP_URL
+    // should be the k8s ClusterIP service URL (e.g. http://a-workbench/mcp);
+    // leave unset for single-replica / local-dev.
+    //
+    // See docs/findings/2026-09-10-browser-session-pod-affinity.md.
+    const sessionHeader = request.headers[SESSION_HEADER] as string | undefined;
+    const callArgs = (body.params as Record<string, unknown> | undefined)?.arguments as Record<string, unknown> | undefined;
+    // Real MCP clients wrap all tool calls inside execute_tools:
+    //   { name: "execute_tools", arguments: { executions: [{ tool: "browser_*", args: { session_id, ... } }] } }
+    // session_id is in executions[i].args, NOT at the top-level arguments.
+    const executions = Array.isArray(callArgs?.executions)
+      ? (callArgs!.executions as { tool?: unknown; args?: Record<string, unknown> }[])
+      : [];
+    const sessionId: string | undefined =
+      executions.find((e) => typeof e?.args?.session_id === "string")?.args?.session_id as string | undefined;
+    if (
+      config.INTERNAL_MCP_URL &&
+      !sessionHeader &&
+      body.method === "tools/call" &&
+      sessionId
+    ) {
+      const fwdHeaders: Record<string, string> = {
+        "content-type": "application/json",
+        [SESSION_HEADER]: sessionId,
+      };
+      const auth = request.headers.authorization as string | undefined;
+      if (auth) fwdHeaders.authorization = auth;
+      const apiKey = request.headers["x-workbench-api-key"] as string | undefined;
+      if (apiKey) fwdHeaders["x-workbench-api-key"] = apiKey;
+      try {
+        const res = await fetch(config.INTERNAL_MCP_URL, {
+          method: "POST",
+          headers: fwdHeaders,
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(30_000),
+        });
+        const text = await res.text();
+        if (res.status === 202 || !text) {
+          reply.status(202).send();
+          return;
+        }
+        reply.status(res.status).send(JSON.parse(text) as Record<string, unknown>);
+        return;
+      } catch {
+        // Network error — fall through to local handling
+      }
+    }
+
     const result = await handleMcpRequest(body, userId);
     // JSON-RPC notifications return null — no body, just 202 Accepted.
     if (result === null) {

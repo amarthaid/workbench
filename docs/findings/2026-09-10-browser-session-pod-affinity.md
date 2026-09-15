@@ -96,16 +96,31 @@ it on all of them.
 - **Consistent hashing, not modulo.** `hash % N` remaps nearly every key when a
   pod comes or goes, so one rollout breaks every live session at once.
 - **`CLUSTER_ENABLED` off.** Hashing reaches a pod, not a worker inside it.
-- **`/mcp` is not solved by this.** An MCP client sends no `X-Browser-Session`,
-  and hashing that path on `Authorization` instead — which an earlier draft of
-  this finding suggested — does not work: `resolveMcpUser` takes identity from
-  three different carriers, and neither of the common two is usable as a hash
-  key. An api-key agent sends no `Authorization` at all, so every such client
-  hashes on an empty value and lands on one replica; an OAuth Bearer rotates at
-  its TTL, so the hash moves on refresh, which is the session yank above rather
-  than a fix for it. Until this is settled, keep `browser_*` on a single
-  replica — and note that pins *all* `POST /mcp` traffic, since tool calls are
-  not separable by path. Tracked in
+- **`/mcp` — session token in tool args, server-side forwarding with `INTERNAL_MCP_URL`.**
+  An MCP client cannot send per-request custom HTTP headers — the MCP protocol
+  carries no header concept on stdio, and HTTP transport headers are static at
+  connection init. The fix moves the routing token into the tool args:
+  1. The agent calls `browser_start` (no session token required). Any replica
+     handles it; it returns `session_id = HMAC(SESSION_SECRET, userId)` and
+     starts nothing.
+  2. Every subsequent `browser_*` call includes `session_id` as a required arg.
+  3. The `/mcp` handler detects `session_id` in a `tools/call` body and, when
+     `INTERNAL_MCP_URL` is set and no `X-Browser-Session` header is already
+     present (loop prevention), forwards to `INTERNAL_MCP_URL` with
+     `X-Browser-Session: <session_id>`. Auth headers (Bearer, api-key) are
+     passed through transparently. Istio's DestinationRule applies the same
+     consistent hash and routes to the owning replica. That replica sees the
+     header, handles locally, starts Chromium if needed.
+  4. `browser_start` carries no `session_id` in args, so it is never proxied —
+     any replica can answer it, and because `mintSessionKey` is deterministic
+     every replica returns the same key.
+
+  Set `INTERNAL_MCP_URL` to the k8s ClusterIP service URL (e.g.
+  `http://a-workbench/mcp`); leave unset for single-replica / dev. On network
+  error the call falls through to local handling.
+  This also fixes `browser_live_url`: with `session_id` in its args it is
+  proxied to the hash-correct replica, so the portal's CDP live view connects
+  to the same replica that owns Chromium. Closes
   [#87](https://github.com/barockok/workbench/issues/87).
 
 Config lives in [the proxy setup](../deploy/docker.md#multiple-replicas).

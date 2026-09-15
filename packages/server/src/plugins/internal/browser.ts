@@ -24,15 +24,26 @@ import {
 } from "../../auth/browser-session";
 import { expectDownload, awaitDownload } from "../../auth/browser-downloads";
 import { uploadWorkspaceFile, BrowserUploadError } from "../../auth/browser-upload";
+import { mintSessionKey } from "../../auth/cdp-bridge";
 
 export const BROWSER_INTEGRATION_NAME = "browser";
 
 const tools: PluginTool[] = [
   {
+    name: "browser_start",
+    description: "Mint a browser session token. Call this first and pass the returned session_id to every subsequent browser_* call. Re-using the same token across a task keeps all actions on the same Chromium instance.",
+    integration: BROWSER_INTEGRATION_NAME,
+    inputSchema: z.object({}),
+    handler: async (ctx: any) => {
+      return { session_id: mintSessionKey(ctx.userId) };
+    },
+  },
+  {
     name: "browser_navigate",
     description: "Navigate the per-user browser session to a URL. Opens a warm session if none is active. Returns the final url and page title.",
     integration: BROWSER_INTEGRATION_NAME,
     inputSchema: z.object({
+      session_id: z.string(),
       url: z.string().url().refine(
         (u) => /^https?:\/\//i.test(u),
         { message: "Only http and https URLs are allowed" }
@@ -49,6 +60,7 @@ const tools: PluginTool[] = [
     description: "Capture a screenshot of the current viewport so you can see the page. Costs vision tokens — call it only when the page likely changed and you need to look; after a click/type, act on what you already saw unless the result is uncertain. Downscaled JPEG by default (maxWidth 1000). If the pixels are identical to your last shot it returns { unchanged: true } instead of an image. For text-heavy pages prefer browser_read_text.",
     integration: BROWSER_INTEGRATION_NAME,
     inputSchema: z.object({
+      session_id: z.string(),
       format: z.enum(["jpeg", "png"]).optional(),
       quality: z.number().int().min(1).max(100).optional(),
       maxWidth: z.number().int().positive().optional(),
@@ -64,6 +76,7 @@ const tools: PluginTool[] = [
     description: "Click at viewport coordinates (x, y) in the per-user browser session.",
     integration: BROWSER_INTEGRATION_NAME,
     inputSchema: z.object({
+      session_id: z.string(),
       x: z.number(),
       y: z.number(),
       button: z.enum(["left", "right", "middle"]).default("left"),
@@ -79,7 +92,7 @@ const tools: PluginTool[] = [
     name: "browser_type",
     description: "Type text into the currently focused element. Click the field first.",
     integration: BROWSER_INTEGRATION_NAME,
-    inputSchema: z.object({ text: z.string() }),
+    inputSchema: z.object({ session_id: z.string(), text: z.string() }),
     handler: async (ctx: any, args: any) => {
       const s = await ensureSession(ctx.userId);
       touch(ctx.userId);
@@ -91,7 +104,7 @@ const tools: PluginTool[] = [
     name: "browser_key",
     description: "Press a key or chord, e.g. 'Enter', 'Tab', 'ctrl+a', 'ArrowDown'.",
     integration: BROWSER_INTEGRATION_NAME,
-    inputSchema: z.object({ keys: z.string() }),
+    inputSchema: z.object({ session_id: z.string(), keys: z.string() }),
     handler: async (ctx: any, args: any) => {
       const s = await ensureSession(ctx.userId);
       touch(ctx.userId);
@@ -104,6 +117,7 @@ const tools: PluginTool[] = [
     description: "Scroll the viewport up/down/left/right by an optional pixel amount (default 600).",
     integration: BROWSER_INTEGRATION_NAME,
     inputSchema: z.object({
+      session_id: z.string(),
       direction: z.enum(["up", "down", "left", "right"]),
       amount: z.number().int().positive().default(600),
     }),
@@ -118,7 +132,7 @@ const tools: PluginTool[] = [
     name: "browser_read_text",
     description: "Read the visible text of the current page (document.innerText) as plain text — far cheaper than a screenshot for text-heavy pages, forms, and reading. Use this instead of browser_screenshot when you don't need to see layout/pixels.",
     integration: BROWSER_INTEGRATION_NAME,
-    inputSchema: z.object({ maxChars: z.number().int().positive().optional() }),
+    inputSchema: z.object({ session_id: z.string(), maxChars: z.number().int().positive().optional() }),
     handler: async (ctx: any, args: any) => {
       const s = await ensureSession(ctx.userId);
       touch(ctx.userId);
@@ -182,7 +196,7 @@ const tools: PluginTool[] = [
     name: "browser_close",
     description: "Close the per-user warm browser session (the persistent profile is kept). Frees the single-writer lock so a cookie capture can run.",
     integration: BROWSER_INTEGRATION_NAME,
-    inputSchema: z.object({}),
+    inputSchema: z.object({ session_id: z.string() }),
     handler: async (ctx: any) => {
       await closeBrowserSession(ctx.userId);
       return { ok: true };
@@ -192,7 +206,7 @@ const tools: PluginTool[] = [
     name: "browser_live_url",
     description: "Get a short-lived URL to watch and take over the per-user browser session in a web canvas. Open it to drive the same browser by hand, then return control to the model.",
     integration: BROWSER_INTEGRATION_NAME,
-    inputSchema: z.object({}),
+    inputSchema: z.object({ session_id: z.string() }),
     handler: async (ctx: any) => {
       // No ensureSession here: the session is warmed at redeem time, after the
       // opener proves they own this account.
