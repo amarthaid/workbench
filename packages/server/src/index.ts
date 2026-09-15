@@ -8,6 +8,7 @@ import { registerPortal } from "./portal";
 import { registerJotRoutes } from "./jots/routes";
 import { registerCurlProxy } from "./api/curl-proxy";
 import { registerRestRoutes } from "./api/rest-routes";
+import { registerWorkspaceRoutes } from "./workspace/routes";
 import { startUploadReaper } from "./jots/pending";
 import { loadPlugins } from "./plugins/loader";
 import { resolveMcpUser } from "./auth/oauth-server/resolve";
@@ -114,6 +115,7 @@ async function main() {
   await registerRestRoutes(app);
 
   await registerCurlProxy(app);
+  await registerWorkspaceRoutes(app);
   await registerJotRoutes(app);
   startUploadReaper();
 
