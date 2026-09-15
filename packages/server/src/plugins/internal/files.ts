@@ -18,6 +18,8 @@ import {
   writeFileBytes,
   WorkspaceError,
 } from "../../workspace/store";
+import { userFilePath } from "../../workspace/paths";
+import { mintPresign, revokeFor } from "../../workspace/presign";
 import { config } from "../../config";
 
 export const FILES_INTEGRATION_NAME = "files";
@@ -102,6 +104,33 @@ const tools: PluginTool[] = [
     },
   },
   {
+    name: "files_presign",
+    description: `Mint a short-lived URL for one workspace file, so something that cannot hold a workbench credential can fetch or write it — a service that ingests by URL, an upload target, or a transfer that should not pass through your context. op 'download' returns a URL that can be fetched repeatedly until it expires; op 'upload' returns a URL that accepts exactly one PUT of a raw body, writing to the name you named here (a name sent with the PUT is ignored). Default lifetime is 5 minutes and the token appears in the URL, so treat it as a secret and do not log it. ${RETENTION}`,
+    integration: FILES_INTEGRATION_NAME,
+    inputSchema: z.object({
+      name: z.string(),
+      op: z.enum(["download", "upload"]),
+      ttlSeconds: z.number().int().positive().max(3600).optional(),
+    }),
+    handler: async (ctx: any, args: any) => {
+      if (!userFilePath(ctx.userId, args.name)) return { error: "INVALID_NAME" };
+      // A download grant for a file that is not there would 404 at redeem with
+      // no explanation; fail now, where the caller can act on it.
+      if (args.op === "download" && !(await statFile(ctx.userId, args.name))) {
+        return { error: "NOT_FOUND" };
+      }
+      const minted = await mintPresign(ctx.userId, args.name, args.op, args.ttlSeconds);
+      return {
+        url: minted.url,
+        op: minted.op,
+        name: minted.name,
+        expiresAt: new Date(minted.expiresAt).toISOString(),
+        method: args.op === "download" ? "GET" : "PUT",
+        singleUse: args.op === "upload",
+      };
+    },
+  },
+  {
     name: "files_delete",
     description:
       "Delete a file from your workspace. Files expire on their own after 24 hours; this is for reclaiming quota early.",
@@ -110,6 +139,7 @@ const tools: PluginTool[] = [
     handler: async (ctx: any, args: any) => {
       const deleted = await deleteFile(ctx.userId, args.name);
       if (!deleted) return { error: "NOT_FOUND" };
+      await revokeFor(ctx.userId, args.name);
       return { ok: true, usedBytes: await usedBytes(ctx.userId) };
     },
   },

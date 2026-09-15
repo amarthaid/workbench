@@ -175,7 +175,16 @@ export async function openWriteStream(userId: string, name: string): Promise<Wri
   const abort = async (): Promise<void> => {
     if (dead) return;
     dead = true;
-    stream.destroy();
+    // Wait for the stream to actually close before unlinking. createWriteStream
+    // opens its fd asynchronously, so destroying it and immediately rm-ing can
+    // race the open: the unlink runs first, the open then creates the file, and
+    // an orphaned .part- file is left behind. "close" fires after the fd is
+    // gone, whichever order those landed in.
+    await new Promise<void>((resolve) => {
+      if (stream.closed) return resolve();
+      stream.once("close", () => resolve());
+      stream.destroy();
+    });
     await rm(staging, { force: true });
   };
 

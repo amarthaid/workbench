@@ -120,6 +120,17 @@ describe("workspace/store", () => {
     expect(fs.readdirSync(userWorkspaceDir("u1"))).toEqual([]);
   });
 
+  it("leaves no partial when aborted before the fd is even open", async () => {
+    // createWriteStream opens asynchronously. Aborting this early is the
+    // tightest version of the race: the unlink can run before the open, which
+    // then creates the file behind it.
+    for (let i = 0; i < 25; i++) {
+      const h = await openWriteStream("u1", `race-${i}.csv`);
+      await h.abort();
+    }
+    expect(fs.readdirSync(userWorkspaceDir("u1"))).toEqual([]);
+  });
+
   it("never lists a partial file", async () => {
     const h = await openWriteStream("u1", "inflight.csv");
     await h.write(Buffer.from("x"));

@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { config } from "../config";
 import { resolveMcpUser } from "../auth/oauth-server/resolve";
 import { resolveExistingFile } from "./paths";
+import { consumeUpload, peekDownload, revokeFor } from "./presign";
 import {
   deleteFile,
   listFiles,
@@ -157,7 +158,29 @@ export async function registerWorkspaceRoutes(app: FastifyInstance): Promise<voi
       if (!userId) return reply;
       const deleted = await deleteFile(userId, request.params.name);
       if (!deleted) return reply.code(404).send({ error: "NOT_FOUND" });
+      // Deleting a file revokes its outstanding presigned URLs: a grant that
+      // outlived its file would resurrect it on the next upload redeem.
+      await revokeFor(userId, request.params.name);
       return reply.send({ ok: true, usedBytes: await usedBytes(userId) });
+    });
+
+    // Presigned redeem routes. No bearer — the token IS the authorization, and
+    // the user it belongs to comes from the row, never from the request.
+    //
+    // Three static segments beat the two-segment /api/files/:name in
+    // find-my-way, so these do not collide with a file literally named "dl".
+    scope.get<{ Params: { token: string } }>("/api/files/dl/:token", async (request, reply) => {
+      const grant = await peekDownload(request.params.token);
+      if (!grant) return reply.code(404).send({ error: "NOT_FOUND" });
+      return sendWorkspaceFile(reply, grant.userId, grant.name);
+    });
+
+    scope.put<{ Params: { token: string } }>("/api/files/ul/:token", async (request, reply) => {
+      const grant = await consumeUpload(request.params.token);
+      if (!grant) return reply.code(404).send({ error: "NOT_FOUND" });
+      // grant.name, never a name off the request: an upload URL that honoured a
+      // caller-supplied name would be a write-anywhere primitive.
+      return receiveWorkspaceFile(request, reply, grant.userId, grant.name);
     });
   });
 }

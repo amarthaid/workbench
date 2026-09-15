@@ -40,6 +40,7 @@ describe("files integration", () => {
     expect(filesPlugin.tools.map((t) => t.name).sort()).toEqual([
       "files_delete",
       "files_list",
+      "files_presign",
       "files_read",
       "files_stat",
       "files_write",
