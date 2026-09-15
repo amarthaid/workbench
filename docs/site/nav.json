@@ -206,6 +206,11 @@
               "layout": "wide"
             },
             {
+              "path": "integrations/files",
+              "label": "Files",
+              "layout": "wide"
+            },
+            {
               "path": "integrations/jots",
               "label": "Jots",
               "layout": "wide"

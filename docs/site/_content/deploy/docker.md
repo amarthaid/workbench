@@ -164,6 +164,45 @@ Keeping the mount inside the repository directory means the file works for anyon
 who clones it. If you set `PLUGINS_DIR` to a directory that does not exist, the
 loader returns quietly and only the built-ins are registered.
 
+## Reclaiming disk
+
+Two trees grow on their own and nothing inside the server reclaims them: the
+per-user browser profiles, and the [agent file workspace](../integrations/files.md).
+
+Sweeping them is a **scheduled job**, not a timer inside the server. That is not
+a style preference — a timer runs in every replica, so N pods would sweep the
+same shared volume concurrently.
+
+```bash
+npm run reap -w @a-workbench/server            # both trees
+npm run reap -w @a-workbench/server -- --files # workspace only
+npm run reap -w @a-workbench/server -- --dry-run --json
+```
+
+Run it from exactly one place — a Kubernetes `CronJob`, a systemd timer, cron on
+the host — hourly is ample.
+
+It needs **no secrets**. Not the encryption key, not the session secret, not a
+database connection: it takes a path and a number, and the only thing it needs
+mounted is the volume it is sweeping. A reaper pod's credentials should stay
+empty, and there is a test in the suite that runs the CLI with a blank
+environment specifically to keep that true.
+
+| Flag | Environment fallback | Default |
+|---|---|---|
+| `--dir` | `WORKSPACE_DIR` | — |
+| `--profiles-dir` | `BROWSER_PROFILES_DIR` | — |
+| `--ttl-hours` | `WORKSPACE_TTL_HOURS` | 24 |
+| `--ttl-days` | `BROWSER_PROFILE_TTL_DAYS` | 30 |
+| `--max-bytes-per-user` | `WORKSPACE_MAX_BYTES_PER_USER` | unset (no eviction) |
+
+Workspace files go on age alone — no liveness check, no exception for something
+mid-transfer. That is what lets the sweep run anywhere with no coordination, and
+it is safe because a download still being written has an mtime of *now*, so its
+age is effectively zero. Browser profiles are different: a profile whose session
+markers moved inside the last hour is assumed to have a live Chromium holding it
+and is left alone.
+
 ## Behind a reverse proxy
 
 The server binds `0.0.0.0` on `PORT` and serves the portal itself — the built SPA
