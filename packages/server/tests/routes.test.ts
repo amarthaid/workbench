@@ -16,7 +16,7 @@ vi.mock("../src/config", () => ({
     ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000",
     NODE_ENV: "test",
     PORT: "3000",
-    DATABASE_URL: "./data/tokens.db",
+    DATABASE_URL: process.env.DATABASE_URL, // pinned to a temp dir by vitest.config.ts
     PLUGINS_DIR: "./plugins",
     AUDIT_LOG_DEST: "sqlite",
     AUDIT_LOG_KAFKA_TOPIC: "audit-log",

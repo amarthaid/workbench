@@ -1,7 +1,19 @@
 import { defineConfig } from "vitest/config";
+import os from "node:os";
+import path from "node:path";
+
+// The suite's database and workspace live in the OS temp dir, never at the
+// server's cwd-relative defaults. DB suites start with `DELETE FROM users`,
+// and the repo's data/ is what docker compose bind-mounts as the live
+// database — one run from the wrong cwd emptied the real users table.
+const scratch = path.join(os.tmpdir(), `workbench-vitest-${process.pid}`);
 
 export default defineConfig({
   test: {
+    env: {
+      DATABASE_URL: path.join(scratch, "tokens.db"),
+      WORKSPACE_DIR: path.join(scratch, "workspace"),
+    },
     // All test files share one real SQLite file (config.DATABASE_URL). Running
     // files in parallel lets one file's `DELETE FROM users` race another file's
     // rows mid-test. Serialize files to keep DB-touching suites deterministic.

@@ -8,7 +8,7 @@ vi.mock("../src/config", () => ({
     SERVER_PUBLIC_URL: "http://localhost:3000",
     INTERNAL_MCP_URL: "http://a-workbench/mcp",
     NODE_ENV: "test",
-    DATABASE_URL: "./data/tokens.db",
+    DATABASE_URL: process.env.DATABASE_URL, // pinned to a temp dir by vitest.config.ts
     ENCRYPTION_KEY: "0".repeat(64),
     PORT: "3000",
   },

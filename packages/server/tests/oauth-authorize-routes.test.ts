@@ -6,7 +6,7 @@ vi.mock("../src/config", () => ({
     GOOGLE_CLIENT_ID: "test-gid", GOOGLE_CLIENT_SECRET: "test-gsecret",
     PORTAL_URL: "http://localhost:5173", SERVER_PUBLIC_URL: "http://localhost:3000",
     SESSION_SECRET: "test-session-secret-32-chars-long!!", NODE_ENV: "test",
-    DATABASE_URL: "./data/tokens.db", OAUTH_ACCESS_TOKEN_TTL_SECONDS: 3600,
+    DATABASE_URL: process.env.DATABASE_URL, // pinned to a temp dir by vitest.config.ts OAUTH_ACCESS_TOKEN_TTL_SECONDS: 3600,
   },
 }));
 

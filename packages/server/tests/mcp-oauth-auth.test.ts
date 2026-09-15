@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 
 vi.mock("../src/config", () => ({
-  config: { SESSION_SECRET: "test-session-secret-32-chars-long!!", SERVER_PUBLIC_URL: "http://localhost:3000", OAUTH_ACCESS_TOKEN_TTL_SECONDS: 3600, NODE_ENV: "test", DATABASE_URL: "./data/tokens.db", ENCRYPTION_KEY: "0".repeat(64) },
+  config: { SESSION_SECRET: "test-session-secret-32-chars-long!!", SERVER_PUBLIC_URL: "http://localhost:3000", OAUTH_ACCESS_TOKEN_TTL_SECONDS: 3600, NODE_ENV: "test", DATABASE_URL: process.env.DATABASE_URL, ENCRYPTION_KEY: "0".repeat(64) },
 }));
 
 import { signAccessToken } from "../src/auth/oauth-server/tokens";

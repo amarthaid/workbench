@@ -10,7 +10,7 @@ let tmp: string;
 
 vi.mock("../../src/jots/dir", () => ({ jotsRoot: () => tmp }));
 vi.mock("../../src/config", () => ({
-  config: { JOTS_MAX_BYTES: 1_000_000, JOTS_MAX_FILES: 1000, JOTS_UPLOAD_TTL_SECONDS: 300, SERVER_PUBLIC_URL: "https://wb.test", SESSION_SECRET: "test-secret-32-chars-long-xxxxxx", NODE_ENV: "test", DATABASE_URL: "./data/tokens.db" },
+  config: { JOTS_MAX_BYTES: 1_000_000, JOTS_MAX_FILES: 1000, JOTS_UPLOAD_TTL_SECONDS: 300, SERVER_PUBLIC_URL: "https://wb.test", SESSION_SECRET: "test-secret-32-chars-long-xxxxxx", NODE_ENV: "test", DATABASE_URL: process.env.DATABASE_URL },
 }));
 
 import { registerJotRoutes } from "../../src/jots/routes";

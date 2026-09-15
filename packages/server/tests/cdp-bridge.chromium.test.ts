@@ -21,7 +21,7 @@ const { cfg, ensureMock } = vi.hoisted(() => ({
     PORTAL_URL: "http://127.0.0.1:0",
     SERVER_PUBLIC_URL: "http://127.0.0.1:0",
     BROWSER_PROFILES_DIR: "",
-    DATABASE_URL: "./data/tokens.db",
+    DATABASE_URL: process.env.DATABASE_URL, // pinned to a temp dir by vitest.config.ts
     BROWSER_DISK_CACHE_MB: 32,
     SESSION_SECRET: "test-session-secret-32-chars-long!!",
   },
