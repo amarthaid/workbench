@@ -9,12 +9,13 @@ import type { CookieData, RawCookie } from "./cookie";
 
 // Persistent CDP client: one long-lived socket to a page target, many
 // request/response commands multiplexed by auto-incrementing id.
-class CdpClient {
+export class CdpClient {
   private ws: WebSocket;
   private id = 0;
   private pending = new Map<number, { resolve: (v: Record<string, unknown>) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private gone = false;
   private onGone?: () => void;
+  private listeners = new Map<string, Set<(p: Record<string, unknown>) => void>>();
   readonly ready: Promise<void>;
 
   constructor(wsUrl: string, onGone?: () => void) {
@@ -30,9 +31,28 @@ class CdpClient {
       this.ws.once("error", reject);
     });
     this.ws.on("message", (raw: WebSocket.RawData) => {
-      let msg: { id?: number; result?: Record<string, unknown>; error?: { message: string } };
+      let msg: {
+        id?: number;
+        result?: Record<string, unknown>;
+        error?: { message: string };
+        method?: string;
+        params?: Record<string, unknown>;
+      };
       try { msg = JSON.parse(raw.toString()); } catch { return; }
-      if (typeof msg.id !== "number") return;
+      if (typeof msg.id !== "number") {
+        // An event frame. Every CDP event used to be dropped on this line —
+        // Browser.downloadProgress, Network.responseReceived, all of it — which
+        // is why nothing could observe the browser, only command it.
+        const set = msg.method ? this.listeners.get(msg.method) : undefined;
+        if (set) {
+          for (const fn of [...set]) {
+            // One misbehaving listener must not take the socket down with it.
+            try { fn(msg.params ?? {}); }
+            catch (e) { console.warn(`[cdp] listener for ${msg.method} threw:`, e); }
+          }
+        }
+        return;
+      }
       const p = this.pending.get(msg.id);
       if (!p) return;
       this.pending.delete(msg.id);
@@ -54,10 +74,31 @@ class CdpClient {
     this.pending.clear();
   }
 
+  /**
+   * Subscribe to a CDP event. Returns an unsubscribe, which callers must use —
+   * a long-lived warm session would otherwise accumulate one handler per
+   * download.
+   */
+  on(method: string, fn: (p: Record<string, unknown>) => void): () => void {
+    let set = this.listeners.get(method);
+    if (!set) { set = new Set(); this.listeners.set(method, set); }
+    set.add(fn);
+    return () => {
+      const current = this.listeners.get(method);
+      if (!current) return;
+      current.delete(fn);
+      if (current.size === 0) this.listeners.delete(method);
+    };
+  }
+
   private handleGone(): void {
     if (this.gone) return;
     this.gone = true;
     this.drainPending(new Error("cdp socket closed"));
+    // Listeners go too. A waiter subscribed to Browser.downloadProgress has no
+    // command in flight, so drainPending cannot reach it and the 10s command
+    // timeout does not apply — without this it would hang until its own.
+    this.listeners.clear();
     try { this.ws.close(); } catch { /* noop */ }
     this.onGone?.();
   }
