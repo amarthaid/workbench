@@ -55,7 +55,7 @@ In:
 - a new internal integration, `files`, owning a per-user workspace directory
 - MCP tools to list/read/write/delete within it
 - REST endpoints to stream files in and out without the model in the path
-- `ctx.files` so plugins can consume a workspace file by reference
+- one exported path resolver, shared by every caller that needs the directory
 - quota + TTL semantics
 - an **out-of-process** reaper, shipped as a CLI subcommand, sweeping both
   the workspace and the browser profiles, replacing the in-server interval
@@ -66,6 +66,8 @@ Out:
 - durable//permanent storage. This is a transfer buffer with a TTL; it is not
   a document store and must not grow into one
 - sharing a file between users. Ever.
+- changes to consumer plugins. `slack_upload_file` and friends stay exactly
+  as they are; see "Handoff" below
 
 ## Design
 
@@ -142,10 +144,10 @@ a bare sanitized name is not.
 | `files_write` | agent-produced bytes into the workspace |
 | `files_delete` | |
 
-`files_read` returning base64 keeps the model in the byte path, which is the
-thing this design exists to avoid — it is there for small text files and for
-inspection. The intended path for anything real is a **reference**: a tool
-takes a workspace name and the server reads it.
+`files_read` puts bytes through the model's context, which is what this design
+exists to reduce — but it is deliberately kept, because it is what makes the
+sequential handoff below work without touching any consumer plugin. Cap it and
+fail loudly at the cap; a silently truncated CSV is worse than a refused one.
 
 ### REST
 
@@ -166,28 +168,50 @@ wants the CSV themselves without an API client): a `pending_auth` row under a
 Streaming, not buffering — a 100 MB file must not be read into memory to be
 served.
 
-### `ctx.files` for plugins
+### Path resolution
 
-`ToolContext` (`plugins/context.ts:57-64`) is handed to **third-party**
-plugins. The browser is deliberately internal-only so a plugin can never drive
-the user's logged-in session; unrestricted filesystem reads are the same shape
-of exposure and need the same care.
+No `ToolContext` member, no plugin-facing file interface. One exported
+function:
 
 ```ts
-interface WorkspaceAccess {
-  read(name: string): Promise<Buffer>;
-  stream(name: string): Promise<Readable>;
-  write(name: string, data: Buffer | Readable): Promise<void>;
-  list(): Promise<FileEntry[]>;
-}
+export function userFilePath(userId: string, name: string): string | null;
 ```
 
-`name` is relative and resolved server-side against the calling user's root.
-No absolute path goes in; none comes back. A plugin cannot name another user's
-file because it cannot name a directory at all.
+`name` is relative; the result is absolute; `null` means the name was rejected.
+Callers import it — `plugins/internal/browser.ts` for downloads and uploads,
+the REST routes, the `files_*` tools.
 
-With that in place, `slack_upload_file` gains a `path` alternative to
-`content`, and its `Buffer.from(content, "utf-8")` stops being the only way in.
+It is worth being clear about what this is **not** protecting against. Plugins
+are dynamically imported into the same Node process (`plugins/loader.ts`) with
+no sandbox; any plugin could `import fs` and read whatever the server user can.
+Keeping the browser internal (out of `ToolContext`) is an organizational
+boundary that stops a capability being *offered*, not a mechanism that stops it
+being *taken*.
+
+So the resolver earns its place for a different reason: the hash-keying and the
+traversal check must exist in exactly one place. Two copies drift, and the copy
+that drifts is the one that stops being user-scoped.
+
+### Handoff
+
+Getting a file from the workspace to another integration is **sequential, by
+the agent**: `files_read` then the destination tool's existing input.
+`slack_upload_file` is not modified.
+
+This keeps the blast radius of the feature to `files` and `browser`, at two
+costs worth stating plainly:
+
+- the bytes pass through the model's context once, so the practical ceiling is
+  a small file, not the 100 MB the store will hold
+- `slack_upload_file` does `Buffer.from(args.content, "utf-8")`
+  (`packages/plugins/slack/tools/index.ts:139`), so the sequential path carries
+  **text only**. A CSV works. A PDF or xlsx does not, and will not until
+  someone gives that tool a bytes-shaped input
+
+Neither blocks the flow this was built for. Both are the reason a
+reference-passing handoff will eventually be worth revisiting; until then the
+REST endpoints are the escape hatch for anything large — a caller outside the
+model can `GET /api/files/:name` and do what it likes with the bytes.
 
 ### Quotas
 

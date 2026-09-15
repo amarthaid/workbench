@@ -84,7 +84,7 @@ never downloads should not pay for a second socket.
 
 ### 3. Download capture
 
-On first use, against the browser client:
+At **session creation**, against the browser client:
 
 ```ts
 Browser.setDownloadBehavior({
@@ -93,6 +93,14 @@ Browser.setDownloadBehavior({
   eventsEnabled: true,
 })
 ```
+
+Set once when the session is created, not lazily when a download is armed.
+One chromium per user and one profile per user means one downloads directory
+per user, known before any page is open — so there is nothing to defer. The
+payoff is that a download the agent never armed a wait for still **lands in the
+right place** and shows up in `files_list`, instead of vanishing into a temp
+directory. Routing is a property of the session; events are only needed to
+*await* a specific one.
 
 `allowAndName` — not `allow` — names each file on disk by its download GUID.
 Two reasons, and the second matters more than the first:
@@ -157,7 +165,7 @@ domain:
 - `DOM.setFileInputFiles({ objectId, files: [<absolute workspace path>] })`
 
 Tool: `browser_upload_file({ selector, name })`. `name` is a workspace-relative
-name resolved server-side against the calling user's root — the agent never
+name resolved by `userFilePath(userId, name)` against the calling user's root — the agent never
 supplies a path, and the resolved absolute path never leaves the server. An
 arbitrary absolute path here would be an arbitrary-file-read primitive
 (chromium would happily upload `/etc/passwd` to a remote form), which is
