@@ -84,6 +84,7 @@ not portal-side.
 |---|---|---|---|---|
 | `BROWSER_PROFILES_DIR` | string | `dirname(DATABASE_URL)/browser-profiles` | no | Root for per-user Chromium profiles |
 | `BROWSER_SESSION_TTL_SECONDS` | positive integer | `300` | no | Idle cutoff before a warm browser session is killed. Checked every 30 seconds |
+| `BROWSER_LAUNCH_TIMEOUT_MS` | positive integer | `15000` | no | How long a chromium launch may take to bring DevTools up before the call fails. A cold start in a container measured 5.3 s; raise it on slow storage or small nodes |
 | `BROWSER_PROFILE_TTL_DAYS` | non-negative integer | `30` | no | Age at which an unused whole profile is **deleted**. `0` disables deletion |
 | `BROWSER_PROFILE_REAP_INTERVAL_SECONDS` | positive integer | `3600` | no | Disk-reaper interval. It also runs once immediately at boot |
 | `BROWSER_DISK_CACHE_MB` | non-negative integer | `32` | no | Becomes Chromium's `--disk-cache-size` |

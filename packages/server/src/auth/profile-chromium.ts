@@ -61,22 +61,32 @@ async function getFreePort(): Promise<number> {
   });
 }
 
-async function pollJson(
-  url: string,
-  attempts = 40,
-  intervalMs = 100,
-  abort?: () => Error | null
-): Promise<unknown> {
+export interface PollOpts {
+  /** Give up this long after the first attempt. Budget in time, not attempts:
+   *  an attempt count silently shrinks the budget when each fetch is slow. */
+  deadlineMs: number;
+  intervalMs?: number;
+  /** Called before each attempt; a returned Error ends the poll with it. */
+  abort?: () => Error | null;
+  /** Test seam. */
+  fetchImpl?: typeof fetch;
+}
+
+export async function pollJson(url: string, opts: PollOpts): Promise<unknown> {
+  const intervalMs = opts.intervalMs ?? 100;
+  const doFetch = opts.fetchImpl ?? fetch;
+  const deadline = Date.now() + opts.deadlineMs;
   let lastErr: unknown = null;
-  for (let i = 0; i < attempts; i++) {
-    const stop = abort?.();
+  for (;;) {
+    const stop = opts.abort?.();
     if (stop) throw stop;
     try {
-      const res = await fetch(url);
+      const res = await doFetch(url);
       if (res.ok) return await res.json();
     } catch (e) {
       lastErr = e;
     }
+    if (Date.now() >= deadline) break;
     await new Promise((r) => setTimeout(r, intervalMs));
   }
   throw new Error(`Failed to reach ${url}: ${String(lastErr)}`);
@@ -211,12 +221,13 @@ export async function spawnProfileChromium(
   };
 
   try {
-    await pollJson(`http://127.0.0.1:${remotePort}/json/version`, 40, 100, launchFailure);
-    const versionInfo = (await pollJson(`http://127.0.0.1:${remotePort}/json/version`)) as VersionInfo;
+    const versionUrl = `http://127.0.0.1:${remotePort}/json/version`;
+    await pollJson(versionUrl, { deadlineMs: config.BROWSER_LAUNCH_TIMEOUT_MS, abort: launchFailure });
+    const versionInfo = (await pollJson(versionUrl, { deadlineMs: 2_000 })) as VersionInfo;
     const tDevtools = Date.now();
     let target: TargetInfo | undefined;
     for (let i = 0; i < 30; i++) {
-      const targets = (await pollJson(`http://127.0.0.1:${remotePort}/json`)) as TargetInfo[];
+      const targets = (await pollJson(`http://127.0.0.1:${remotePort}/json`, { deadlineMs: 2_000 })) as TargetInfo[];
       target = targets.find((t) => t.type === "page");
       if (target && target.url && (opts.startUrl ? target.url !== "about:blank" : true)) break;
       await new Promise((r) => setTimeout(r, 100));
