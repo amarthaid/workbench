@@ -3,7 +3,7 @@ title: Browser
 description: The built-in headless browser an agent drives directly — navigate, click, type, read, screenshot, and hand control to a human.
 ---
 
-`browser` is an internal plugin. It lives in the server's own source rather than under `PLUGINS_DIR`, and it declares `auth: { type: "none" }`. It is therefore always connected and needs no setup. Its nine tools drive a warm headless Chromium session that belongs to one user.
+`browser` is an internal plugin. It lives in the server's own source rather than under `PLUGINS_DIR`, and it declares `auth: { type: "none" }`. It is therefore always connected and needs no setup. Its fourteen tools drive a warm headless Chromium session that belongs to one user.
 
 It is internal on purpose. The handlers reach straight into the browser-session layer. Keeping that out of the plugin context means a third-party plugin can never drive a user's logged-in browser and steal their cookies. The name `browser` is reserved, and a plugin directory using it is refused at load time.
 
@@ -13,12 +13,14 @@ It is internal on purpose. The handlers reach straight into the browser-session 
 |---|---|
 | Plugin id | `browser` |
 | Auth | None (internal, always connected) |
-| Tools | 9 |
+| Tools | 14 |
 | Session lifetime | `BROWSER_SESSION_TTL_SECONDS`, default 300 seconds idle |
 
 ## The per-user session model
 
 There is exactly one browser per user, backed by a persistent profile on disk. Every action tool opens the session if it is not already running, and refreshes its idle timer. A sequence of calls therefore reuses one warm browser instead of paying the startup cost each time.
+
+**One user, one browser, one page.** That is the whole model, and it is worth being precise about what `session_id` is and is not. `browser_start` returns `session_id = HMAC(SESSION_SECRET, userId)`: the same value every time for the same user. It is a *routing key*, so that behind a load balancer every `browser_*` call can be hashed to the replica that owns the Chromium process (see [browser session pod affinity](../field-notes/2026-09-10-browser-session-pod-affinity.md)). It is not a credential — the bearer still authorizes every call — and it is not a session handle: calling `browser_start` twice does not give you two browsers. Two agents driving the same user at once share one tab and will step on each other. Every tool except `browser_start` requires it, and a value that is not this user's key is refused with `BAD_SESSION_KEY` rather than run on whichever replica it happened to reach.
 
 The cookie-auth capture flow uses that same browser. The two **share** it rather than excluding each other. Capture and the `browser_*` tools resolve the same warm session, so a capture can start while an agent is driving. `browser_close` ends the process but keeps the profile, so the logged-in state survives.
 
@@ -28,8 +30,10 @@ Because the profile persists, sites the user logged into stay logged in across s
 
 | Tool | Purpose |
 |---|---|
+| `browser_start` | Mint the `session_id` every other tool takes. Call it once per task |
 | `browser_navigate` | Navigate to a URL; returns the final URL and page title |
 | `browser_read_text` | Read the page's visible text (`document.body.innerText`) |
+| `browser_evaluate` | Run JavaScript in the page and get its value back — click by selector, scrape the DOM, wait on a promise |
 | `browser_screenshot` | Capture the current viewport as a downscaled image |
 | `browser_click` | Click at viewport coordinates `(x, y)` with left, right, or middle button |
 | `browser_type` | Type text into the focused element |
@@ -55,16 +59,24 @@ The cheaper habit is to prefer `browser_read_text` for text-heavy pages, forms, 
 
 `browser_live_url` returns a URL into the portal's browser canvas — `${PORTAL_URL}/browser?t=<token>` — carrying a signed token whose lifetime is `CONNECT_TTL_SECONDS` (default 600 seconds).
 
-Opening it attaches a live view of the *same* session the agent is driving. A person can take over by hand to solve a CAPTCHA, complete an SSO prompt, or click through a consent screen. They can then leave the page. The agent's next tool call continues in the browser they just used. This is the escape hatch for anything an agent cannot or should not do itself.
+Opening it attaches a live view of the *same* session the agent is driving — the portal's canvas dials the very page target the tools speak to, so the human sees the agent's tab, not a new one. A person can take over by hand to solve a CAPTCHA, complete an SSO prompt, or click through a consent screen. They can then leave the page. The agent's next tool call continues in the browser they just used. This is the escape hatch for anything an agent cannot or should not do itself.
 
-The live-view connection is authorized by an `Authorization` header on every request, not through the URL, and the browser canvas only accepts connections from allowed origins.
+The link is a claim, not a capability: the person opening it has to be signed in to the portal as the same workbench user, or the server refuses with an account mismatch before warming anything. The live-view connection is then authorized by an `Authorization` header on every request, not through the URL, the browser canvas only accepts connections from allowed origins, and every request after the first carries the same per-user routing key the agent's `session_id` is — the portal mints it from `/attach`, so the view and the tools land on the same replica. Closing the tab detaches the view; it does not close the browser.
 
 ## Notes and gotchas
 
 > [!WARNING] `browser_navigate` accepts only http and https, and does not block private addresses
 > The URL is validated as a URL and then explicitly required to start with `http://` or `https://`, which rules out `file://` and other schemes. There is no private-IP or metadata-endpoint block, so a session can reach anything on the network the server sits on. Treat a URL an agent picked up from untrusted page content as untrusted, and run the server where that reachability is acceptable.
 
-Clicks are coordinates, not selectors. Take a screenshot to find a target, then click it — and click a field before `browser_type`, which types into whatever currently has focus.
+Clicks are coordinates, not selectors. Take a screenshot to find a target, then click it — and click a field before `browser_type`, which types into whatever currently has focus. When a selector is what you have, `browser_evaluate` is the Playwright-shaped escape hatch:
+
+```
+browser_evaluate({ session_id, expression: "document.querySelector('button.submit').click()" })
+browser_evaluate({ session_id, expression: "Array.from(document.querySelectorAll('tr')).map(r => r.innerText)" })
+browser_evaluate({ session_id, expression: "new Promise(r => setTimeout(() => r(document.title), 1000))" })
+```
+
+The expression runs in the page's main world with the page's cookies, and a promise is awaited. The result has to be a plain JSON value — DOM nodes and functions come back as `{}` — and a result over 100,000 characters is refused as `RESULT_TOO_LARGE` rather than cut off, so narrow the expression. An exception comes back as `EVALUATION_FAILED` with the message. The page's content is untrusted input; do not let it choose what you evaluate next.
 
 ## Moving files in and out
 
