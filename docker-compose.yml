@@ -16,6 +16,13 @@ services:
       - PORT=3000
       - NODE_ENV=production
       - DATABASE_URL=/data/tokens.db
+      # Agent file workspace on the mounted volume. The default is relative to
+      # the process cwd, which inside the image is the container filesystem —
+      # every upload would vanish on the next `up --build`. Sharing ./data with
+      # tokens.db is fine for a local bind mount; a real deployment gives the
+      # workspace its own volume (see .env.example) so filling it cannot take
+      # the database down.
+      - WORKSPACE_DIR=/data/workspace
       - SERVER_PUBLIC_URL=${SERVER_PUBLIC_URL:-http://localhost:3000}
       - PORTAL_URL=${PORTAL_URL:-http://localhost:3000}
       # LOCAL ONLY (do not commit): load external plugins from the mounted dir.
