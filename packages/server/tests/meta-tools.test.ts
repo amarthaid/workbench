@@ -283,6 +283,40 @@ describe("meta-tools", () => {
       expect(t.handler).toHaveBeenCalledWith(expect.anything(), { name: "{{vault:pw}}" });
       expect(result.result).toEqual({ got: "{{vault:pw}}" });
     });
+
+    it("scrubs the secret out of an INVALID_ARGS zod message", async () => {
+      const { z } = await import("zod");
+      const t = {
+        name: "mode_tool",
+        integration: "test-integ",
+        inputSchema: z.object({ mode: z.enum(["a", "b"]) }),
+        handler: vi.fn(),
+      };
+      vi.spyOn(registry, "getTool").mockReturnValue(t as any);
+      const result = await runOne(findTool("execute_tools"), {
+        tool: "mode_tool",
+        args: { mode: "{{vault:pw}}" },
+      });
+      expect(result.error).not.toContain("hunter2");
+      expect(result.error).toContain("{{vault:pw}}");
+      expect(t.handler).not.toHaveBeenCalled();
+    });
+
+    it("fails closed when the handler result can't be scrubbed", async () => {
+      const { z } = await import("zod");
+      const t = {
+        name: "unscrubbable",
+        integration: "test-integ",
+        inputSchema: z.object({ text: z.string() }),
+        handler: vi.fn(async () => ({ big: 1n })),
+      };
+      vi.spyOn(registry, "getTool").mockReturnValue(t as any);
+      const result = await runOne(findTool("execute_tools"), {
+        tool: "unscrubbable",
+        args: { text: "{{vault:pw}}" },
+      });
+      expect(result.error).toBe("VAULT_SCRUB_FAILED");
+    });
   });
 
   describe("execute_tools (batch)", () => {

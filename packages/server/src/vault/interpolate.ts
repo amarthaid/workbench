@@ -59,6 +59,39 @@ export function scrubString(s: string, substituted: Map<string, string>): string
   return out;
 }
 
+export class VaultScrubError extends Error {
+  readonly code = "VAULT_SCRUB_FAILED" as const;
+  constructor(cause: unknown) {
+    super("Failed to scrub vault values from tool result");
+    this.name = "VaultScrubError";
+    this.cause = cause;
+  }
+}
+
+// Scrub a JSON-safe tree structurally rather than as text, so a secret that
+// happens to look like a JSON scalar (a number, "true", "null") is only
+// matched where it actually sits as a value or key — never by regexing raw
+// JSON text, which can't distinguish a value's position from surrounding
+// string content (see 2026-09-16 finding on the earlier regex approach).
+function scrubJson(node: unknown, substituted: Map<string, string>): unknown {
+  if (typeof node === "string") return scrubString(node, substituted);
+  if (node === null || typeof node === "number" || typeof node === "boolean") {
+    for (const [name, value] of substituted) {
+      if (value !== "" && String(node) === value) return `{{vault:${name}}}`;
+    }
+    return node;
+  }
+  if (Array.isArray(node)) return node.map((v) => scrubJson(v, substituted));
+  if (node && typeof node === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(node)) {
+      out[scrubString(k, substituted)] = scrubJson(v, substituted);
+    }
+    return out;
+  }
+  return node;
+}
+
 /**
  * Put the references back into a tool result before it re-enters the model.
  *
@@ -67,38 +100,21 @@ export function scrubString(s: string, substituted: Map<string, string>): string
  * value would collide with unrelated output. Best-effort against encodings: a
  * base64'd or URL-encoded echo is not caught.
  *
- * A value that looks like a JSON scalar (e.g. a secret of "5432" fed through
- * a tool's `z.coerce.number()`) can come back as a bare, unquoted number
- * rather than inside a string. Replacing it in place with an unquoted
- * `{{vault:name}}` would corrupt the JSON, so that case is scrubbed first and
- * re-quoted; the ordinary in-string replacement below then finds nothing left.
+ * Fails closed: a value the JSON round-trip can't represent (BigInt, a cycle)
+ * throws `VaultScrubError` rather than silently falling back to returning the
+ * unscrubbed result — the caller (executeSingle) turns that into an error
+ * response, never a plaintext leak.
  */
 export function scrubVaultValues<T>(value: T, substituted: Map<string, string>): T {
   if (substituted.size === 0) return value;
   if (value === undefined || typeof value === "function") return value;
+  let normalised: unknown;
   try {
-    const json = JSON.stringify(value);
-    if (json === undefined) return value;
-    const entries = [...substituted].sort((a, b) => b[1].length - a[1].length);
-    let out = json;
-    for (const [name, val] of entries) {
-      if (val === "") continue;
-      const placeholder = `{{vault:${name}}}`;
-      if (/^(-?\d+(\.\d+)?|true|false|null)$/.test(val)) {
-        out = out.replace(
-          new RegExp(`(?<=[:,[\\s])${escapeRe(val)}(?=\\s*[,\\]}])`, "g"),
-          JSON.stringify(placeholder)
-        );
-      }
-      // The haystack is JSON-encoded, so a value containing `"` or `\` is
-      // encoded as `\"`/`\\` there. Match against the JSON-escaped form.
-      const quotedNeedle = JSON.stringify(val).slice(1, -1);
-      out = out.replace(new RegExp(escapeRe(quotedNeedle), "g"), placeholder);
-    }
-    return JSON.parse(out) as T;
-  } catch {
-    return value;
+    normalised = JSON.parse(JSON.stringify(value));
+  } catch (e) {
+    throw new VaultScrubError(e);
   }
+  return scrubJson(normalised, substituted) as T;
 }
 
 export async function resolveVaultRefs(

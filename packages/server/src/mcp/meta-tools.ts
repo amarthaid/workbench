@@ -12,7 +12,7 @@ import { config } from "../config";
 import { createPending, getPending, reapOne } from "../auth/connections";
 import { signConnectToken } from "../auth/connect-token";
 import { signCurlToken } from "../auth/curl-session";
-import { resolveVaultRefs, scrubVaultValues, scrubString, VaultRefError } from "../vault/interpolate";
+import { resolveVaultRefs, scrubVaultValues, scrubString, VaultRefError, VaultScrubError } from "../vault/interpolate";
 import { touchUsed } from "../vault/store";
 
 // `connect` and `get_auth_url` are the same tool under two names (kept for
@@ -163,14 +163,16 @@ export async function executeSingle(
             error: "INVALID_ARGS",
             duration_ms: Date.now() - start,
           });
-          return { error: `Invalid arguments for ${toolName}: ${parsed.error?.message ?? "schema mismatch"}` };
+          return {
+            error: `Invalid arguments for ${toolName}: ${scrubString(parsed.error?.message ?? "schema mismatch", substituted)}`,
+          };
         }
         parsedArgs = parsed.data;
       } catch (e) {
         // Unexpected throw during schema parsing (e.g. a malformed schema).
         // Don't swallow silently: record it observably, then fall through
         // with raw args so execution still proceeds.
-        const err = e instanceof Error ? e.message : String(e);
+        const err = scrubString(e instanceof Error ? e.message : String(e), substituted);
         await auditLogger.log({
           user_id: userId,
           integration: targetTool.integration,
@@ -211,6 +213,22 @@ export async function executeSingle(
         toolExecutionDuration.observe({ integration: targetTool.integration, tool: toolName, success: "true" }, durationS);
         return { result };
       } catch (e) {
+        if (e instanceof VaultScrubError) {
+          // The result could not be scrubbed structurally (e.g. a BigInt or
+          // circular value the handler returned). Never fall back to
+          // returning it unscrubbed — fail closed instead.
+          const duration_ms = Date.now() - start;
+          await auditLogger.log({
+            user_id: userId,
+            integration: targetTool.integration,
+            tool: toolName,
+            action: "EXECUTE",
+            success: false,
+            error: e.code,
+            duration_ms,
+          });
+          return { error: e.code };
+        }
         const err = scrubString(e instanceof Error ? e.message : String(e), substituted);
         const duration_ms = Date.now() - start;
         await auditLogger.log({

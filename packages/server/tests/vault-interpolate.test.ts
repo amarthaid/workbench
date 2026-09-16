@@ -7,6 +7,7 @@ import {
   scrubVaultValues,
   scrubString,
   resolveVaultRefs,
+  VaultScrubError,
 } from "../src/vault/interpolate";
 
 describe("findVaultRefs", () => {
@@ -84,6 +85,50 @@ describe("scrub", () => {
   it("catches values with JSON-escaped characters", () => {
     const m = new Map([["q", 'say "hi"\\now']]);
     expect(scrubVaultValues({ t: 'x say "hi"\\now y' }, m)).toEqual({ t: "x {{vault:q}} y" });
+  });
+
+  it("scrubs a scalar-looking secret embedded inside a string with punctuation", () => {
+    const m = new Map([["port", "5432"]]);
+    expect(scrubVaultValues({ msg: "port: 5432, ok" }, m)).toEqual({ msg: "port: {{vault:port}}, ok" });
+  });
+
+  it("scrubs a scalar-looking secret that lands as a bare JSON number", () => {
+    const m = new Map([["port", "5432"]]);
+    expect(scrubVaultValues({ port: 5432 }, m)).toEqual({ port: "{{vault:port}}" });
+  });
+
+  it("matches a numeric secret exactly, never a longer number that merely contains it", () => {
+    const m = new Map([["p", "12"]]);
+    expect(scrubVaultValues({ n: 12, m: 1234, s: "x12y" }, m)).toEqual({
+      n: "{{vault:p}}",
+      m: 1234,
+      s: "x{{vault:p}}y",
+    });
+  });
+
+  it("scrubs a boolean-looking secret both as a bare boolean and inside a string", () => {
+    const m = new Map([["flag", "true"]]);
+    expect(scrubVaultValues({ ok: true, s: "true" }, m)).toEqual({
+      ok: "{{vault:flag}}",
+      s: "{{vault:flag}}",
+    });
+  });
+
+  it("scrubs a secret that appears as an object key", () => {
+    const m = new Map([["pw", "hunter2"]]);
+    expect(scrubVaultValues({ hunter2: 1 }, m)).toEqual({ "{{vault:pw}}": 1 });
+  });
+
+  it("fails closed with VaultScrubError instead of returning the unscrubbed result", () => {
+    const m = new Map([["pw", "x"]]);
+    expect(() => scrubVaultValues({ big: 1n }, m)).toThrow(VaultScrubError);
+    try {
+      scrubVaultValues({ big: 1n }, m);
+      throw new Error("expected scrubVaultValues to throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(VaultScrubError);
+      expect((e as VaultScrubError).code).toBe("VAULT_SCRUB_FAILED");
+    }
   });
 });
 
