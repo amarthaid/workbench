@@ -101,9 +101,13 @@ nothing else). Errors are typed: `INVALID_NAME`, `NOT_FOUND`, `TOO_LARGE`.
 - No reveal, no copy button. The list endpoint physically cannot return the
   value.
 
-REST, portal session **or** MCP bearer via the same `authenticate` helper the
-workspace routes use (`workspace/routes.ts:46`), so the agent can call `list`
-over REST too:
+REST. `GET` accepts any bearer — API key, OAuth access token, or portal
+session — via the same `authenticate` helper the workspace routes use
+(`workspace/routes.ts:46`), so the agent can call `list` over REST too.
+`PUT` and `DELETE` require a **portal session**: `verifySession` on the bearer,
+`403 PORTAL_SESSION_REQUIRED` otherwise. The agent's own credential must not be
+able to rotate a secret to a value it chose (and then read that back) or wipe
+the vault — that is the Goal read from the write side:
 
 | Method   | Path                    | Body / result                                  |
 |----------|-------------------------|------------------------------------------------|
@@ -113,7 +117,7 @@ over REST too:
 | `GET`    | `/api/vault/otl/:token` | **unauthenticated**, see below                 |
 
 `PUT` is the only route that carries a plaintext value, and it is only ever
-called by the portal. The pino `req.body` is not logged today; the route adds
+called by the portal — now enforced, not just expected. The pino `req.body` is not logged today; the route adds
 nothing that would change that.
 
 ### MCP tools

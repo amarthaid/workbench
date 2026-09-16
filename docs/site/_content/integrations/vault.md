@@ -26,8 +26,13 @@ Write `{{vault:NAME}}` anywhere in another tool's arguments:
 ```json
 { "tool": "browser_type", "args": { "session_id": "…", "text": "{{vault:site_password}}" } }
 { "tool": "github_create_webhook", "args": { "secret": "{{vault:webhook_secret}}" } }
-{ "tool": "curl", "args": { "headers": { "Authorization": "Bearer {{vault:api_token}}" } } }
+{ "tool": "gitlab_trigger_pipeline", "args": { "project": "acme/demo-repo", "ref": "main", "variables": { "DEPLOY_TOKEN": "{{vault:deploy_token}}" } } }
 ```
+
+Only tools that run through `executeSingle` interpolate — that is every
+registry tool, over MCP, `execute_tools`, or the REST endpoint. `curl_session`
+and the `/c/<integration>/<path>` proxy are meta-tools that sit outside it, so
+a `{{vault:NAME}}` written into either is sent through as the literal text.
 
 The server resolves the reference after the arguments leave the model and before the tool's own validation runs, so the value gets the tool's normal coercion. It works for every tool — plugins, `browser_*`, `files_*`, the REST endpoint — because it happens in the one place all of them execute.
 
@@ -37,7 +42,14 @@ An unknown name fails the call with `VAULT_SECRET_NOT_FOUND` before the tool run
 
 Any occurrence of a value the call substituted is replaced with its reference in the result and in any error message before the model sees it. Scrubbing walks the result structurally — every string, and every number, boolean, or null leaf equal to a substituted value — plus keys, not just values, so `browser_evaluate` returning an input's `.value` after you typed a password into it shows `{{vault:site_password}}`, not the password. Validation errors go through the same scrub, so a malformed call can't leak a value in its `INVALID_ARGS` message either. If the result can't be serialized as JSON at all, the call fails closed with `{ "error": "VAULT_SCRUB_FAILED" }` instead of returning the unscrubbed result.
 
-**The limit:** only values substituted *in that call* are scrubbed. If a page still displays the password and a *later* `browser_read_text` reads it, nothing is substituted in that later call and nothing is scrubbed. After a login, navigate away before reading the page. Values that come back encoded (base64, URL-escaped, split across DOM nodes) are not caught either. This is containment for the common case, not a guarantee.
+**The limits:**
+
+- **Same call only.** Only values substituted *in that call* are scrubbed. If a page still displays the password and a *later* `browser_read_text` reads it, nothing is substituted in that later call and nothing is scrubbed. After a login, navigate away before reading the page.
+- **Same call only, for files too.** A value written into a workspace file by `files_write` is stored there in plaintext. A later `files_read`, or a presigned download of that file, substitutes nothing and so scrubs nothing, and returns the value as written. The rule that applies to a browser page applies to a file exactly the same way.
+- **Canonicalisation.** Matching compares the value as the tool rendered it. A numeric-looking secret that the tool's schema coerces comes back re-rendered and is not caught: `"5432.0"` through `z.coerce.number()` is the number `5432`, which is not the stored string.
+- **Encodings.** Values that come back base64'd, URL-escaped, or split across DOM nodes are not caught.
+
+This is containment for the common case, not a guarantee. See [the finding on why scrubbing walks the structure rather than the JSON text](../field-notes/2026-09-16-vault-scrub-json-text.md).
 
 ## Handing a value to something outside workbench
 
@@ -70,10 +82,16 @@ The tool's description tells the agent not to fetch the URL itself and not to pr
 
 | Method | Path | |
 |---|---|---|
-| `GET` | `/api/vault` | list (bearer) |
-| `PUT` | `/api/vault/:name` | `{ value, description? }` → 201 created / 200 replaced (bearer) |
-| `DELETE` | `/api/vault/:name` | 204; revokes outstanding one-time URLs (bearer) |
+| `GET` | `/api/vault` | list (any bearer: API key, OAuth token, or portal session) |
+| `PUT` | `/api/vault/:name` | `{ value, description? }` → 201 created / 200 replaced (portal session) |
+| `DELETE` | `/api/vault/:name` | 204; revokes outstanding one-time URLs (portal session) |
 | `GET` | `/api/vault/otl/:token` | redeem once → `text/plain` body; 404 otherwise. No auth. |
+
+Listing is readable with any bearer, including the agent's own API key or OAuth
+token. Writing and deleting are not: they need the portal-session token a
+signed-in human holds, and anything else gets `403 PORTAL_SESSION_REQUIRED`.
+The agent may use a secret; it may not read one, and it may not rotate one to a
+value it chose and then read that instead.
 
 ## Threat model
 
