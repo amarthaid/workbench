@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { db } from "../src/db";
 import {
   putSecret,
@@ -99,5 +99,40 @@ describe("vault store", () => {
   it("VaultError carries its code as message", () => {
     const e = new VaultError("TOO_LARGE");
     expect(e.message).toBe("TOO_LARGE");
+  });
+
+  it("preserves existing description when omitted, clears it on null", async () => {
+    await putSecret("u1", "k", "a", "d");
+    await putSecret("u1", "k", "b");
+    let [e] = await listSecrets("u1");
+    expect(e.description).toBe("d");
+
+    await putSecret("u1", "k", "c", null);
+    [e] = await listSecrets("u1");
+    expect(e.description).toBeNull();
+  });
+
+  it("recovers when another writer inserts the row between UPDATE and INSERT", async () => {
+    const originalRun = db.run.bind(db);
+    const spy = vi.spyOn(db, "run").mockImplementationOnce(async () => {
+      // Simulate a concurrent putSecret winning the race: the row is created
+      // by someone else right after our UPDATE saw no matching row.
+      await originalRun(
+        "INSERT INTO user_vaults (id, user_id, name, value_enc, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ["concurrent-id", "u1", "race", Buffer.from("other"), null, 1, 1]
+      );
+      return { changes: 0 };
+    });
+
+    const result = await putSecret("u1", "race", "mine");
+    spy.mockRestore();
+
+    expect(result.created).toBe(false);
+    const rows = await db.all("SELECT id FROM user_vaults WHERE user_id = ? AND name = ?", [
+      "u1",
+      "race",
+    ]);
+    expect(rows.length).toBe(1);
+    expect(await readSecretValue("u1", "race")).toBe("mine");
   });
 });

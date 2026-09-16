@@ -49,17 +49,42 @@ export async function putSecret(
   if (value === "") throw new VaultError("EMPTY_VALUE");
   if (Buffer.byteLength(value, "utf8") > VAULT_MAX_VALUE_BYTES) throw new VaultError("TOO_LARGE");
   const enc = encrypt(value);
-  const desc = description ?? null;
-  const { changes } = await db.run(
-    "UPDATE user_vaults SET value_enc = ?, description = ?, updated_at = ? WHERE user_id = ? AND name = ?",
-    [enc, desc, nowSec(), userId, name]
-  );
-  if (changes === 1) return { created: false };
-  await db.run(
-    "INSERT INTO user_vaults (id, user_id, name, value_enc, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    [crypto.randomUUID(), userId, name, enc, desc, nowSec(), nowSec()]
-  );
-  return { created: true };
+
+  // `description` is a tri-state: undefined = leave whatever is there alone,
+  // null = clear it, string = set it. Only branch the UPDATE — an omitted
+  // description on a brand-new row simply has nothing to preserve, so the
+  // INSERT below always writes an explicit value (null when unset).
+  const runUpdate = async (): Promise<boolean> => {
+    const { changes } =
+      description === undefined
+        ? await db.run(
+            "UPDATE user_vaults SET value_enc = ?, updated_at = ? WHERE user_id = ? AND name = ?",
+            [enc, nowSec(), userId, name]
+          )
+        : await db.run(
+            "UPDATE user_vaults SET value_enc = ?, description = ?, updated_at = ? WHERE user_id = ? AND name = ?",
+            [enc, description, nowSec(), userId, name]
+          );
+    return changes === 1;
+  };
+
+  if (await runUpdate()) return { created: false };
+
+  // Row didn't exist a moment ago — insert it. A concurrent putSecret for the
+  // same (userId, name) could have inserted it in the meantime, in which case
+  // this INSERT hits the UNIQUE(user_id, name) constraint and throws a raw
+  // driver error. Treat that as "someone else just created it": retry the
+  // UPDATE once, and only surface the original error if that still misses.
+  try {
+    await db.run(
+      "INSERT INTO user_vaults (id, user_id, name, value_enc, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      [crypto.randomUUID(), userId, name, enc, description ?? null, nowSec(), nowSec()]
+    );
+    return { created: true };
+  } catch (err) {
+    if (await runUpdate()) return { created: false };
+    throw err;
+  }
 }
 
 export async function deleteSecret(userId: string, name: string): Promise<boolean> {
