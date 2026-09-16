@@ -25,8 +25,7 @@ Write `{{vault:NAME}}` anywhere in another tool's arguments:
 
 ```json
 { "tool": "browser_type", "args": { "session_id": "…", "text": "{{vault:site_password}}" } }
-{ "tool": "github_create_webhook", "args": { "secret": "{{vault:webhook_secret}}" } }
-{ "tool": "gitlab_trigger_pipeline", "args": { "project": "acme/demo-repo", "ref": "main", "variables": { "DEPLOY_TOKEN": "{{vault:deploy_token}}" } } }
+{ "tool": "gitlab_trigger_pipeline", "args": { "project": "acme/demo-repo", "ref": "main", "variables": { "DEPLOY_TOKEN": "{{vault:deploy_token}}", "DATABASE_URL": "postgres://app:{{vault:db_password}}@db.example.com/app" } } }
 ```
 
 Only tools that run through `executeSingle` interpolate — that is every

@@ -30,28 +30,37 @@ async function authenticate(request: FastifyRequest, reply: FastifyReply): Promi
 // could rotate it to a value it chose and then read that, or wipe the vault.
 // So PUT/DELETE require the portal-session JWT, which only a signed-in human
 // holds, and `verifySession` accepts nothing else.
+// 401 and 403 mean different things here and the portal acts on the
+// difference. 401 = no usable credential at all (missing, malformed, or an
+// expired session JWT), carrying the same WWW-Authenticate header the rest of
+// the API sends, so the portal's existing 401 handling clears `awb_token` and
+// sends the human to sign in again. 403 = a credential the server does accept,
+// just not for this — an API key or OAuth token — and re-authenticating would
+// not help, so the portal must not log the human out over it.
 async function authenticatePortal(
   request: FastifyRequest,
   reply: FastifyReply
 ): Promise<string | null> {
   const header = (request.headers.authorization as string | undefined) ?? "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  if (!token) {
-    const prm = `${config.SERVER_PUBLIC_URL}/.well-known/oauth-protected-resource`;
-    reply.header("WWW-Authenticate", `Bearer realm="a-workbench", resource_metadata="${prm}"`);
-    reply.status(401).send({ error: "Unauthorized", resource_metadata: prm });
-    return null;
+  if (token) {
+    try {
+      const { userId } = await verifySession(token);
+      if (userId) return userId;
+    } catch {
+      // Not a portal session. It may still be an agent credential — ask.
+    }
+    if (await resolveMcpUser(request.headers as Record<string, string>)) {
+      reply.status(403).send({
+        error: "PORTAL_SESSION_REQUIRED",
+        message: "Secrets are written and deleted from the portal only.",
+      });
+      return null;
+    }
   }
-  try {
-    const { userId } = await verifySession(token);
-    if (userId) return userId;
-  } catch {
-    // fall through
-  }
-  reply.status(403).send({
-    error: "PORTAL_SESSION_REQUIRED",
-    message: "Secrets are written and deleted from the portal only.",
-  });
+  const prm = `${config.SERVER_PUBLIC_URL}/.well-known/oauth-protected-resource`;
+  reply.header("WWW-Authenticate", `Bearer realm="a-workbench", resource_metadata="${prm}"`);
+  reply.status(401).send({ error: "Unauthorized", resource_metadata: prm });
   return null;
 }
 

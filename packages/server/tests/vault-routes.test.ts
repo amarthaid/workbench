@@ -77,6 +77,20 @@ describe("vault routes", () => {
     expect(list.statusCode).toBe(200);
     expect(list.json().secrets).toEqual([expect.objectContaining({ name: "pw" })]);
 
+    // A bearer that is neither a session nor a credential the server accepts
+    // is a 401, not a 403: re-authenticating is exactly what would help, and
+    // the portal clears its stored token on a 401. An expired session JWT
+    // lands here too — verifySession rejects it and resolveMcpUser does not
+    // know it.
+    const junk = { authorization: "Bearer garbage" };
+    const jput = await app.inject({ method: "PUT", url: "/api/vault/pw", headers: junk, payload: { value: "x" } });
+    expect(jput.statusCode).toBe(401);
+    expect(jput.headers["www-authenticate"]).toContain('Bearer realm="a-workbench"');
+    const jdel = await app.inject({ method: "DELETE", url: "/api/vault/pw", headers: junk });
+    expect(jdel.statusCode).toBe(401);
+    expect(jdel.headers["www-authenticate"]).toContain('Bearer realm="a-workbench"');
+    expect(await readSecretValue("u1", "pw")).toBe("hunter2");
+
     // The portal session writes and deletes.
     expect(
       (await app.inject({ method: "PUT", url: "/api/vault/pw", headers: P1, payload: { value: "rotated" } })).statusCode
