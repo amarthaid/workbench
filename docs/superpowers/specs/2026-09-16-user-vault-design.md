@@ -223,10 +223,12 @@ scrubVaultValues(result, substituted) → result'
 
 ### Reaper
 
-`reapExpiredOtl` is added to the existing `npm run reap` CLI
-(`packages/server/src/reap/cli.ts`) alongside the workspace presign sweep.
-Rows are tiny and self-expiring (every read filters on `expires_at`), so the
-sweep is hygiene, not correctness.
+`reapExpiredOtl` runs on an in-process interval (`startVaultReaper`, started
+from `index.ts` next to jots' `startUploadReaper`), not as a `npm run reap`
+subcommand: the reap CLI must stay free of `../config` and `../db` so a
+directory-sweeping CronJob never carries `ENCRYPTION_KEY`. These are database
+rows, not a shared disk, so N pods sweeping concurrently is harmless. Every
+read already filters on `expires_at`; the sweep is hygiene, not correctness.
 
 ### Config
 
