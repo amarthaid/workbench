@@ -290,7 +290,9 @@ describe("browser_upload_file", () => {
     expect(done.name).toBe("a.csv");
     const call = client.sent.find((c) => c.method === "DOM.setFileInputFiles");
     expect(call).toBeDefined();
-    expect(call!.params.files).toEqual([path.join(userWorkspaceDir("u1"), "a.csv")]);
+    // The handler hands chromium the realpath (resolveExistingFile realpaths the
+    // base too — /tmp and /var are symlinks on macOS), so compare against that.
+    expect(call!.params.files).toEqual([fs.realpathSync(path.join(userWorkspaceDir("u1"), "a.csv"))]);
     expect(call!.params.objectId).toBe("obj-1");
   });
 
