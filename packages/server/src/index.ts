@@ -9,6 +9,8 @@ import { registerJotRoutes } from "./jots/routes";
 import { registerCurlProxy } from "./api/curl-proxy";
 import { registerRestRoutes } from "./api/rest-routes";
 import { registerWorkspaceRoutes } from "./workspace/routes";
+import { registerVaultRoutes } from "./vault/routes";
+import { startVaultReaper } from "./vault/otl";
 import { startUploadReaper } from "./jots/pending";
 import { loadPlugins } from "./plugins/loader";
 import { resolveMcpUser } from "./auth/oauth-server/resolve";
@@ -180,8 +182,10 @@ async function main() {
 
   await registerCurlProxy(app);
   await registerWorkspaceRoutes(app);
+  await registerVaultRoutes(app);
   await registerJotRoutes(app);
   startUploadReaper();
+  startVaultReaper();
 
   // Serve the built portal (static + SPA fallback). Registered last so API,
   // MCP, and the CDP bridge routes take precedence and the SPA fallback only
