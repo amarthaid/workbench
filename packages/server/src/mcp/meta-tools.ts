@@ -12,6 +12,8 @@ import { config } from "../config";
 import { createPending, getPending, reapOne } from "../auth/connections";
 import { signConnectToken } from "../auth/connect-token";
 import { signCurlToken } from "../auth/curl-session";
+import { resolveVaultRefs, scrubVaultValues, scrubString, VaultRefError } from "../vault/interpolate";
+import { touchUsed } from "../vault/store";
 
 // `connect` and `get_auth_url` are the same tool under two names (kept for
 // backward compatibility) — one description, so the security claim in it
@@ -114,13 +116,43 @@ export async function executeSingle(
         };
       }
 
+      // Vault references: `{{vault:name}}` → value, before validation so the
+      // tool's own zod coercion still applies. The vault's own tools take names
+      // as arguments, so a reference there is literal, not a lookup.
+      let effectiveArgs: Record<string, unknown> = rawArgs ?? {};
+      let substituted = new Map<string, string>();
+      if (!toolName.startsWith("vault_")) {
+        try {
+          const resolved = await resolveVaultRefs(userId, effectiveArgs);
+          effectiveArgs = resolved.args;
+          substituted = resolved.substituted;
+        } catch (e) {
+          if (e instanceof VaultRefError) {
+            await auditLogger.log({
+              user_id: userId,
+              integration: targetTool.integration,
+              tool: toolName,
+              action: "EXECUTE",
+              success: false,
+              error: e.code,
+              duration_ms: Date.now() - start,
+            });
+            return { error: e.code, message: e.message };
+          }
+          throw e;
+        }
+        if (substituted.size > 0) {
+          void touchUsed(userId, [...substituted.keys()]).catch(() => undefined);
+        }
+      }
+
       // Validate args against the plugin tool's own schema so that
       // Zod defaults (e.g. pageSize=10) get applied. Without this,
       // we'd blindly forward whatever the caller sent and the plugin
       // would see `undefined` for optional-with-default fields.
-      let parsedArgs: unknown = rawArgs;
+      let parsedArgs: unknown = effectiveArgs;
       try {
-        const parsed = targetTool.inputSchema.safeParse(rawArgs ?? {});
+        const parsed = targetTool.inputSchema.safeParse(effectiveArgs);
         if (!parsed.success) {
           await auditLogger.log({
             user_id: userId,
@@ -152,7 +184,10 @@ export async function executeSingle(
 
       try {
         const toolCtx = await createContext(userId, targetTool.integration);
-        const result = await targetTool.handler(toolCtx, parsedArgs as Record<string, unknown>);
+        const result = scrubVaultValues(
+          await targetTool.handler(toolCtx, parsedArgs as Record<string, unknown>),
+          substituted
+        );
         const duration_ms = Date.now() - start;
         await auditLogger.log({
           user_id: userId,
@@ -176,7 +211,7 @@ export async function executeSingle(
         toolExecutionDuration.observe({ integration: targetTool.integration, tool: toolName, success: "true" }, durationS);
         return { result };
       } catch (e) {
-        const err = e instanceof Error ? e.message : String(e);
+        const err = scrubString(e instanceof Error ? e.message : String(e), substituted);
         const duration_ms = Date.now() - start;
         await auditLogger.log({
           user_id: userId,

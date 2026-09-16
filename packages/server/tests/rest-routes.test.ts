@@ -33,6 +33,11 @@ vi.mock("../src/telemetry/tracing", () => ({
   withSpan: vi.fn((_name: string, fn: Function) => fn()),
 }));
 
+vi.mock("../src/vault/store", () => ({
+  readSecretValue: vi.fn(async () => null),
+  touchUsed: vi.fn(async () => undefined),
+}));
+
 // The REST endpoint authenticates exactly like /mcp — resolveMcpUser is the
 // shared resolver, stubbed here so the suite tests routing, not JWT crypto.
 vi.mock("../src/auth/oauth-server/resolve", () => ({

@@ -66,6 +66,12 @@ export function scrubString(s: string, substituted: Map<string, string>): string
  * secret the user owns would decrypt the whole vault on each call, and a short
  * value would collide with unrelated output. Best-effort against encodings: a
  * base64'd or URL-encoded echo is not caught.
+ *
+ * A value that looks like a JSON scalar (e.g. a secret of "5432" fed through
+ * a tool's `z.coerce.number()`) can come back as a bare, unquoted number
+ * rather than inside a string. Replacing it in place with an unquoted
+ * `{{vault:name}}` would corrupt the JSON, so that case is scrubbed first and
+ * re-quoted; the ordinary in-string replacement below then finds nothing left.
  */
 export function scrubVaultValues<T>(value: T, substituted: Map<string, string>): T {
   if (substituted.size === 0) return value;
@@ -73,12 +79,23 @@ export function scrubVaultValues<T>(value: T, substituted: Map<string, string>):
   try {
     const json = JSON.stringify(value);
     if (json === undefined) return value;
-    // The haystack is JSON-encoded, so a value containing `"` or `\` is encoded
-    // as `\"`/`\\` there. Match against the JSON-escaped form of each value.
-    const jsonNeedles = new Map(
-      [...substituted].map(([n, v]) => [n, JSON.stringify(v).slice(1, -1)])
-    );
-    return JSON.parse(scrubString(json, jsonNeedles)) as T;
+    const entries = [...substituted].sort((a, b) => b[1].length - a[1].length);
+    let out = json;
+    for (const [name, val] of entries) {
+      if (val === "") continue;
+      const placeholder = `{{vault:${name}}}`;
+      if (/^(-?\d+(\.\d+)?|true|false|null)$/.test(val)) {
+        out = out.replace(
+          new RegExp(`(?<=[:,[\\s])${escapeRe(val)}(?=\\s*[,\\]}])`, "g"),
+          JSON.stringify(placeholder)
+        );
+      }
+      // The haystack is JSON-encoded, so a value containing `"` or `\` is
+      // encoded as `\"`/`\\` there. Match against the JSON-escaped form.
+      const quotedNeedle = JSON.stringify(val).slice(1, -1);
+      out = out.replace(new RegExp(escapeRe(quotedNeedle), "g"), placeholder);
+    }
+    return JSON.parse(out) as T;
   } catch {
     return value;
   }
