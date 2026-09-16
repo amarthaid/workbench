@@ -50,7 +50,12 @@ export async function registerVaultRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(400).send({ error: "INVALID_DESCRIPTION" });
     }
     try {
-      const { created } = await putSecret(userId, request.params.name, body.value, body.description ?? null);
+      // Pass description through unchanged: undefined = leave the existing
+      // description alone (store's UPDATE branch), null = clear it, string =
+      // set it. Collapsing undefined to null here would wipe the description
+      // on every value-only overwrite.
+      const description = body.description as string | null | undefined;
+      const { created } = await putSecret(userId, request.params.name, body.value, description);
       return reply.code(created ? 201 : 200).send({ ok: true, created });
     } catch (e) {
       if (e instanceof VaultError) return reply.code(statusFor(e.code)).send({ error: e.code });
@@ -81,7 +86,15 @@ export async function registerVaultRoutes(app: FastifyInstance): Promise<void> {
       if (!grant) return reply.code(404).send();
       const value = await readSecretValue(grant.userId, grant.name);
       if (value === null) return reply.code(404).send();
-      void touchUsed(grant.userId, [grant.name]).catch(() => undefined);
+      // Awaited, not fire-and-forget: the last_used_at test relies on the
+      // stamp landing before the redeem response is observed. The value is
+      // already decrypted, so awaiting here trades no secrecy for the
+      // ordering guarantee. A failed stamp must never turn a 200 into a 500.
+      try {
+        await touchUsed(grant.userId, [grant.name]);
+      } catch {
+        // ignore
+      }
       return reply.type("text/plain; charset=utf-8").send(value);
     }
   );

@@ -37,7 +37,9 @@ afterEach(async () => {
 
 describe("vault routes", () => {
   it("requires a bearer on list/put/delete", async () => {
-    expect((await app.inject({ method: "GET", url: "/api/vault" })).statusCode).toBe(401);
+    const get = await app.inject({ method: "GET", url: "/api/vault" });
+    expect(get.statusCode).toBe(401);
+    expect(get.headers["www-authenticate"]).toContain('Bearer realm="a-workbench"');
     expect((await app.inject({ method: "PUT", url: "/api/vault/pw", payload: { value: "x" } })).statusCode).toBe(401);
     expect((await app.inject({ method: "DELETE", url: "/api/vault/pw" })).statusCode).toBe(401);
   });
@@ -53,6 +55,16 @@ describe("vault routes", () => {
     expect(l.json().secrets).toEqual([expect.objectContaining({ name: "pw" })]);
     expect(l.body).not.toContain("hunter");
     expect((await app.inject({ method: "GET", url: "/api/vault", headers: U2 })).json().secrets).toEqual([]);
+  });
+
+  it("PUT keeps the existing description when omitted, clears it with null", async () => {
+    await app.inject({ method: "PUT", url: "/api/vault/pw", headers: U1, payload: { value: "hunter2", description: "d" } });
+    await app.inject({ method: "PUT", url: "/api/vault/pw", headers: U1, payload: { value: "hunter3" } });
+    let l = await app.inject({ method: "GET", url: "/api/vault", headers: U1 });
+    expect(l.json().secrets[0].description).toBe("d");
+    await app.inject({ method: "PUT", url: "/api/vault/pw", headers: U1, payload: { value: "hunter4", description: null } });
+    l = await app.inject({ method: "GET", url: "/api/vault", headers: U1 });
+    expect(l.json().secrets[0].description).toBeNull();
   });
 
   it("PUT validates", async () => {
