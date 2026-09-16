@@ -88,6 +88,18 @@ const SQLITE_SCHEMA = `
     scope TEXT,
     expires_at INTEGER NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS user_vaults (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    value_enc BLOB NOT NULL,
+    description TEXT,
+    created_at INTEGER DEFAULT (unixepoch()),
+    updated_at INTEGER DEFAULT (unixepoch()),
+    last_used_at INTEGER,
+    UNIQUE(user_id, name)
+  );
 `;
 
 const POSTGRES_SCHEMA = `
@@ -160,6 +172,18 @@ const POSTGRES_SCHEMA = `
     user_id TEXT NOT NULL,
     scope TEXT,
     expires_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS user_vaults (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    value_enc BYTEA NOT NULL,
+    description TEXT,
+    created_at INTEGER DEFAULT EXTRACT(EPOCH FROM NOW())::INTEGER,
+    updated_at INTEGER DEFAULT EXTRACT(EPOCH FROM NOW())::INTEGER,
+    last_used_at INTEGER,
+    UNIQUE(user_id, name)
   );
 `;
 
