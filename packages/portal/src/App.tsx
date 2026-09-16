@@ -12,6 +12,7 @@ import Apps from "./pages/Apps";
 import AppDetail from "./pages/AppDetail";
 import Agents from "./pages/Agents";
 import Files from "./pages/Files";
+import Vault from "./pages/Vault";
 import Activity from "./pages/Activity";
 import Settings from "./pages/Settings";
 
@@ -73,6 +74,7 @@ function AppRoutes() {
         <Route path="/apps/:name" element={<AppDetail />} />
         <Route path="/agents" element={<Agents />} />
         <Route path="/files" element={<Files />} />
+        <Route path="/vault" element={<Vault />} />
         <Route path="/activity" element={<Activity />} />
         <Route path="/settings" element={<Settings />} />
       </Route>

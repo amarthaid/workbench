@@ -564,3 +564,55 @@ export async function deleteWorkspaceFile(name: string): Promise<void> {
   });
   if (!res.ok) throw new Error("Delete failed");
 }
+
+// ─── Vault ────────────────────────────────────────────────────────────────
+// Write-only from every surface: the list never carries a value and there is
+// no read endpoint. To rotate, overwrite.
+
+export interface VaultSecret {
+  name: string;
+  description: string | null;
+  created_at: number;
+  updated_at: number;
+  last_used_at: number | null;
+}
+
+export async function fetchVaultSecrets(): Promise<VaultSecret[]> {
+  const res = await fetch(`${API_URL}/api/vault`, { headers: authHeaders() });
+  if (!res.ok) throw new Error("Failed to load vault");
+  return (await res.json()).secrets;
+}
+
+export async function putVaultSecret(input: {
+  name: string;
+  value: string;
+  description?: string;
+}): Promise<void> {
+  const body: { value: string; description?: string | null } = { value: input.value };
+  if (input.description !== undefined) body.description = input.description;
+  const res = await fetch(`${API_URL}/api/vault/${encodeURIComponent(input.name)}`, {
+    method: "PUT",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const code = (await res.json().catch(() => ({}))).error;
+    throw new Error(
+      code === "INVALID_NAME"
+        ? "Names are lowercase letters, digits, and _ . - (max 64)."
+        : code === "TOO_LARGE"
+          ? "Value is too large (8 KB max)."
+          : code === "EMPTY_VALUE"
+            ? "Value cannot be empty."
+            : "Save failed"
+    );
+  }
+}
+
+export async function deleteVaultSecret(name: string): Promise<void> {
+  const res = await fetch(`${API_URL}/api/vault/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error("Delete failed");
+}
