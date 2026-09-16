@@ -40,6 +40,15 @@ describe("vault plugin", () => {
     expect(r.secrets[0].reference).toBe("{{vault:pw}}");
   });
 
+  it("vault_list returns exactly the five documented fields and nothing else", async () => {
+    // Explicit pick, not a spread: a column added to user_vaults must not
+    // widen what the model sees by accident. created_at is deliberately out.
+    const r = await run("vault_list", "u1");
+    expect(Object.keys(r.secrets[0]).sort()).toEqual(
+      ["description", "last_used_at", "name", "reference", "updated_at"]
+    );
+  });
+
   it("vault_presign mints a single-use url", async () => {
     const r = await run("vault_presign", "u1", { name: "pw" });
     expect(r.url).toMatch(/\/api\/vault\/otl\/[0-9a-f]{32}$/);

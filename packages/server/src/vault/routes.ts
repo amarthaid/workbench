@@ -10,6 +10,7 @@ import {
   VaultError,
 } from "./store";
 import { consumeOtl, revokeFor } from "./otl";
+import { verifySession } from "../auth/session";
 
 async function authenticate(request: FastifyRequest, reply: FastifyReply): Promise<string | null> {
   const userId = await resolveMcpUser(request.headers as Record<string, string>);
@@ -17,6 +18,40 @@ async function authenticate(request: FastifyRequest, reply: FastifyReply): Promi
   const prm = `${config.SERVER_PUBLIC_URL}/.well-known/oauth-protected-resource`;
   reply.header("WWW-Authenticate", `Bearer realm="a-workbench", resource_metadata="${prm}"`);
   reply.status(401).send({ error: "Unauthorized", resource_metadata: prm });
+  return null;
+}
+
+// Writes are portal-only, deliberately narrower than `authenticate`.
+//
+// `resolveMcpUser` accepts an API key or an OAuth access token — the agent's
+// own credential. The vault's whole goal is that the agent can use a secret
+// but never read one (spec Goal); a credential that can overwrite or delete
+// a secret defeats that from the other side. It cannot read `hunter2`, but it
+// could rotate it to a value it chose and then read that, or wipe the vault.
+// So PUT/DELETE require the portal-session JWT, which only a signed-in human
+// holds, and `verifySession` accepts nothing else.
+async function authenticatePortal(
+  request: FastifyRequest,
+  reply: FastifyReply
+): Promise<string | null> {
+  const header = (request.headers.authorization as string | undefined) ?? "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  if (!token) {
+    const prm = `${config.SERVER_PUBLIC_URL}/.well-known/oauth-protected-resource`;
+    reply.header("WWW-Authenticate", `Bearer realm="a-workbench", resource_metadata="${prm}"`);
+    reply.status(401).send({ error: "Unauthorized", resource_metadata: prm });
+    return null;
+  }
+  try {
+    const { userId } = await verifySession(token);
+    if (userId) return userId;
+  } catch {
+    // fall through
+  }
+  reply.status(403).send({
+    error: "PORTAL_SESSION_REQUIRED",
+    message: "Secrets are written and deleted from the portal only.",
+  });
   return null;
 }
 
@@ -42,7 +77,7 @@ export async function registerVaultRoutes(app: FastifyInstance): Promise<void> {
   // The only route that ever carries a plaintext value, and only the portal
   // calls it. Fastify does not log bodies.
   app.put<{ Params: { name: string }; Body: unknown }>("/api/vault/:name", async (request, reply) => {
-    const userId = await authenticate(request, reply);
+    const userId = await authenticatePortal(request, reply);
     if (!userId) return reply;
     const body = (request.body ?? {}) as { value?: unknown; description?: unknown };
     if (typeof body.value !== "string") return reply.code(400).send({ error: "INVALID_VALUE" });
@@ -64,7 +99,7 @@ export async function registerVaultRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.delete<{ Params: { name: string } }>("/api/vault/:name", async (request, reply) => {
-    const userId = await authenticate(request, reply);
+    const userId = await authenticatePortal(request, reply);
     if (!userId) return reply;
     const gone = await deleteSecret(userId, request.params.name);
     if (!gone) return reply.code(404).send({ error: "NOT_FOUND" });

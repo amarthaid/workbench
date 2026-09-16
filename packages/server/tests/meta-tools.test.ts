@@ -221,6 +221,11 @@ describe("meta-tools", () => {
       expect(result.result).toEqual({ echoed: "got pw={{vault:pw}}" });
       const { touchUsed } = await import("../src/vault/store");
       expect(touchUsed).toHaveBeenCalledWith("user-1", ["pw"]);
+      // The audit row records that the tool ran, never what it ran with.
+      const { auditLogger } = await import("../src/audit/logger");
+      for (const call of vi.mocked(auditLogger.log).mock.calls) {
+        expect(JSON.stringify(call)).not.toContain("hunter2");
+      }
     });
 
     it("runs before zod so coercion applies to the substituted value", async () => {
@@ -316,6 +321,12 @@ describe("meta-tools", () => {
         args: { text: "{{vault:pw}}" },
       });
       expect(result.error).toBe("VAULT_SCRUB_FAILED");
+      // A fail-closed scrub is a failed tool call and must be as observable as
+      // any other one, or the only signal is the model's own error text.
+      const { auditLogger } = await import("../src/audit/logger");
+      expect(auditLogger.log).toHaveBeenCalledWith(
+        expect.objectContaining({ success: false, error: "VAULT_SCRUB_FAILED", tool: "unscrubbable" })
+      );
     });
   });
 

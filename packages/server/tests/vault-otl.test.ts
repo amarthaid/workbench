@@ -83,6 +83,29 @@ describe("vault one-time links", () => {
     expect(await consumeOtl(c.token)).not.toBeNull();
   });
 
+  it("will not consume a row belonging to another sentinel", async () => {
+    // pending_auth is the shared short-TTL handshake table. consumeOtl must
+    // match on OTL_SENTINEL as well as the token, or a well-formed 32-hex
+    // state minted by the jot-upload or oauth-authorize flow would be spent
+    // here — and, for __oauth_authorize__, its session_data even carries a
+    // `name`, so only the sentinel check stops it.
+    const future = Math.floor(Date.now() / 1000) + 600;
+    const a = "a".repeat(32);
+    const b = "b".repeat(32);
+    await db.run(
+      "INSERT INTO pending_auth (state, user_id, integration, expires_at) VALUES (?, ?, ?, ?)",
+      [a, "u1", "__file_ul__", future]
+    );
+    await db.run(
+      "INSERT INTO pending_auth (state, user_id, integration, expires_at, session_data) VALUES (?, ?, ?, ?, ?)",
+      [b, "u1", "__oauth_authorize__", future, JSON.stringify({ name: "pw" })]
+    );
+    expect(await consumeOtl(a)).toBeNull();
+    expect(await consumeOtl(b)).toBeNull();
+    expect(await db.get("SELECT 1 FROM pending_auth WHERE state = ?", [a])).toBeTruthy();
+    expect(await db.get("SELECT 1 FROM pending_auth WHERE state = ?", [b])).toBeTruthy();
+  });
+
   it("reap is scoped to the vault sentinel", async () => {
     const t0 = Date.now();
     _setNowForTest(() => t0);

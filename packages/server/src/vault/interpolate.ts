@@ -72,7 +72,7 @@ export class VaultScrubError extends Error {
 // happens to look like a JSON scalar (a number, "true", "null") is only
 // matched where it actually sits as a value or key — never by regexing raw
 // JSON text, which can't distinguish a value's position from surrounding
-// string content (see 2026-09-16 finding on the earlier regex approach).
+// string content (docs/findings/2026-09-16-vault-scrub-json-text.md).
 function scrubJson(node: unknown, substituted: Map<string, string>): unknown {
   if (typeof node === "string") return scrubString(node, substituted);
   if (node === null || typeof node === "number" || typeof node === "boolean") {

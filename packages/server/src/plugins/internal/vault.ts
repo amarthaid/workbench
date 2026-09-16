@@ -24,8 +24,17 @@ const tools: PluginTool[] = [
     inputSchema: z.object({}),
     handler: async (ctx: any) => {
       const secrets = await listSecrets(ctx.userId);
+      // Explicit pick, not a spread: the model-facing shape is fixed here, so
+      // a column added to `user_vaults` or to `listSecrets` later cannot widen
+      // what the agent sees without someone editing this list.
       return {
-        secrets: secrets.map((s) => ({ ...s, reference: `{{vault:${s.name}}}` })),
+        secrets: secrets.map((s) => ({
+          name: s.name,
+          description: s.description,
+          updated_at: s.updated_at,
+          last_used_at: s.last_used_at,
+          reference: `{{vault:${s.name}}}`,
+        })),
       };
     },
   },

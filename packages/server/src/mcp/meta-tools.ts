@@ -227,6 +227,24 @@ export async function executeSingle(
             error: e.code,
             duration_ms,
           });
+          // Same failure line and metrics as the generic path: a fail-closed
+          // scrub is still a failed tool call, and if it were invisible here
+          // the only signal would be the model's own error text. No args and
+          // no result — the reason we are in this branch is that the result
+          // could not be made safe to print.
+          console.log(JSON.stringify({
+            level: 50,
+            msg: "tool execute failed",
+            user_id: userId,
+            integration: targetTool.integration,
+            tool: toolName,
+            success: false,
+            error: e.code,
+            duration_ms,
+          }));
+          const durationS = duration_ms / 1000;
+          toolExecutionsTotal.inc({ integration: targetTool.integration, tool: toolName, success: "false" });
+          toolExecutionDuration.observe({ integration: targetTool.integration, tool: toolName, success: "false" }, durationS);
           return { error: e.code };
         }
         const err = scrubString(e instanceof Error ? e.message : String(e), substituted);

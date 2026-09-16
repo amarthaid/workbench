@@ -7,13 +7,27 @@ vi.mock("../src/auth/oauth-server/resolve", () => ({
   ),
 }));
 
+vi.mock("../src/auth/session", () => ({
+  verifySession: vi.fn(async (token: string) => {
+    // Only the portal-session JWT verifies. An API-key / OAuth bearer
+    // (`u1-token`) is a valid MCP credential and still not a session.
+    const m = /^(u\d+)-session$/.exec(token);
+    if (!m) throw new Error("Invalid session");
+    return { userId: m[1], email: `${m[1]}@example.com` };
+  }),
+}));
+
 import { registerVaultRoutes } from "../src/vault/routes";
 import { putSecret, readSecretValue } from "../src/vault/store";
 import { mintOtl, _setNowForTest } from "../src/vault/otl";
 import { db } from "../src/db";
 
+// Agent-style bearers: resolve to a user, are not a portal session.
 const U1 = { authorization: "Bearer u1-token" };
 const U2 = { authorization: "Bearer u2-token" };
+// Portal-session bearers: the only thing that may write.
+const P1 = { authorization: "Bearer u1-session" };
+const P2 = { authorization: "Bearer u2-session" };
 let app: FastifyInstance;
 let logged: string[];
 
@@ -44,10 +58,38 @@ describe("vault routes", () => {
     expect((await app.inject({ method: "DELETE", url: "/api/vault/pw" })).statusCode).toBe(401);
   });
 
+  it("refuses writes from an agent credential, allows them from a portal session", async () => {
+    await putSecret("u1", "pw", "hunter2");
+
+    // An API key / OAuth bearer resolves to u1 and still cannot write.
+    const put = await app.inject({ method: "PUT", url: "/api/vault/pw", headers: U1, payload: { value: "rotated" } });
+    expect(put.statusCode).toBe(403);
+    expect(put.json().error).toBe("PORTAL_SESSION_REQUIRED");
+    expect(await readSecretValue("u1", "pw")).toBe("hunter2");
+
+    const del = await app.inject({ method: "DELETE", url: "/api/vault/pw", headers: U1 });
+    expect(del.statusCode).toBe(403);
+    expect(del.json().error).toBe("PORTAL_SESSION_REQUIRED");
+    expect(await readSecretValue("u1", "pw")).toBe("hunter2");
+
+    // The same reads are fine on that bearer.
+    const list = await app.inject({ method: "GET", url: "/api/vault", headers: U1 });
+    expect(list.statusCode).toBe(200);
+    expect(list.json().secrets).toEqual([expect.objectContaining({ name: "pw" })]);
+
+    // The portal session writes and deletes.
+    expect(
+      (await app.inject({ method: "PUT", url: "/api/vault/pw", headers: P1, payload: { value: "rotated" } })).statusCode
+    ).toBe(200);
+    expect(await readSecretValue("u1", "pw")).toBe("rotated");
+    expect((await app.inject({ method: "DELETE", url: "/api/vault/pw", headers: P1 })).statusCode).toBe(204);
+    expect(await readSecretValue("u1", "pw")).toBeNull();
+  });
+
   it("PUT creates then overwrites; GET lists without the value", async () => {
-    const c = await app.inject({ method: "PUT", url: "/api/vault/pw", headers: U1, payload: { value: "hunter2", description: "d" } });
+    const c = await app.inject({ method: "PUT", url: "/api/vault/pw", headers: P1, payload: { value: "hunter2", description: "d" } });
     expect(c.statusCode).toBe(201);
-    const o = await app.inject({ method: "PUT", url: "/api/vault/pw", headers: U1, payload: { value: "hunter3" } });
+    const o = await app.inject({ method: "PUT", url: "/api/vault/pw", headers: P1, payload: { value: "hunter3" } });
     expect(o.statusCode).toBe(200);
     expect(await readSecretValue("u1", "pw")).toBe("hunter3");
     const l = await app.inject({ method: "GET", url: "/api/vault", headers: U1 });
@@ -58,34 +100,34 @@ describe("vault routes", () => {
   });
 
   it("PUT keeps the existing description when omitted, clears it with null", async () => {
-    await app.inject({ method: "PUT", url: "/api/vault/pw", headers: U1, payload: { value: "hunter2", description: "d" } });
-    await app.inject({ method: "PUT", url: "/api/vault/pw", headers: U1, payload: { value: "hunter3" } });
+    await app.inject({ method: "PUT", url: "/api/vault/pw", headers: P1, payload: { value: "hunter2", description: "d" } });
+    await app.inject({ method: "PUT", url: "/api/vault/pw", headers: P1, payload: { value: "hunter3" } });
     let l = await app.inject({ method: "GET", url: "/api/vault", headers: U1 });
     expect(l.json().secrets[0].description).toBe("d");
-    await app.inject({ method: "PUT", url: "/api/vault/pw", headers: U1, payload: { value: "hunter4", description: null } });
+    await app.inject({ method: "PUT", url: "/api/vault/pw", headers: P1, payload: { value: "hunter4", description: null } });
     l = await app.inject({ method: "GET", url: "/api/vault", headers: U1 });
     expect(l.json().secrets[0].description).toBeNull();
   });
 
   it("PUT validates", async () => {
-    expect((await app.inject({ method: "PUT", url: "/api/vault/Bad", headers: U1, payload: { value: "x" } })).statusCode).toBe(400);
-    expect((await app.inject({ method: "PUT", url: "/api/vault/pw", headers: U1, payload: { value: "" } })).statusCode).toBe(400);
-    expect((await app.inject({ method: "PUT", url: "/api/vault/pw", headers: U1, payload: {} })).statusCode).toBe(400);
-    expect((await app.inject({ method: "PUT", url: "/api/vault/pw", headers: U1, payload: { value: 5 } })).statusCode).toBe(400);
-    expect((await app.inject({ method: "PUT", url: "/api/vault/pw", headers: U1, payload: { value: "x".repeat(9000) } })).statusCode).toBe(413);
+    expect((await app.inject({ method: "PUT", url: "/api/vault/Bad", headers: P1, payload: { value: "x" } })).statusCode).toBe(400);
+    expect((await app.inject({ method: "PUT", url: "/api/vault/pw", headers: P1, payload: { value: "" } })).statusCode).toBe(400);
+    expect((await app.inject({ method: "PUT", url: "/api/vault/pw", headers: P1, payload: {} })).statusCode).toBe(400);
+    expect((await app.inject({ method: "PUT", url: "/api/vault/pw", headers: P1, payload: { value: 5 } })).statusCode).toBe(400);
+    expect((await app.inject({ method: "PUT", url: "/api/vault/pw", headers: P1, payload: { value: "x".repeat(9000) } })).statusCode).toBe(413);
   });
 
   it("DELETE removes the secret and its outstanding links", async () => {
     await putSecret("u1", "pw", "hunter2");
     const m = await mintOtl("u1", "pw");
-    expect((await app.inject({ method: "DELETE", url: "/api/vault/pw", headers: U1 })).statusCode).toBe(204);
-    expect((await app.inject({ method: "DELETE", url: "/api/vault/pw", headers: U1 })).statusCode).toBe(404);
+    expect((await app.inject({ method: "DELETE", url: "/api/vault/pw", headers: P1 })).statusCode).toBe(204);
+    expect((await app.inject({ method: "DELETE", url: "/api/vault/pw", headers: P1 })).statusCode).toBe(404);
     expect((await app.inject({ method: "GET", url: `/api/vault/otl/${m.token}` })).statusCode).toBe(404);
   });
 
   it("a user cannot delete another user's secret", async () => {
     await putSecret("u1", "pw", "hunter2");
-    expect((await app.inject({ method: "DELETE", url: "/api/vault/pw", headers: U2 })).statusCode).toBe(404);
+    expect((await app.inject({ method: "DELETE", url: "/api/vault/pw", headers: P2 })).statusCode).toBe(404);
     expect(await readSecretValue("u1", "pw")).toBe("hunter2");
   });
 
