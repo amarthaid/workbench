@@ -17,9 +17,9 @@ vi.mock("../src/auth/session", () => ({
   }),
 }));
 
-import { registerVaultRoutes } from "../src/vault/routes";
+import { registerVaultRoutes, OTL_PORTAL_DEFAULT_TTL_SECONDS } from "../src/vault/routes";
 import { putSecret, readSecretValue } from "../src/vault/store";
-import { mintOtl, _setNowForTest } from "../src/vault/otl";
+import { mintOtl, _setNowForTest, OTL_MAX_TTL_SECONDS, OTL_SENTINEL } from "../src/vault/otl";
 import { db } from "../src/db";
 
 // Agent-style bearers: resolve to a user, are not a portal session.
@@ -189,5 +189,68 @@ describe("vault routes", () => {
     await app.inject({ method: "GET", url: `/api/vault/otl/${m.token}` });
     const l = await app.inject({ method: "GET", url: "/api/vault", headers: U1 });
     expect(l.json().secrets[0].last_used_at).not.toBeNull();
+  });
+
+  describe("POST /api/vault/otl (one-time secret, never stored)", () => {
+    it("is portal-only", async () => {
+      const none = await app.inject({ method: "POST", url: "/api/vault/otl", payload: { value: "v" } });
+      expect(none.statusCode).toBe(401);
+      expect(none.headers["www-authenticate"]).toContain('Bearer realm="a-workbench"');
+      const agent = await app.inject({ method: "POST", url: "/api/vault/otl", headers: U1, payload: { value: "v" } });
+      expect(agent.statusCode).toBe(403);
+      expect(agent.json().error).toBe("PORTAL_SESSION_REQUIRED");
+      expect(await db.get("SELECT 1 FROM pending_auth WHERE integration = ?", [OTL_SENTINEL])).toBeFalsy();
+    });
+
+    it("mints, redeems once, stores nothing in the vault, logs nothing of the value", async () => {
+      const t0 = Date.now();
+      _setNowForTest(() => t0);
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/vault/otl",
+        headers: P1,
+        payload: { value: "ZZ-ONE-SHOT-7c2a" },
+      });
+      expect(res.statusCode).toBe(201);
+      const { url, expires_at } = res.json();
+      expect(url).toContain("/api/vault/otl/");
+      expect(expires_at).toBe(Math.ceil((t0 + OTL_PORTAL_DEFAULT_TTL_SECONDS * 1000) / 1000));
+      expect(res.body).not.toContain("ZZ-ONE-SHOT");
+      expect(await db.get("SELECT 1 FROM user_vaults WHERE user_id = ?", ["u1"])).toBeFalsy();
+
+      const path = new URL(url).pathname;
+      const first = await app.inject({ method: "GET", url: path });
+      expect(first.statusCode).toBe(200);
+      expect(first.body).toBe("ZZ-ONE-SHOT-7c2a");
+      expect(first.headers["cache-control"]).toBe("no-store");
+      expect(first.headers["content-disposition"]).toContain("attachment");
+      const second = await app.inject({ method: "GET", url: path });
+      expect(second.statusCode).toBe(404);
+      expect(second.body).toBe("");
+      expect(logged.join("\n")).not.toContain("ZZ-ONE-SHOT");
+      expect(logged.join("\n")).not.toContain(path.split("/").pop());
+    });
+
+    it("validates value and ttl", async () => {
+      const bad = async (payload: unknown) =>
+        (await app.inject({ method: "POST", url: "/api/vault/otl", headers: P1, payload: payload as any })).json();
+      expect(await bad({})).toEqual({ error: "INVALID_VALUE" });
+      expect(await bad({ value: 1 })).toEqual({ error: "INVALID_VALUE" });
+      expect(await bad({ value: "" })).toEqual({ error: "EMPTY_VALUE" });
+      expect(await bad({ value: "x".repeat(8193) })).toEqual({ error: "TOO_LARGE" });
+      expect(await bad({ value: "v", ttl_seconds: 0 })).toEqual({ error: "INVALID_TTL" });
+      expect(await bad({ value: "v", ttl_seconds: "60" })).toEqual({ error: "INVALID_TTL" });
+    });
+
+    it("clamps ttl to the ceiling and honours a shorter one", async () => {
+      const t0 = Date.now();
+      _setNowForTest(() => t0);
+      const long = await app.inject({ method: "POST", url: "/api/vault/otl", headers: P1, payload: { value: "v", ttl_seconds: 99999 } });
+      expect(long.json().expires_at).toBe(Math.ceil((t0 + OTL_MAX_TTL_SECONDS * 1000) / 1000));
+      const short = await app.inject({ method: "POST", url: "/api/vault/otl", headers: P1, payload: { value: "v", ttl_seconds: 60 } });
+      expect(short.json().expires_at).toBe(Math.ceil((t0 + 60_000) / 1000));
+      _setNowForTest(() => t0 + 61_000);
+      expect((await app.inject({ method: "GET", url: new URL(short.json().url).pathname })).statusCode).toBe(404);
+    });
   });
 });
