@@ -44,6 +44,12 @@ const FilesIcon = () => (
     <path d="M2.5 4.5a1 1 0 0 1 1-1h3l1.5 2h4.5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z" />
   </Icon>
 );
+const VaultIcon = () => (
+  <Icon>
+    <rect x="3.5" y="7" width="9" height="6.5" rx="1.2" />
+    <path d="M5.5 7V5.2a2.5 2.5 0 0 1 5 0V7" />
+  </Icon>
+);
 // A toothed cog, not a hub-and-rays mark: the rayed version read as the sun
 // glyph the theme toggle already uses, two rows below it in the same column.
 const SettingsIcon = () => (
@@ -63,7 +69,10 @@ const NAV_GROUPS = [
     { to: "/agents", label: "Agents", end: false, Glyph: AgentsIcon },
     { to: "/activity", label: "Activity", end: false, Glyph: ActivityIcon },
   ],
-  [{ to: "/files", label: "Files", end: false, Glyph: FilesIcon }],
+  [
+    { to: "/files", label: "Files", end: false, Glyph: FilesIcon },
+    { to: "/vault", label: "Vault", end: false, Glyph: VaultIcon },
+  ],
 ];
 
 function itemClass({ isActive }: { isActive: boolean }) {

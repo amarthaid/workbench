@@ -15,6 +15,13 @@ export function Modal({ open, onClose, title, size = "md", dismissible = true, c
 
   const triggerRef = useRef<Element | null>(null);
 
+  // The open effect must run on open and only on open. Call sites pass a fresh
+  // onClose on every render (an inline closure over their own state), and a
+  // dependency on it made each parent re-render — every keystroke in a form
+  // inside the modal — re-run the effect and pull focus back to the panel.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   useEffect(() => {
     if (!open) return;
     // Remember what had focus so it can be restored on close. Captured here
@@ -23,7 +30,7 @@ export function Modal({ open, onClose, title, size = "md", dismissible = true, c
     triggerRef.current = document.activeElement;
     panelRef.current?.focus();
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") onCloseRef.current();
     }
     document.addEventListener("keydown", onKeyDown);
     return () => {
@@ -36,7 +43,7 @@ export function Modal({ open, onClose, title, size = "md", dismissible = true, c
       triggerRef.current = null;
       if (trigger instanceof HTMLElement && trigger.isConnected) trigger.focus();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 

@@ -32,7 +32,20 @@ try {
   const provider = new NodeTracerProvider({ resource });
   provider.register();
 
-  registerInstrumentations({ instrumentations: [new HttpInstrumentation()] });
+  // Both of these paths carry a single-use credential in the URL itself — the
+  // vault one-time link and the jot upload token. HTTP instrumentation records
+  // the path as `http.target`, so a span for either would put the credential
+  // wherever spans go. No exporter is configured today (`traceExporter:
+  // undefined`), but that is a default someone will change; the span must
+  // never exist in the first place.
+  registerInstrumentations({
+    instrumentations: [
+      new HttpInstrumentation({
+        ignoreIncomingRequestHook: (req: { url?: string }) =>
+          /^\/(api\/vault\/otl|j\/upload)\//.test(req.url ?? ""),
+      }),
+    ],
+  });
 
   const sdk = new NodeSDK({ resource, traceExporter: undefined });
   sdk.start();

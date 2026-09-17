@@ -72,6 +72,13 @@ vi.mock("../src/telemetry/tracing", () => ({
   withSpan: vi.fn((_name: string, fn: Function) => fn()),
 }));
 
+vi.mock("../src/vault/store", () => ({
+  readSecretValue: vi.fn(async (_u: string, name: string) =>
+    name === "pw" ? "hunter2" : name === "port" ? "5432" : null
+  ),
+  touchUsed: vi.fn(async () => undefined),
+}));
+
 function findTool(name: string) {
   return metaTools.find((t) => t.name === name)!;
 }
@@ -184,6 +191,142 @@ describe("meta-tools", () => {
       const tool = findTool("execute_tools");
       const result = await runOne(tool, { tool: "test_tool", args: {} });
       expect(result.error).toBe("boom");
+    });
+  });
+
+  describe("vault interpolation in executeSingle", () => {
+    const runOne = (tool: any, exec: { tool: string; args: Record<string, unknown> }) =>
+      tool.handler({ userId: "user-1" }, { executions: [exec] }).then((r: any) => r.results[0]);
+
+    beforeEach(async () => {
+      const { getToken } = await import("../src/auth/tokens");
+      vi.mocked(getToken).mockResolvedValue({ accessToken: "tok", scopes: "" });
+      vi.spyOn(registry, "getIntegration").mockReturnValue(mockOauthInteg as any);
+    });
+
+    it("substitutes before the handler and scrubs the result", async () => {
+      const { z } = await import("zod");
+      const echo = {
+        name: "echo",
+        integration: "test-integ",
+        inputSchema: z.object({ text: z.string() }),
+        handler: vi.fn(async (_c: unknown, a: { text: string }) => ({ echoed: `got ${a.text}` })),
+      };
+      vi.spyOn(registry, "getTool").mockReturnValue(echo as any);
+      const result = await runOne(findTool("execute_tools"), {
+        tool: "echo",
+        args: { text: "pw={{vault:pw}}" },
+      });
+      expect(echo.handler).toHaveBeenCalledWith(expect.anything(), { text: "pw=hunter2" });
+      expect(result.result).toEqual({ echoed: "got pw={{vault:pw}}" });
+      const { touchUsed } = await import("../src/vault/store");
+      expect(touchUsed).toHaveBeenCalledWith("user-1", ["pw"]);
+      // The audit row records that the tool ran, never what it ran with.
+      const { auditLogger } = await import("../src/audit/logger");
+      for (const call of vi.mocked(auditLogger.log).mock.calls) {
+        expect(JSON.stringify(call)).not.toContain("hunter2");
+      }
+    });
+
+    it("runs before zod so coercion applies to the substituted value", async () => {
+      const { z } = await import("zod");
+      const t = {
+        name: "num",
+        integration: "test-integ",
+        inputSchema: z.object({ port: z.coerce.number() }),
+        handler: vi.fn(async (_c: unknown, a: { port: number }) => ({ port: a.port })),
+      };
+      vi.spyOn(registry, "getTool").mockReturnValue(t as any);
+      const result = await runOne(findTool("execute_tools"), { tool: "num", args: { port: "{{vault:port}}" } });
+      expect(t.handler).toHaveBeenCalledWith(expect.anything(), { port: 5432 });
+      expect(result.result).toEqual({ port: "{{vault:port}}" });
+    });
+
+    it("fails closed on an unknown secret and never calls the handler", async () => {
+      const t = { ...mockTool, handler: vi.fn() };
+      vi.spyOn(registry, "getTool").mockReturnValue(t as any);
+      const result = await runOne(findTool("execute_tools"), { tool: "test_tool", args: { x: "{{vault:nope}}" } });
+      expect(result.error).toBe("VAULT_SECRET_NOT_FOUND");
+      expect(result.message).toContain("nope");
+      expect(t.handler).not.toHaveBeenCalled();
+      const { auditLogger } = await import("../src/audit/logger");
+      expect(auditLogger.log).toHaveBeenCalledWith(
+        expect.objectContaining({ success: false, error: "VAULT_SECRET_NOT_FOUND" })
+      );
+    });
+
+    it("scrubs a thrown error message", async () => {
+      const { z } = await import("zod");
+      const t = {
+        name: "boom",
+        integration: "test-integ",
+        inputSchema: z.object({ text: z.string() }),
+        handler: vi.fn(async (_c: unknown, a: { text: string }) => {
+          throw new Error(`upstream rejected ${a.text}`);
+        }),
+      };
+      vi.spyOn(registry, "getTool").mockReturnValue(t as any);
+      const result = await runOne(findTool("execute_tools"), { tool: "boom", args: { text: "{{vault:pw}}" } });
+      expect(result.error).toBe("upstream rejected {{vault:pw}}");
+      const { auditLogger } = await import("../src/audit/logger");
+      expect(auditLogger.log).toHaveBeenCalledWith(
+        expect.objectContaining({ success: false, error: "upstream rejected {{vault:pw}}" })
+      );
+    });
+
+    it("leaves vault_* tool args untouched", async () => {
+      const { z } = await import("zod");
+      const t = {
+        name: "vault_presign",
+        integration: "vault",
+        inputSchema: z.object({ name: z.string() }),
+        handler: vi.fn(async (_c: unknown, a: { name: string }) => ({ got: a.name })),
+      };
+      vi.spyOn(registry, "getTool").mockReturnValue(t as any);
+      vi.spyOn(registry, "getIntegration").mockReturnValue({ name: "vault", version: "1", auth: { type: "none" } } as any);
+      const result = await runOne(findTool("execute_tools"), { tool: "vault_presign", args: { name: "{{vault:pw}}" } });
+      expect(t.handler).toHaveBeenCalledWith(expect.anything(), { name: "{{vault:pw}}" });
+      expect(result.result).toEqual({ got: "{{vault:pw}}" });
+    });
+
+    it("scrubs the secret out of an INVALID_ARGS zod message", async () => {
+      const { z } = await import("zod");
+      const t = {
+        name: "mode_tool",
+        integration: "test-integ",
+        inputSchema: z.object({ mode: z.enum(["a", "b"]) }),
+        handler: vi.fn(),
+      };
+      vi.spyOn(registry, "getTool").mockReturnValue(t as any);
+      const result = await runOne(findTool("execute_tools"), {
+        tool: "mode_tool",
+        args: { mode: "{{vault:pw}}" },
+      });
+      expect(result.error).not.toContain("hunter2");
+      expect(result.error).toContain("{{vault:pw}}");
+      expect(t.handler).not.toHaveBeenCalled();
+    });
+
+    it("fails closed when the handler result can't be scrubbed", async () => {
+      const { z } = await import("zod");
+      const t = {
+        name: "unscrubbable",
+        integration: "test-integ",
+        inputSchema: z.object({ text: z.string() }),
+        handler: vi.fn(async () => ({ big: 1n })),
+      };
+      vi.spyOn(registry, "getTool").mockReturnValue(t as any);
+      const result = await runOne(findTool("execute_tools"), {
+        tool: "unscrubbable",
+        args: { text: "{{vault:pw}}" },
+      });
+      expect(result.error).toBe("VAULT_SCRUB_FAILED");
+      // A fail-closed scrub is a failed tool call and must be as observable as
+      // any other one, or the only signal is the model's own error text.
+      const { auditLogger } = await import("../src/audit/logger");
+      expect(auditLogger.log).toHaveBeenCalledWith(
+        expect.objectContaining({ success: false, error: "VAULT_SCRUB_FAILED", tool: "unscrubbable" })
+      );
     });
   });
 

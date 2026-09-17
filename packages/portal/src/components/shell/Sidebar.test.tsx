@@ -23,18 +23,18 @@ describe("Sidebar", () => {
 
   it("lists every destination", () => {
     renderAt("/");
-    for (const name of ["Home", "Apps", "Agents", "Activity", "Settings"]) {
+    for (const name of ["Home", "Apps", "Agents", "Activity", "Files", "Vault", "Settings"]) {
       expect(screen.getByRole("link", { name })).toBeInTheDocument();
     }
   });
 
-  it("lists Files last, after Activity, set off by a separator", () => {
+  it("lists Files and Vault last, after Activity, set off by a separator", () => {
     renderAt("/");
     const nav = screen.getByRole("navigation", { name: "Main" });
     const list = nav.querySelector("ul.wb-nav")!;
     const items = Array.from(list.querySelectorAll("li"));
     const labels = items.map((li) => li.textContent?.trim() ?? "");
-    expect(labels).toEqual(["Home", "Apps", "Agents", "Activity", "", "Files"]);
+    expect(labels).toEqual(["Home", "Apps", "Agents", "Activity", "", "Files", "Vault"]);
     expect(items[4]).toHaveAttribute("role", "separator");
   });
 

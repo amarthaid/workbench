@@ -211,6 +211,11 @@
               "layout": "wide"
             },
             {
+              "path": "integrations/vault",
+              "label": "Vault",
+              "layout": "wide"
+            },
+            {
               "path": "integrations/jots",
               "label": "Jots",
               "layout": "wide"

@@ -1,0 +1,55 @@
+# Development override: run the dev servers from the mounted source instead of
+# a built image.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+#   (or: npm run dev:docker)
+#
+# Portal (Vite, HMR) on http://localhost:3000, API and /mcp on
+# http://localhost:3001 — the same split as `npm run dev` on the host. The
+# server's tsx watcher and Vite pick up edits under packages/ directly; only a
+# dependency change needs `--build`.
+services:
+  a-workbench:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3000:3000"
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - NODE_ENV=development
+      - DATABASE_URL=/data/tokens.db
+      - WORKSPACE_DIR=/data/workspace
+      # Both on the portal's origin, pinned rather than `${VAR:-…}`. Vite
+      # proxies every server path, so one origin serves the SPA and the API,
+      # and the Google/Keycloak redirect URI registered for the production
+      # compose (http://localhost:3000/...) is valid here too. The API is
+      # still reachable directly on :3001.
+      - PORTAL_URL=http://localhost:3000
+      - SERVER_PUBLIC_URL=http://localhost:3000
+      - PLUGINS_DIR=/app/custom-plugins
+      # File-change events do not cross a VM-backed bind mount (Colima, and
+      # some Docker Desktop setups), so both watchers poll. Cheap at this
+      # tree size; drop it if your mount forwards inotify.
+      - CHOKIDAR_USEPOLLING=1
+      - CHOKIDAR_INTERVAL=400
+    volumes:
+      - .:/app
+      # Anonymous volumes mask the bind mount at every node_modules the
+      # workspace can create, so the Linux tree from the image build is what
+      # runs. `docker compose down -v` discards them; the next `up --build`
+      # recreates them.
+      - /app/node_modules
+      - /app/packages/shared/node_modules
+      - /app/packages/server/node_modules
+      - /app/packages/portal/node_modules
+      - ./data:/data
+      - ../custom-plugins:/app/custom-plugins:ro
+    # @a-workbench/shared is consumed through its dist, which no watcher
+    # rebuilds — build it once on start. Vite must bind 0.0.0.0 to be reachable
+    # through the port mapping; its proxy to :3001 is the same container.
+    command:
+      - sh
+      - -c
+      - npm run build -w @a-workbench/shared && (npm run dev -w @a-workbench/server & npm run dev -w @a-workbench/portal -- --host 0.0.0.0; wait)

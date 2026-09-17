@@ -35,6 +35,36 @@ describe("Modal", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it("keeps focus where the user put it when the parent re-renders with a new onClose", () => {
+    // The vault "Add secret" form lost focus after every keystroke: the page
+    // re-rendered on each change, handed Modal a freshly created onClose, and
+    // the open-effect re-ran and re-focused the panel. A re-render is not an
+    // open.
+    function Harness({ tick }: { tick: number }) {
+      return (
+        <Modal open onClose={() => undefined} title={`t${tick}`}>
+          <input aria-label="Name" />
+        </Modal>
+      );
+    }
+    const { rerender } = render(<Harness tick={0} />);
+    const input = screen.getByLabelText("Name");
+    input.focus();
+    expect(document.activeElement).toBe(input);
+    rerender(<Harness tick={1} />);
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("uses the latest onClose without re-running the open effect", () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    const { rerender } = render(<Modal open onClose={first}>Body</Modal>);
+    rerender(<Modal open onClose={second}>Body</Modal>);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledOnce();
+  });
+
   it("moves focus into the content panel on open", () => {
     render(<Modal open onClose={vi.fn()}>Body</Modal>);
     expect(document.activeElement).toHaveClass("ui-modal");

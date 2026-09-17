@@ -183,6 +183,7 @@ describe("migrate/plan — TABLES", () => {
         "oauth_clients",
         "oauth_refresh_tokens",
         "pending_auth",
+        "user_vaults",
         "users",
       ].sort()
     );
