@@ -124,6 +124,11 @@ build), bind-mounts the repository at `/app`, and starts the same two processes
 <http://localhost:3000>. Edits under `packages/` are live; only a dependency
 change needs `--build`.
 
+Unlike host dev, `SERVER_PUBLIC_URL` is `http://localhost:3000` here: Vite
+proxies every server path (`/api`, `/mcp`, `/rest`, `/authorize`, `/token`,
+`/j`, `/c`, …), so the SSO redirect URI you registered for the production
+compose keeps working and an MCP client can point at either port.
+
 Three things are deliberate:
 
 - **`node_modules` is never the host's.** Anonymous volumes cover every

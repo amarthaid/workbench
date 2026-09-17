@@ -21,11 +21,13 @@ services:
       - NODE_ENV=development
       - DATABASE_URL=/data/tokens.db
       - WORKSPACE_DIR=/data/workspace
-      # Pinned, not `${VAR:-…}`: a developer .env carries the host-dev values
-      # for these (or the production compose's 3000), and either would point
-      # presigned and one-time URLs at the wrong port.
+      # Both on the portal's origin, pinned rather than `${VAR:-…}`. Vite
+      # proxies every server path, so one origin serves the SPA and the API,
+      # and the Google/Keycloak redirect URI registered for the production
+      # compose (http://localhost:3000/...) is valid here too. The API is
+      # still reachable directly on :3001.
       - PORTAL_URL=http://localhost:3000
-      - SERVER_PUBLIC_URL=http://localhost:3001
+      - SERVER_PUBLIC_URL=http://localhost:3000
       - PLUGINS_DIR=/app/custom-plugins
       # File-change events do not cross a VM-backed bind mount (Colima, and
       # some Docker Desktop setups), so both watchers poll. Cheap at this

@@ -20,11 +20,19 @@ export default defineConfig({
       // HTTP, so nothing here needs to forward an Upgrade.
       "/api": "http://localhost:3001",
       "/callback": "http://localhost:3001",
-      // Agent-facing surfaces, so an MCP client or a REST call pointed at the
-      // portal's origin works in dev too. Streamable HTTP, no Upgrade.
+      // Every other path the server owns, so SERVER_PUBLIC_URL can be this
+      // origin in dev — one registered OAuth redirect URI for prod and dev,
+      // and an MCP client, REST call, presigned or one-time URL, jot or curl
+      // proxy request pointed at the portal all reach the server. All plain
+      // HTTP (the live view is SSE), so nothing forwards an Upgrade.
       "/mcp": "http://localhost:3001",
       "/rest": "http://localhost:3001",
       "/.well-known": "http://localhost:3001",
+      "/register": "http://localhost:3001",
+      "/authorize": "http://localhost:3001",
+      "/token": "http://localhost:3001",
+      "/j": "http://localhost:3001",
+      "/c": "http://localhost:3001",
     },
   },
 });
