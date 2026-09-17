@@ -4,7 +4,7 @@ import type { ServerResponse } from "node:http";
 import WebSocket from "ws";
 import { config } from "../config";
 import { verifySession } from "./session";
-import { ensureSession } from "./browser-session";
+import { defaultTab, getWarmSession } from "./browser-session";
 
 // Browser-facing CDP transport: plain HTTP instead of a WebSocket, and
 // routable across replicas.
@@ -174,8 +174,13 @@ async function ensureUpstream(channel: CdpChannel): Promise<void> {
   if (channel.link) return;
   if (channel.starting) return channel.starting;
   channel.starting = (async () => {
-    const session = await ensureSession(channel.userId);
+    // defaultTab, not ensureSession: closing the default tab (or its socket
+    // dying) leaves cdpPageWsUrl pointing at a dead target, and defaultTab is
+    // the only thing that re-adopts a live page and rewrites that url.
+    await defaultTab(channel.userId);
     if (channel.closed) return;
+    const session = getWarmSession(channel.userId);
+    if (!session) return;
     channel.link = dial(session.cdpPageWsUrl, {
       onMessage: (text) => {
         channel.lastActivity = Date.now();

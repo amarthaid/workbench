@@ -169,6 +169,13 @@ export interface WarmSession {
    */
   tabs: Map<string, Tab>;
   defaultTabId: string;
+  /**
+   * Tabs whose target is being created right now. openTab reserves its slot
+   * here before its first await: the size check and the map insert are
+   * separated by three round trips, so without a synchronous reservation N
+   * concurrent calls all pass a check that only one of them should.
+   */
+  pendingOpens: number;
   authWs?: WebSocket;
   /**
    * Second client, on the BROWSER target rather than the page target.
@@ -212,6 +219,7 @@ export async function ensureSession(userId: string): Promise<WarmSession> {
       lastActivity: Date.now(),
       tabs: new Map(),
       defaultTabId: spawned.cdpPageTargetId,
+      pendingOpens: 0,
       authWs,
     };
     await attachTab(session, spawned.cdpPageTargetId, spawned.cdpPageWsUrl);
@@ -304,12 +312,17 @@ export type OpenTabResult =
 export async function openTab(userId: string): Promise<OpenTabResult> {
   const s = await ensureSession(userId);
   const limit = config.BROWSER_TAB_LIMIT;
-  if (s.tabs.size >= limit) return { ok: false, error: "BROWSER_TAB_LIMIT", limit };
-  const browser = await browserClient(s);
-  const { targetId } = (await browser.send("Target.createTarget", { url: "about:blank" })) as { targetId: string };
-  const tab = await attachTab(s, targetId, pageWsUrl(s.remotePort, targetId));
-  s.lastActivity = Date.now();
-  return { ok: true, tab };
+  if (s.tabs.size + s.pendingOpens >= limit) return { ok: false, error: "BROWSER_TAB_LIMIT", limit };
+  s.pendingOpens += 1;
+  try {
+    const browser = await browserClient(s);
+    const { targetId } = (await browser.send("Target.createTarget", { url: "about:blank" })) as { targetId: string };
+    const tab = await attachTab(s, targetId, pageWsUrl(s.remotePort, targetId));
+    s.lastActivity = Date.now();
+    return { ok: true, tab };
+  } finally {
+    s.pendingOpens -= 1;
+  }
 }
 
 /**
@@ -325,7 +338,10 @@ export async function defaultTab(userId: string): Promise<Tab> {
   const { targetInfos } = (await browser.send("Target.getTargets")) as {
     targetInfos?: Array<{ targetId: string; type: string }>;
   };
-  let targetId = targetInfos?.find((t) => t.type === "page")?.targetId;
+  const pages = (targetInfos ?? []).filter((t) => t.type === "page");
+  // Prefer a page nothing is driving yet, so adopting a default does not hand
+  // the live view a tab an agent is already working in.
+  let targetId = (pages.find((t) => !s.tabs.has(t.targetId)) ?? pages[0])?.targetId;
   if (!targetId) {
     targetId = ((await browser.send("Target.createTarget", { url: "about:blank" })) as { targetId: string }).targetId;
   }

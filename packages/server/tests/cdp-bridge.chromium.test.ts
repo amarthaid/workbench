@@ -16,7 +16,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const { cfg, ensureMock } = vi.hoisted(() => ({
+const { cfg, ensureMock, warm } = vi.hoisted(() => ({
   cfg: {
     PORTAL_URL: "http://127.0.0.1:0",
     SERVER_PUBLIC_URL: "http://127.0.0.1:0",
@@ -26,6 +26,9 @@ const { cfg, ensureMock } = vi.hoisted(() => ({
     SESSION_SECRET: "test-session-secret-32-chars-long!!",
   },
   ensureMock: vi.fn(),
+  // Filled in once the real chromium is up; the bridge reads the page url off
+  // the session rather than off defaultTab's return value.
+  warm: { session: undefined as { userId: string; cdpPageWsUrl: string } | undefined },
 }));
 vi.mock("../src/config", () => ({ config: cfg }));
 vi.mock("../src/auth/session", () => ({
@@ -33,7 +36,10 @@ vi.mock("../src/auth/session", () => ({
 }));
 // The bridge starts the browser itself on the first command; hand it the real
 // chromium this test spawned.
-vi.mock("../src/auth/browser-session", () => ({ ensureSession: ensureMock }));
+vi.mock("../src/auth/browser-session", () => ({
+  defaultTab: ensureMock,
+  getWarmSession: () => warm.session,
+}));
 
 import { registerCdpBridgeRoutes, mintSessionKey, SESSION_HEADER } from "../src/auth/cdp-bridge";
 import { spawnProfileChromium } from "../src/auth/profile-chromium";
@@ -54,7 +60,8 @@ describe.skipIf(!ENABLED)("cdp bridge against a real chromium", () => {
     const spawned = await spawnProfileChromium("e2e-user", {
       startUrl: "data:text/html,<h1>hello</h1>",
     });
-    ensureMock.mockResolvedValue({ userId: "e2e-user", cdpPageWsUrl: spawned.cdpPageWsUrl });
+    warm.session = { userId: "e2e-user", cdpPageWsUrl: spawned.cdpPageWsUrl };
+    ensureMock.mockResolvedValue({ id: "T0" });
 
     const app = Fastify();
     registerCdpBridgeRoutes(app);

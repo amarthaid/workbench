@@ -273,6 +273,37 @@ describe("tabs", () => {
     expect(sent.map((x) => x.method)).toContain("Target.getTargets");
   });
 
+  it("defaultTab prefers a page target no tab is already driving", async () => {
+    await ensureSession("u1");
+    await stubBrowserTarget("u1", { "Target.createTarget": { targetId: "T1" } });
+    await openTab("u1");
+    await closeTab("u1", "T0");
+    // T1 is registered and an agent may be driving it; T9 is free.
+    await stubBrowserTarget("u1", {
+      "Target.getTargets": { targetInfos: [
+        { targetId: "T1", type: "page", url: "about:blank", title: "" },
+        { targetId: "T9", type: "page", url: "about:blank", title: "" },
+      ] },
+    });
+    const t = await defaultTab("u1");
+    expect(t.id).toBe("T9");
+    expect(getWarmSession("u1")!.cdpPageWsUrl).toBe("ws://127.0.0.1:9999/devtools/page/T9");
+  });
+
+  it("concurrent openTab calls cannot race past BROWSER_TAB_LIMIT", async () => {
+    await ensureSession("u1");
+    let n = 0;
+    await stubBrowserTarget("u1", { "Target.createTarget": () => ({ targetId: `T${++n}` }) });
+    // 8 at once against a session already holding the default tab: the limit is
+    // 8, so exactly 7 may land.
+    const results = await Promise.all(Array.from({ length: 8 }, () => openTab("u1")));
+    expect(results.filter((r) => r.ok)).toHaveLength(7);
+    expect(results.filter((r) => !r.ok)).toEqual([
+      { ok: false, error: "BROWSER_TAB_LIMIT", limit: 8 },
+    ]);
+    expect(getWarmSession("u1")!.tabs.size).toBe(8);
+  });
+
   it("listTabs joins Target.getTargets with the map", async () => {
     await ensureSession("u1");
     await stubBrowserTarget("u1", {
