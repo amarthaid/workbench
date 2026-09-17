@@ -66,6 +66,21 @@ describe("Vault page", () => {
     expect(document.body.textContent).not.toContain("postgres://x");
   });
 
+  it("toggles the value field between password and text with an icon button", async () => {
+    renderPage();
+    await screen.findByText("site_pw");
+    fireEvent.click(screen.getByRole("button", { name: /add secret/i }));
+    const valueInput = screen.getByLabelText(/^value/i) as HTMLInputElement;
+    const toggle = screen.getByRole("button", { name: /show value while typing/i });
+    expect(toggle.querySelector("svg")).not.toBeNull();
+    expect(valueInput.type).toBe("password");
+    fireEvent.click(toggle);
+    expect(valueInput.type).toBe("text");
+    expect(screen.getByRole("button", { name: /hide value/i })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: /hide value/i }));
+    expect(valueInput.type).toBe("password");
+  });
+
   it("rejects an invalid name client-side", async () => {
     renderPage();
     await screen.findByText("site_pw");

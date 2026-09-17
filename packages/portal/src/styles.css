@@ -321,6 +321,30 @@ body {
 .ui-input-error { border-color: var(--danger); }
 .ui-input:disabled { opacity: .6; cursor: not-allowed; }
 
+/* An input with a trailing icon button (e.g. the vault value field's
+   show/hide). The button sits inside the field's box, so the input keeps its
+   own border and focus ring and the text never runs under the icon. */
+.ui-input-affix { position: relative; display: block; }
+.ui-input-has-affix { padding-right: 36px; }
+.ui-input-affix-button {
+  position: absolute;
+  top: 50%;
+  right: var(--s-4);
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.ui-input-affix-button:hover { color: var(--text); background: var(--bg-sunk); }
+.ui-input-affix-button:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+
 /* ui/Modal */
 .ui-modal-backdrop {
   position: fixed;

@@ -12,6 +12,25 @@ import { Input } from "../components/ui/Input";
 const NAME_RE = /^[a-z0-9][a-z0-9_.-]{0,63}$/;
 const NAME_HELP = "Lowercase letters, digits, and _ . - only (max 64).";
 
+function EyeIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8s-2.5 4.5-6.5 4.5S1.5 8 1.5 8z" />
+      <circle cx="8" cy="8" r="2" />
+    </svg>
+  );
+}
+
+function EyeOffIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M1.5 8s2.5-4.5 6.5-4.5c1.1 0 2.1.3 3 .8M14.5 8s-2.5 4.5-6.5 4.5c-1.1 0-2.1-.3-3-.8" />
+      <path d="M6.6 6.6a2 2 0 0 0 2.8 2.8" />
+      <path d="M2.5 2.5l11 11" />
+    </svg>
+  );
+}
+
 export function relativeTime(sec: number | null, nowSec: number = Math.floor(Date.now() / 1000)): string {
   if (sec === null || sec === undefined) return "never";
   const d = Math.max(0, nowSec - sec);
@@ -196,16 +215,26 @@ export default function Vault() {
           </label>
           <label className="ui-field">
             <span className="ui-field-label">Value</span>
-            <Input
+            <span className="ui-input-affix">
+              <Input
               type={showValue ? "text" : "password"}
               value={value}
               onChange={(e) => setValue(e.target.value)}
               autoComplete="new-password"
-            />
+                className="ui-input-has-affix"
+              />
+              <button
+                type="button"
+                className="ui-input-affix-button"
+                onClick={() => setShowValue((v) => !v)}
+                aria-pressed={showValue}
+                aria-label={showValue ? "Hide value" : "Show value while typing"}
+                title={showValue ? "Hide value" : "Show value while typing"}
+              >
+                {showValue ? <EyeOffIcon /> : <EyeIcon />}
+              </button>
+            </span>
           </label>
-          <Button type="button" variant="ghost" onClick={() => setShowValue((v) => !v)}>
-            {showValue ? "Hide" : "Show"} while typing
-          </Button>
           <p className="ui-stat-note">The value is never shown again after saving.</p>
           {formError && <div className="ui-form-error">{formError}</div>}
         </form>
