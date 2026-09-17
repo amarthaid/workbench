@@ -24,7 +24,7 @@ There is exactly one browser per user, backed by a persistent profile on disk. E
 
 `session_id` is not a credential and not a routing key. Behind a load balancer every `browser_*` call still has to reach the replica that owns the Chromium process (see [browser session pod affinity](../field-notes/2026-09-10-browser-session-pod-affinity.md)); the server derives that routing key from the bearer itself, so the agent never sees or carries it. Until v0.31, a `session_id` minted by a pre-v0.30 `browser_start` still works and drives the default tab.
 
-The cookie-auth capture flow uses that same browser. The two **share** it rather than excluding each other. Capture and the `browser_*` tools resolve the same warm session, so a capture can start while an agent is driving. `browser_close` ends the process but keeps the profile, so the logged-in state survives.
+The cookie-auth capture flow uses that same browser. The two **share** it rather than excluding each other. Capture and the `browser_*` tools resolve the same warm session, so a capture can start while an agent is driving. `browser_close` ends one tab, not the browser; the profile — and the logged-in state in it — survives regardless.
 
 Because the profile persists, sites the user logged into stay logged in across sessions. The server kills an idle session after `BROWSER_SESSION_TTL_SECONDS`. The profile itself is separately subject to `BROWSER_PROFILE_TTL_DAYS`.
 
@@ -97,4 +97,4 @@ Downloads land in the [files workspace](files.md) **whether or not a wait was ar
 
 Going the other way, `browser_upload_file({ selector, name })` puts a workspace file into a file input. `name` is a workspace-relative filename and never a path: it is resolved server-side against your own directory, symlinks included. Chromium will upload whatever path it is given to whatever form is on the page, so that resolution is load-bearing rather than decorative.
 
-`browser_close` is worth calling when the agent is done. It ends the Chromium process early rather than waiting for the idle reaper, and the profile is untouched.
+`browser_close` is worth calling when the agent is done with a tab. It ends that tab immediately rather than waiting for the idle reaper; the browser, the profile, and any other tabs are untouched.
