@@ -515,6 +515,14 @@ body {
   color: var(--text-3);
 }
 
+/* Inside a box header's action slot the note is inline copy, not a footer row:
+   the strip already draws the hairline, so the note's own would float above
+   the text as a stray line (Files and Vault headers). */
+.ui-box-action .ui-stat-note {
+  border-top: 0;
+  padding: 0;
+}
+
 /* --- EmptyState --- */
 .ui-empty {
   padding: var(--s-32) var(--s-12);
