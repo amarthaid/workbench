@@ -20,6 +20,11 @@ export default defineConfig({
       // HTTP, so nothing here needs to forward an Upgrade.
       "/api": "http://localhost:3001",
       "/callback": "http://localhost:3001",
+      // Agent-facing surfaces, so an MCP client or a REST call pointed at the
+      // portal's origin works in dev too. Streamable HTTP, no Upgrade.
+      "/mcp": "http://localhost:3001",
+      "/rest": "http://localhost:3001",
+      "/.well-known": "http://localhost:3001",
     },
   },
 });
