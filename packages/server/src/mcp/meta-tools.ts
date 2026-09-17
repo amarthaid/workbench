@@ -14,12 +14,17 @@ import { signConnectToken } from "../auth/connect-token";
 import { signCurlToken } from "../auth/curl-session";
 import { resolveVaultRefs, scrubVaultValues, scrubString, VaultRefError, VaultScrubError } from "../vault/interpolate";
 import { touchUsed } from "../vault/store";
+import { rememberSubstituted, recentSubstituted } from "../vault/recent";
 
 // `connect` and `get_auth_url` are the same tool under two names (kept for
 // backward compatibility) — one description, so the security claim in it
 // can't drift between the two copies.
 const CONNECT_DESCRIPTION =
   "Begin connecting an integration. Returns a connectionId and a workbench URL for the user to open. The user must be signed in to workbench as the same account this agent is connected to; the link will not work for anyone else. Call wait_for_connection afterward.";
+
+// A ring value shorter than this only scrubs as a whole-string match, never
+// as a substring inside unrelated prose — see the `substringOk` build below.
+const VAULT_RECENT_SUBSTRING_MIN_LEN = 8;
 
 // Shape of a meta-tool definition. `inputSchema` is a real Zod schema so we
 // can call `.safeParse` directly without hand-rolled casts. `handler` is kept
@@ -146,6 +151,54 @@ export async function executeSingle(
         }
       }
 
+      // Values substituted in earlier calls within the recent window. Read
+      // the ring BEFORE remembering this call's own substitutions, so a name
+      // reused across calls with a different value (e.g. a secret rotated
+      // mid-session) still scrubs the stale value too, not just the fresh
+      // one.
+      const recent = recentSubstituted(userId);
+      if (substituted.size > 0) rememberSubstituted(userId, substituted);
+
+      // ONE combined list for scrubString/scrubVaultValues below, not two
+      // sequential calls: sequential passes defeat the longest-value-first
+      // ordering across the substituted/recent boundary (a short ring value
+      // can eat part of a longer current-call value first) and can corrupt
+      // an already-inserted `{{vault:name}}` placeholder if a later pass's
+      // value happens to appear inside that syntax (e.g. the literal
+      // "vault"). Deduped by VALUE, not name, so the same name with two
+      // different values (the rotation case above) keeps both entries, and
+      // an identical value in both sources keeps the current call's name —
+      // first occurrence wins, and `substituted` is listed first.
+      //
+      // `substringOk` holds every value allowed to match inside a larger
+      // string. This call's own substitutions always qualify (the agent
+      // just opted into using them). A ring value only qualifies once it's
+      // at least VAULT_RECENT_SUBSTRING_MIN_LEN chars — a short remembered
+      // value (a PIN, a port) otherwise only scrubs where it is the WHOLE
+      // string, not wherever it happens to appear in unrelated prose. See
+      // docs/site/_content/integrations/vault.md for the trade-off this
+      // accepts (a confirmation oracle, disclosed there) in exchange for not
+      // over-scrubbing.
+      const seenScrubValues = new Set<string>();
+      const scrubEntries: Array<readonly [string, string]> = [];
+      const substringOk = new Set<string>();
+      for (const [name, value] of substituted) {
+        if (value === "") continue;
+        substringOk.add(value);
+        if (!seenScrubValues.has(value)) {
+          seenScrubValues.add(value);
+          scrubEntries.push([name, value]);
+        }
+      }
+      for (const [name, value] of recent) {
+        if (value === "") continue;
+        if (value.length >= VAULT_RECENT_SUBSTRING_MIN_LEN) substringOk.add(value);
+        if (!seenScrubValues.has(value)) {
+          seenScrubValues.add(value);
+          scrubEntries.push([name, value]);
+        }
+      }
+
       // Validate args against the plugin tool's own schema so that
       // Zod defaults (e.g. pageSize=10) get applied. Without this,
       // we'd blindly forward whatever the caller sent and the plugin
@@ -164,7 +217,7 @@ export async function executeSingle(
             duration_ms: Date.now() - start,
           });
           return {
-            error: `Invalid arguments for ${toolName}: ${scrubString(parsed.error?.message ?? "schema mismatch", substituted)}`,
+            error: `Invalid arguments for ${toolName}: ${scrubString(parsed.error?.message ?? "schema mismatch", scrubEntries, substringOk)}`,
           };
         }
         parsedArgs = parsed.data;
@@ -172,7 +225,7 @@ export async function executeSingle(
         // Unexpected throw during schema parsing (e.g. a malformed schema).
         // Don't swallow silently: record it observably, then fall through
         // with raw args so execution still proceeds.
-        const err = scrubString(e instanceof Error ? e.message : String(e), substituted);
+        const err = scrubString(e instanceof Error ? e.message : String(e), scrubEntries, substringOk);
         await auditLogger.log({
           user_id: userId,
           integration: targetTool.integration,
@@ -188,7 +241,8 @@ export async function executeSingle(
         const toolCtx = await createContext(userId, targetTool.integration);
         const result = scrubVaultValues(
           await targetTool.handler(toolCtx, parsedArgs as Record<string, unknown>),
-          substituted
+          scrubEntries,
+          substringOk
         );
         const duration_ms = Date.now() - start;
         await auditLogger.log({
@@ -247,7 +301,7 @@ export async function executeSingle(
           toolExecutionDuration.observe({ integration: targetTool.integration, tool: toolName, success: "false" }, durationS);
           return { error: e.code };
         }
-        const err = scrubString(e instanceof Error ? e.message : String(e), substituted);
+        const err = scrubString(e instanceof Error ? e.message : String(e), scrubEntries, substringOk);
         const duration_ms = Date.now() - start;
         await auditLogger.log({
           user_id: userId,

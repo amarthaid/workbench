@@ -130,6 +130,79 @@ describe("scrub", () => {
       expect((e as VaultScrubError).code).toBe("VAULT_SCRUB_FAILED");
     }
   });
+
+  describe("single pass over a combined entry list", () => {
+    // These entries model meta-tools.ts's merge of a call's own substitutions
+    // with the recent-values ring: same name, two different values. Two
+    // sequential `scrubString` passes (once per source) would let the SHORT
+    // value eat part of the LONG one first if it happened to run first, or
+    // leave a partial match behind — a single alternated regex over the
+    // combined, longest-first list must not.
+    it("replaces the longer value whole rather than leaving a partial match from a shorter one under the same name", () => {
+      const entries: Array<[string, string]> = [
+        ["pw", "abc"],
+        ["pw", "abcdefghij"],
+      ];
+      expect(scrubString("page shows abcdefghij", entries)).toBe("page shows {{vault:pw}}");
+    });
+
+    it("replaces the longer value whole rather than leaving the shorter one's remainder under a different name", () => {
+      const entries: Array<[string, string]> = [
+        ["user", "alice"],
+        ["email", "alice@example.com"],
+      ];
+      expect(scrubString("contact alice@example.com now", entries)).toBe("contact {{vault:email}} now");
+    });
+
+    it("does not corrupt a placeholder it just inserted with a later entry's value", () => {
+      // "vault" is a substring of the "{{vault:pw}}" placeholder syntax
+      // itself. A sequential per-entry pass that re-scans its own growing
+      // output would find that "vault" and mangle the placeholder it just
+      // produced. A single pass over the ORIGINAL string can't, because
+      // "vault" never appears in the original text.
+      const entries: Array<[string, string]> = [
+        ["pw", "hunter2"],
+        ["v", "vault"],
+      ];
+      const out = scrubString("saw hunter2 here", entries);
+      expect(out).toBe("saw {{vault:pw}} here");
+      expect(out).not.toContain("{{vault:v}}");
+      expect(out.match(/\{\{vault:/g)).toHaveLength(1);
+    });
+  });
+
+  describe("substringOk: whole-string-only entries", () => {
+    it("replaces a whole-string-only value only when it is the entire string, never inside prose", () => {
+      const entries: Array<[string, string]> = [["pin", "12"]];
+      const substringOk = new Set<string>(); // "12" is not in it: whole-string only
+      expect(scrubString("12", entries, substringOk)).toBe("{{vault:pin}}");
+      expect(scrubString("there are 12 items", entries, substringOk)).toBe("there are 12 items");
+    });
+
+    it("still substring-scrubs a value that IS marked substring-eligible", () => {
+      const entries: Array<[string, string]> = [["longpw", "hunter2-long-value"]];
+      const substringOk = new Set(["hunter2-long-value"]);
+      expect(scrubString("value is hunter2-long-value here", entries, substringOk)).toBe(
+        "value is {{vault:longpw}} here"
+      );
+    });
+
+    it("applies the same whole-string rule to scalar leaves and object structure via scrubVaultValues", () => {
+      const entries: Array<[string, string]> = [["pin", "12"], ["longpw", "hunter2-long-value"]];
+      const substringOk = new Set(["hunter2-long-value"]);
+      const out = scrubVaultValues(
+        { n: 12, s: "there are 12 items", t: "12", u: "value is hunter2-long-value here" },
+        entries,
+        substringOk
+      );
+      expect(out).toEqual({
+        n: "{{vault:pin}}",
+        s: "there are 12 items",
+        t: "{{vault:pin}}",
+        u: "value is {{vault:longpw}} here",
+      });
+    });
+  });
 });
 
 describe("resolveVaultRefs", () => {

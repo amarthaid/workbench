@@ -68,5 +68,26 @@ back as a number whose `String()` is `5432`, which is not the stored `"5432.0"`,
 so it is not caught. Same class of gap as the encoding limits already
 documented: base64, URL-escaping, a value split across DOM nodes.
 
+At the time this was written, scrubbing was also same-call-only: a value
+substituted in call N and echoed by an unrelated call N+1 (`browser_read_text`
+after a `browser_type`, `files_read` after a `files_write`) substituted
+nothing in that later call and so scrubbed nothing. `packages/server/src/vault/recent.ts`
+closes that: a short-window, per-user, in-process ring remembers what was
+substituted recently and scrubs it from every later result too, not just the
+one that did the substituting. The residual limits are now the encodings and
+canonicalisation gap above, plus the window itself and, under
+`CLUSTER_ENABLED`, a result served by a worker other than the one that
+remembered the value (`docs/findings/2026-09-10-browser-session-pod-affinity.md`).
+
+One consequence carries over unchanged from the fail-closed design above:
+`scrubVaultValues` still JSON-normalises the *entire* result before walking
+it, so within the recent-values window this now also applies to a tool call
+that never itself referenced the vault. A tool whose result can't round-trip
+through `JSON.parse(JSON.stringify(...))` — a `BigInt`, a cycle — fails
+`VAULT_SCRUB_FAILED` as soon as the user has anything live in the ring, even
+though that particular call has nothing to do with the vault. Same trade-off
+as before, applied to a wider set of calls: a tool call that returns nothing
+is a bug report, a tool call that returns the password is a breach.
+
 Scrubbing is containment for the common case. It is not a guarantee, and the
 docs say so.

@@ -73,8 +73,12 @@ vi.mock("../src/telemetry/tracing", () => ({
 }));
 
 vi.mock("../src/vault/store", () => ({
+  // "longpw" is deliberately >= 8 chars so recent-values tests exercise the
+  // substring-eligible ring path rather than the short-value whole-only guard
+  // ("pw" -> "hunter2" is only 7 chars and would hit that guard once
+  // remembered in the ring).
   readSecretValue: vi.fn(async (_u: string, name: string) =>
-    name === "pw" ? "hunter2" : name === "port" ? "5432" : null
+    name === "pw" ? "hunter2" : name === "port" ? "5432" : name === "longpw" ? "hunter2-long-value" : null
   ),
   touchUsed: vi.fn(async () => undefined),
 }));
@@ -84,8 +88,10 @@ function findTool(name: string) {
 }
 
 describe("meta-tools", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    const { _resetForTest } = await import("../src/vault/recent");
+    _resetForTest();
   });
 
   describe("search_tools", () => {
@@ -327,6 +333,163 @@ describe("meta-tools", () => {
       expect(auditLogger.log).toHaveBeenCalledWith(
         expect.objectContaining({ success: false, error: "VAULT_SCRUB_FAILED", tool: "unscrubbable" })
       );
+    });
+
+    it("scrubs a value substituted in an earlier call from a later call's result that never referenced it", async () => {
+      const { z } = await import("zod");
+      const { _setNowForTest } = await import("../src/vault/recent");
+      _setNowForTest(() => 1_000_000);
+      const type = {
+        name: "type",
+        integration: "test-integ",
+        inputSchema: z.object({ text: z.string() }),
+        handler: vi.fn(async (_c: unknown, a: { text: string }) => ({ typed: a.text })),
+      };
+      vi.spyOn(registry, "getTool").mockReturnValue(type as any);
+      await runOne(findTool("execute_tools"), { tool: "type", args: { text: "{{vault:longpw}}" } });
+
+      const read = {
+        name: "read",
+        integration: "test-integ",
+        inputSchema: z.object({}),
+        handler: vi.fn(async () => ({ page: "login ok hunter2-long-value" })),
+      };
+      vi.spyOn(registry, "getTool").mockReturnValue(read as any);
+      const result = await runOne(findTool("execute_tools"), { tool: "read", args: {} });
+      expect(result.result).toEqual({ page: "login ok {{vault:longpw}}" });
+    });
+
+    it("scrubs a thrown error message in a later call using an earlier call's substituted value", async () => {
+      const { z } = await import("zod");
+      const { _setNowForTest } = await import("../src/vault/recent");
+      _setNowForTest(() => 1_000_000);
+      const type = {
+        name: "type",
+        integration: "test-integ",
+        inputSchema: z.object({ text: z.string() }),
+        handler: vi.fn(async (_c: unknown, a: { text: string }) => ({ typed: a.text })),
+      };
+      vi.spyOn(registry, "getTool").mockReturnValue(type as any);
+      await runOne(findTool("execute_tools"), { tool: "type", args: { text: "{{vault:longpw}}" } });
+
+      const boom = {
+        name: "boom2",
+        integration: "test-integ",
+        inputSchema: z.object({}),
+        handler: vi.fn(async () => {
+          throw new Error("upstream saw hunter2-long-value in the page");
+        }),
+      };
+      vi.spyOn(registry, "getTool").mockReturnValue(boom as any);
+      const result = await runOne(findTool("execute_tools"), { tool: "boom2", args: {} });
+      expect(result.error).toBe("upstream saw {{vault:longpw}} in the page");
+    });
+
+    it("does not scrub a later call once the recent-values window has elapsed", async () => {
+      const { z } = await import("zod");
+      const { _setNowForTest, VAULT_RECENT_WINDOW_MS } = await import("../src/vault/recent");
+      let t = 1_000_000;
+      _setNowForTest(() => t);
+      const type = {
+        name: "type",
+        integration: "test-integ",
+        inputSchema: z.object({ text: z.string() }),
+        handler: vi.fn(async (_c: unknown, a: { text: string }) => ({ typed: a.text })),
+      };
+      vi.spyOn(registry, "getTool").mockReturnValue(type as any);
+      await runOne(findTool("execute_tools"), { tool: "type", args: { text: "{{vault:pw}}" } });
+
+      t += VAULT_RECENT_WINDOW_MS + 1;
+      const read = {
+        name: "read",
+        integration: "test-integ",
+        inputSchema: z.object({}),
+        handler: vi.fn(async () => ({ page: "login ok hunter2" })),
+      };
+      vi.spyOn(registry, "getTool").mockReturnValue(read as any);
+      const result = await runOne(findTool("execute_tools"), { tool: "read", args: {} });
+      expect(result.result).toEqual({ page: "login ok hunter2" });
+    });
+
+    it("does not scrub a different user's call with the current user's recently substituted value", async () => {
+      const { z } = await import("zod");
+      const { _setNowForTest } = await import("../src/vault/recent");
+      _setNowForTest(() => 1_000_000);
+      const type = {
+        name: "type",
+        integration: "test-integ",
+        inputSchema: z.object({ text: z.string() }),
+        handler: vi.fn(async (_c: unknown, a: { text: string }) => ({ typed: a.text })),
+      };
+      vi.spyOn(registry, "getTool").mockReturnValue(type as any);
+      await runOne(findTool("execute_tools"), { tool: "type", args: { text: "{{vault:pw}}" } });
+
+      const read = {
+        name: "read",
+        integration: "test-integ",
+        inputSchema: z.object({}),
+        handler: vi.fn(async () => ({ page: "login ok hunter2" })),
+      };
+      vi.spyOn(registry, "getTool").mockReturnValue(read as any);
+      const result = await findTool("execute_tools")
+        .handler({ userId: "user-2" }, { executions: [{ tool: "read", args: {} }] })
+        .then((r: any) => r.results[0]);
+      expect(result.result).toEqual({ page: "login ok hunter2" });
+    });
+
+    it("scrubs the current call's value over a stale ring value for the same name; the short stale value only scrubs where it is the whole string", async () => {
+      const { z } = await import("zod");
+      const { rememberSubstituted, _setNowForTest } = await import("../src/vault/recent");
+      const { readSecretValue } = await import("../src/vault/store");
+      _setNowForTest(() => 1_000_000);
+      rememberSubstituted("user-1", new Map([["pw", "abc"]]));
+      vi.mocked(readSecretValue).mockImplementationOnce(async (_u: string, name: string) =>
+        name === "pw" ? "abcdef" : null
+      );
+
+      const t = {
+        name: "echo2",
+        integration: "test-integ",
+        inputSchema: z.object({ text: z.string() }),
+        handler: vi.fn(async () => ({ page: "value now abcdef, was abc" })),
+      };
+      vi.spyOn(registry, "getTool").mockReturnValue(t as any);
+      const result = await runOne(findTool("execute_tools"), {
+        tool: "echo2",
+        args: { text: "{{vault:pw}}" },
+      });
+      // "abcdef" is this call's own substitution — always scrubbed, wherever
+      // it appears. "abc" is a stale ring value under the 8-char guard, so it
+      // only scrubs when it IS the whole string, not embedded in prose —
+      // left alone here, and no plaintext of "abcdef" survives either.
+      expect(result.result).toEqual({ page: "value now {{vault:pw}}, was abc" });
+    });
+
+    it("short-value guard: a ring value under 8 chars only scrubs a whole leaf, never inside prose; an 8+ char ring value still substring-scrubs", async () => {
+      const { z } = await import("zod");
+      const { rememberSubstituted, _setNowForTest } = await import("../src/vault/recent");
+      _setNowForTest(() => 1_000_000);
+      rememberSubstituted("user-1", new Map([["pin", "12"], ["longpw", "hunter2-long-value"]]));
+
+      const read = {
+        name: "read2",
+        integration: "test-integ",
+        inputSchema: z.object({}),
+        handler: vi.fn(async () => ({
+          n: 12,
+          s: "there are 12 items",
+          t: "12",
+          u: "value is hunter2-long-value here",
+        })),
+      };
+      vi.spyOn(registry, "getTool").mockReturnValue(read as any);
+      const result = await runOne(findTool("execute_tools"), { tool: "read2", args: {} });
+      expect(result.result).toEqual({
+        n: "{{vault:pin}}",
+        s: "there are 12 items",
+        t: "{{vault:pin}}",
+        u: "value is {{vault:longpw}} here",
+      });
     });
   });
 
