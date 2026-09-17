@@ -79,5 +79,15 @@ canonicalisation gap above, plus the window itself and, under
 `CLUSTER_ENABLED`, a result served by a worker other than the one that
 remembered the value (`docs/findings/2026-09-10-browser-session-pod-affinity.md`).
 
+One consequence carries over unchanged from the fail-closed design above:
+`scrubVaultValues` still JSON-normalises the *entire* result before walking
+it, so within the recent-values window this now also applies to a tool call
+that never itself referenced the vault. A tool whose result can't round-trip
+through `JSON.parse(JSON.stringify(...))` — a `BigInt`, a cycle — fails
+`VAULT_SCRUB_FAILED` as soon as the user has anything live in the ring, even
+though that particular call has nothing to do with the vault. Same trade-off
+as before, applied to a wider set of calls: a tool call that returns nothing
+is a bug report, a tool call that returns the password is a breach.
+
 Scrubbing is containment for the common case. It is not a guarantee, and the
 docs say so.

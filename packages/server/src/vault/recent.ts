@@ -25,6 +25,13 @@
 
 export const VAULT_RECENT_WINDOW_MS = 10 * 60_000;
 export const VAULT_RECENT_MAX_PER_USER = 32;
+// Safety net, not a hard cap: expiry already bounds memory over time, but
+// without this a process that never restarts and sees a long tail of
+// one-shot users (or the reaper's own 60s interval not having run yet) could
+// carry an unbounded number of user entries, most of them already expired.
+// Cheap because it only runs the same prune the reaper does, inline, and
+// only once the map is already large enough to matter.
+const MAX_RING_USERS_BEFORE_INLINE_PRUNE = 256;
 
 interface Entry {
   name: string;
@@ -44,8 +51,39 @@ export function _resetForTest(): void {
   now = () => Date.now();
 }
 
+// Number of users currently holding at least one ring entry. Test seam only —
+// production code has no legitimate reason to inspect ring size.
+export function _sizeForTest(): number {
+  return ring.size;
+}
+
 function isLive(e: Entry, t: number): boolean {
   return t - e.at < VAULT_RECENT_WINDOW_MS;
+}
+
+// Drop expired entries for every user, and the user entirely once nothing of
+// theirs is left. This is the only thing that ever removes a user who stops
+// making calls — `recentSubstituted` only prunes the user it was asked
+// about, so an abandoned session's ring would otherwise sit in memory,
+// plaintext, forever.
+export function reapExpiredRecent(): void {
+  const t = now();
+  for (const [userId, entries] of ring) {
+    const live = entries.filter((e) => isLive(e, t));
+    if (live.length === 0) ring.delete(userId);
+    else if (live.length !== entries.length) ring.set(userId, live);
+  }
+}
+
+let timer: NodeJS.Timeout | null = null;
+export function startRecentReaper(intervalMs = 60_000): void {
+  if (timer) return;
+  timer = setInterval(() => reapExpiredRecent(), intervalMs);
+  timer.unref?.();
+}
+export function stopRecentReaper(): void {
+  if (timer) clearInterval(timer);
+  timer = null;
 }
 
 export function rememberSubstituted(userId: string, substituted: Map<string, string>): void {
@@ -57,6 +95,7 @@ export function rememberSubstituted(userId: string, substituted: Map<string, str
   // Newest last above; keep the newest VAULT_RECENT_MAX_PER_USER entries.
   const trimmed = merged.slice(-VAULT_RECENT_MAX_PER_USER);
   ring.set(userId, trimmed);
+  if (ring.size > MAX_RING_USERS_BEFORE_INLINE_PRUNE) reapExpiredRecent();
 }
 
 export function recentSubstituted(userId: string): Map<string, string> {
