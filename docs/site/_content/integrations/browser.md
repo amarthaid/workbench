@@ -18,7 +18,7 @@ It is internal on purpose. The handlers reach straight into the browser-session 
 
 ## The per-user session model
 
-There is exactly one browser per user, backed by a persistent profile on disk. Every action tool opens the session if it is not already running, and refreshes its idle timer. A sequence of calls therefore reuses one warm browser instead of paying the startup cost each time.
+There is exactly one browser per user, backed by a persistent profile on disk. Every action tool opens that browser if it is not already running, and refreshes its idle timer. A sequence of calls therefore reuses one warm browser — and whichever of its tabs the call names — instead of paying the startup cost each time.
 
 **One user, one browser, many tabs.** `browser_start` opens a new tab and returns its `session_id`. Every other driving tool takes that id and acts on that tab only. Two agents (or one agent with subagents) each call `browser_start` and get their own tab; they never step on each other. All tabs live in one Chromium with one profile and one cookie jar, so a login in one tab is visible in the others, and downloads from any tab land in the same [workspace](files.md). A user may hold `BROWSER_TAB_LIMIT` tabs at once (default 8); `browser_start` past that returns `BROWSER_TAB_LIMIT`. `browser_tabs` lists what is open. An id that is not one of your open tabs is refused with `BROWSER_TAB_NOT_FOUND`.
 
@@ -62,7 +62,7 @@ The cheaper habit is to prefer `browser_read_text` for text-heavy pages, forms, 
 
 `browser_live_url` returns a URL into the portal's browser canvas — `${PORTAL_URL}/browser?t=<token>` — carrying a signed token whose lifetime is `CONNECT_TTL_SECONDS` (default 600 seconds).
 
-Opening it attaches a live view of the *same* session the agent is driving — the portal's canvas dials the very page target the tools speak to, so the human sees the agent's tab, not a new one. A person can take over by hand to solve a CAPTCHA, complete an SSO prompt, or click through a consent screen. They can then leave the page. The agent's next tool call continues in the browser they just used. This is the escape hatch for anything an agent cannot or should not do itself.
+Opening it attaches a live view of the *same* browser the agent is driving — same process, same profile, same cookies, same logged-in state — not a new one. The canvas dials the default tab, though, which is not necessarily the tab an agent opened with `browser_start`; a human taking over sees whatever tab is default, and an agent working in a tab of its own is driving a different one. A person can take over by hand on that default tab to solve a CAPTCHA, complete an SSO prompt, or click through a consent screen, then leave the page. This is the escape hatch for anything an agent cannot or should not do itself.
 
 The link is a claim, not a capability: the person opening it has to be signed in to the portal as the same workbench user, or the server refuses with an account mismatch before warming anything. The live-view connection is then authorized by an `Authorization` header on every request, not through the URL, the browser canvas only accepts connections from allowed origins, and every request after the first carries the same per-user routing key the server uses for the agent's tool calls — the portal mints it from `/attach`, so the view and the tools land on the same replica. The live view shows the default tab, even when the agent has several open. Closing the tab detaches the view; it does not close the browser.
 
