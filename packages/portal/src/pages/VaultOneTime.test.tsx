@@ -40,7 +40,11 @@ describe("VaultOneTime", () => {
     expect(screen.getByRole("combobox")).toHaveValue("300");
 
     const value = screen.getByLabelText("Value") as HTMLInputElement;
-    expect(value.type).toBe("password");
+    // Masked by CSS, never type=password: no autofill, no save prompt.
+    expect(value.type).toBe("text");
+    expect(value).toHaveClass("ui-input-masked");
+    expect(value).toHaveAttribute("autocomplete", "off");
+    expect(value).toHaveAttribute("data-1p-ignore");
     fireEvent.change(value, { target: { value: "one-shot-pw" } });
     fireEvent.click(screen.getByRole("button", { name: "Create link" }));
 

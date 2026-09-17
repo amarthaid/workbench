@@ -344,6 +344,9 @@ body {
 }
 .ui-input-affix-button:hover { color: var(--text); background: var(--bg-sunk); }
 .ui-input-affix-button:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+/* Masking for a text input that must not be type=password (see SecretInput).
+   Supported by Chrome, Safari and Firefox 133+. */
+.ui-input-masked { -webkit-text-security: disc; }
 
 /* A page whose whole content is one form (vault add/replace): back link,
    title and box share one centred column. */

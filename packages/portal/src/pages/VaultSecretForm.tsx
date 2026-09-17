@@ -6,7 +6,7 @@ import { PageHeader } from "../components/ui/PageHeader";
 import { Box } from "../components/ui/Box";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
-import { EyeIcon, EyeOffIcon } from "../components/ui/Icons";
+import { SecretInput } from "../components/ui/SecretInput";
 
 export const VAULT_NAME_RE = /^[a-z0-9][a-z0-9_.-]{0,63}$/;
 export const VAULT_NAME_HELP = "Lowercase letters, digits, and _ . - only (max 64).";
@@ -29,7 +29,6 @@ export default function VaultSecretForm() {
   const [name, setName] = useState(routeName ?? "");
   const [description, setDescription] = useState("");
   const [value, setValue] = useState("");
-  const [showValue, setShowValue] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
   // Replace pre-fills the description from the list so a value-only rotation
@@ -96,26 +95,7 @@ export default function VaultSecretForm() {
           </label>
           <label className="ui-field">
             <span className="ui-field-label">Value</span>
-            <span className="ui-input-affix">
-              <Input
-                type={showValue ? "text" : "password"}
-                value={value}
-                onChange={(e) => setValue(e.target.value)}
-                autoComplete="new-password"
-                className="ui-input-has-affix"
-                autoFocus={replacing}
-              />
-              <button
-                type="button"
-                className="ui-input-affix-button"
-                onClick={() => setShowValue((v) => !v)}
-                aria-pressed={showValue}
-                aria-label={showValue ? "Hide value" : "Show value while typing"}
-                title={showValue ? "Hide value" : "Show value while typing"}
-              >
-                {showValue ? <EyeOffIcon /> : <EyeIcon />}
-              </button>
-            </span>
+            <SecretInput value={value} onChange={(e) => setValue(e.target.value)} autoFocus={replacing} />
           </label>
           <p className="ui-stat-note">
             {VAULT_NAME_HELP} The value is never shown again after saving; an agent references it as{" "}

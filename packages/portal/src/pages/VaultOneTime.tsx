@@ -6,7 +6,8 @@ import { PageHeader } from "../components/ui/PageHeader";
 import { Box } from "../components/ui/Box";
 import { Button } from "../components/ui/Button";
 import { Input, Select } from "../components/ui/Input";
-import { CheckIcon, CopyIcon, EyeIcon, EyeOffIcon, LinkIcon } from "../components/ui/Icons";
+import { SecretInput } from "../components/ui/SecretInput";
+import { CheckIcon, CopyIcon, LinkIcon } from "../components/ui/Icons";
 
 export const ONE_TIME_TTL_OPTIONS: { seconds: number; label: string }[] = [
   { seconds: 60, label: "1 minute" },
@@ -27,7 +28,6 @@ export const ONE_TIME_TTL_DEFAULT = 300;
 export default function VaultOneTime() {
   const navigate = useNavigate();
   const [value, setValue] = useState("");
-  const [showValue, setShowValue] = useState(false);
   const [ttl, setTtl] = useState(ONE_TIME_TTL_DEFAULT);
   const [formError, setFormError] = useState<string | null>(null);
   const [minted, setMinted] = useState<{ url: string; expires_at: number } | null>(null);
@@ -99,26 +99,7 @@ export default function VaultOneTime() {
           >
             <label className="ui-field">
               <span className="ui-field-label">Value</span>
-              <span className="ui-input-affix">
-                <Input
-                  type={showValue ? "text" : "password"}
-                  value={value}
-                  onChange={(e) => setValue(e.target.value)}
-                  autoComplete="new-password"
-                  className="ui-input-has-affix"
-                  autoFocus
-                />
-                <button
-                  type="button"
-                  className="ui-input-affix-button"
-                  onClick={() => setShowValue((v) => !v)}
-                  aria-pressed={showValue}
-                  aria-label={showValue ? "Hide value" : "Show value while typing"}
-                  title={showValue ? "Hide value" : "Show value while typing"}
-                >
-                  {showValue ? <EyeOffIcon /> : <EyeIcon />}
-                </button>
-              </span>
+              <SecretInput value={value} onChange={(e) => setValue(e.target.value)} autoFocus />
             </label>
             <label className="ui-field">
               <span className="ui-field-label">Expires if unused after</span>

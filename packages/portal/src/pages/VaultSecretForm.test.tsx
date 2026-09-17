@@ -43,7 +43,11 @@ describe("VaultSecretForm — add", () => {
     fireEvent.change(screen.getByLabelText(/^name/i), { target: { value: "db_url" } });
     fireEvent.change(screen.getByLabelText(/description/i), { target: { value: "prod" } });
     const valueInput = screen.getByLabelText(/^value/i) as HTMLInputElement;
-    expect(valueInput.type).toBe("password");
+    expect(valueInput.type).toBe("text");
+    expect(valueInput).toHaveClass("ui-input-masked");
+    expect(valueInput).toHaveAttribute("autocomplete", "off");
+    expect(valueInput).toHaveAttribute("data-1p-ignore");
+    expect(valueInput).toHaveAttribute("data-lpignore", "true");
     fireEvent.change(valueInput, { target: { value: "postgres://x" } });
     fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
     await waitFor(() =>
@@ -65,8 +69,9 @@ describe("VaultSecretForm — add", () => {
     const valueInput = screen.getByLabelText(/^value/i) as HTMLInputElement;
     const toggle = screen.getByRole("button", { name: /show value while typing/i });
     expect(toggle.querySelector("svg")).not.toBeNull();
+    expect(valueInput).toHaveClass("ui-input-masked");
     fireEvent.click(toggle);
-    expect(valueInput.type).toBe("text");
+    expect(valueInput).not.toHaveClass("ui-input-masked");
     expect(screen.getByRole("button", { name: /hide value/i })).toHaveAttribute("aria-pressed", "true");
   });
 
