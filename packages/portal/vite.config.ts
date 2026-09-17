@@ -10,6 +10,11 @@ export default defineConfig({
   server: {
     port: 3000,
     strictPort: true,
+    // Inside a container on a VM-backed bind mount inotify never fires;
+    // docker-compose.dev.yml sets CHOKIDAR_USEPOLLING and this is the switch.
+    watch: process.env.CHOKIDAR_USEPOLLING
+      ? { usePolling: true, interval: Number(process.env.CHOKIDAR_INTERVAL ?? 400) }
+      : undefined,
     proxy: {
       // The CDP live view streams over /api/.../cdp/events as SSE — plain
       // HTTP, so nothing here needs to forward an Upgrade.

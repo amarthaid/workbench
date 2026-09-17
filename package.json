@@ -12,7 +12,8 @@
     "test": "turbo run test",
     "test:docs": "node --test docs/site/test/*.test.mjs",
     "lint": "turbo run lint",
-    "dev": "turbo run dev"
+    "dev": "turbo run dev",
+    "dev:docker": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^4.1.11",

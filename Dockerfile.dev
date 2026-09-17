@@ -1,0 +1,26 @@
+# Development image: dependencies and a browser, no build. The repository is
+# bind-mounted over /app by docker-compose.dev.yml and the dev servers run
+# from source with file watching, so an edit on the host is live in the
+# container without a rebuild.
+#
+# Same Debian base as the production Dockerfile for the same reason:
+# better-sqlite3 is native and Playwright's chromium targets glibc.
+FROM node:26-bookworm-slim
+WORKDIR /app
+ENV NODE_ENV=development \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 make g++ \
+ && rm -rf /var/lib/apt/lists/*
+# Only the manifests: node_modules is built here for Linux and then hidden
+# behind anonymous volumes at run time, so the host's macOS/Windows native
+# modules never reach the container and vice versa.
+COPY package*.json turbo.json ./
+COPY packages/shared/package.json ./packages/shared/
+COPY packages/server/package.json ./packages/server/
+COPY packages/portal/package.json ./packages/portal/
+RUN npm ci
+RUN npx playwright install --with-deps chromium \
+ && chmod -R a+rx /ms-playwright
+EXPOSE 3000 3001

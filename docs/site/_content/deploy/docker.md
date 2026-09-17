@@ -107,6 +107,54 @@ has to come from `.env`. With `NODE_ENV=production` forced on and no value
 supplied, the empty default fails the 32-character minimum and the container exits
 at import.
 
+## Development compose
+
+`docker-compose.dev.yml` is an override that runs the dev servers from your
+working tree instead of a built image:
+
+```bash
+npm run dev:docker
+# = docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+```
+
+It swaps the image for `Dockerfile.dev` (dependencies and a chromium, no
+build), bind-mounts the repository at `/app`, and starts the same two processes
+`npm run dev` starts on the host: the server under `tsx watch` on
+<http://localhost:3001> and the portal under Vite with HMR on
+<http://localhost:3000>. Edits under `packages/` are live; only a dependency
+change needs `--build`.
+
+Three things are deliberate:
+
+- **`node_modules` is never the host's.** Anonymous volumes cover every
+  `node_modules` the workspace can create, so the Linux tree built into the
+  image is what runs and your macOS or Windows native modules stay out of the
+  container. `docker compose down -v` discards those volumes; the next
+  `up --build` recreates them.
+- **`@a-workbench/shared` is built once on start.** The server imports its
+  `dist`, and no watcher rebuilds it. Change something in `packages/shared` and
+  restart the service.
+- **The data volume is the same `./data`.** You are developing against the
+  same SQLite file and workspace the production compose uses. Point
+  `DATABASE_URL` elsewhere in an `environment:` override if you want them
+  separate.
+
+File watching polls (`CHOKIDAR_USEPOLLING=1` in the override), because a
+VM-backed bind mount — Colima, and some Docker Desktop configurations — never
+forwards inotify events into the container. Cheap at this tree size; remove
+the two `CHOKIDAR_*` lines if your mount does forward events.
+
+Under Colima, host ports are forwarded through one ssh session that Lima's
+host agent keeps open, and it does not always notice a port added to a service
+it already forwards. If <http://localhost:3000> answers but
+<http://localhost:3001> does not, add the forward to that session yourself —
+no restart needed:
+
+```bash
+ssh -S ~/.colima/_lima/colima/ssh.sock -O forward \
+    -L 127.0.0.1:3001:127.0.0.1:3001 lima-colima
+```
+
 ## Mounting an external plugins directory
 
 Loading happens in two independent passes, and only the second one is governed by
