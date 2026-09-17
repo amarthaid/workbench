@@ -226,7 +226,8 @@ const tools: PluginTool[] = [
     }),
     handler: async (ctx: any, args: any) => {
       // The handle lives in this process's memory, so this call has to reach
-      // the process that armed it — same routing key as everything else.
+      // the process that armed it — the bearer-derived affinity header already
+      // routed it here.
       const t = await resolveTab(ctx, args);
       if (isNotFound(t)) return t;
       try {

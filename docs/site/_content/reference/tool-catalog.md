@@ -324,16 +324,18 @@ token cannot be redirected out.
 
 ## browser (internal)
 
-Fourteen tools driving one warm, per-user Chromium session. Always connected — this is
-an `auth: none` integration. Every action tool ensures the session exists and marks it
-active, so an idle session is reaped but a working one is not. Every tool except
-`browser_start` takes the `session_id` it returns; it is a per-user routing key, not a
-handle to a second browser (see [Browser](../integrations/browser.md)).
+Fifteen tools driving one warm, per-user Chromium with as many tabs as the work needs.
+Always connected — this is an `auth: none` integration. Every action tool ensures the
+browser exists and marks it active, so an idle browser is reaped but a working one is
+not. `browser_start` opens a tab and returns its `session_id`; every other tool except
+`browser_tabs` and `browser_live_url` takes that id and acts on that tab only — it
+names a tab, not a routing key (see [Browser](../integrations/browser.md)). A cap of
+`BROWSER_TAB_LIMIT` tabs per user applies (default 8).
 
 | Tool | Purpose |
 |---|---|
-| `browser_start` | Mint the per-user `session_id` |
-| `browser_navigate` | Navigate the session. `http`/`https` only |
+| `browser_start` | Open a new tab and return its `session_id` |
+| `browser_navigate` | Navigate the tab. `http`/`https` only |
 | `browser_screenshot` | Downscaled JPEG of the viewport; returns `{ unchanged: true }` when pixels are identical to the last shot |
 | `browser_click` | Click at coordinates — left, right, or middle |
 | `browser_type` | Type into the focused element |
@@ -344,15 +346,17 @@ handle to a second browser (see [Browser](../integrations/browser.md)).
 | `browser_expect_download` | Arm a wait before the click that downloads |
 | `browser_await_download` | Wait for it; the file is in the workspace |
 | `browser_upload_file` | Put a workspace file into a file input |
-| `browser_close` | Close the session, keep the profile |
+| `browser_close` | Close this tab, keep the browser and profile |
+| `browser_tabs` | List open tabs with their `session_id`, url, title |
 | `browser_live_url` | Mint a link that hands the live browser to a human |
 
 `browser_screenshot` defaults to a maximum width of 1000 pixels and clamps quality to
-1–100. `browser_live_url` returns a portal URL carrying a signed connect token, valid
-for `CONNECT_TTL_SECONDS` (600 by default).
+1–100. `browser_live_url` takes no `session_id` and returns a portal URL carrying a
+signed connect token, valid for `CONNECT_TTL_SECONDS` (600 by default); it shows the
+default tab.
 
-`browser_close` ends the warm session and keeps the profile. There is one Chromium per
-user, shared with cookie capture rather than exclusive with it.
+`browser_close` closes one tab and keeps the browser and profile. There is one
+Chromium per user, shared with cookie capture rather than exclusive with it.
 
 ## jots (internal)
 
