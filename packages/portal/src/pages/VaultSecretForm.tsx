@@ -84,7 +84,7 @@ export default function VaultSecretForm() {
   const title = replacing ? `Replace value of ${routeName}` : "Add secret";
 
   return (
-    <>
+    <div className="wb-form-column">
       <Link className="wb-page-back" to="/vault">← Vault</Link>
       <PageHeader title={title} />
 
@@ -150,6 +150,6 @@ export default function VaultSecretForm() {
           </div>
         </form>
       </Box>
-    </>
+    </div>
   );
 }

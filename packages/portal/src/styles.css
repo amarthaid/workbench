@@ -345,8 +345,9 @@ body {
 .ui-input-affix-button:hover { color: var(--text); background: var(--bg-sunk); }
 .ui-input-affix-button:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
 
-/* A page whose whole content is one form (vault add/replace). */
-.wb-form-page { max-width: 640px; }
+/* A page whose whole content is one form (vault add/replace): back link,
+   title and box share one centred column. */
+.wb-form-column { max-width: 640px; margin: 0 auto; }
 .wb-form { display: grid; gap: var(--s-16); padding: var(--s-16); }
 .wb-form .ui-input { font-size: 15px; padding: var(--s-12); }
 .wb-form-actions { display: flex; gap: var(--s-8); padding-top: var(--s-4); }
