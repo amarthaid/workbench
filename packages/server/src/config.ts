@@ -30,6 +30,9 @@ const configSchema = z.object({
   OAUTH_ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(3600),
   BROWSER_PROFILES_DIR: z.string().optional(),
   BROWSER_SESSION_TTL_SECONDS: z.coerce.number().int().positive().default(300),
+  // Tabs one user may hold open in their chromium at once. Bounds an agent
+  // that calls browser_start in a loop; the idle reaper bounds the rest.
+  BROWSER_TAB_LIMIT: z.coerce.number().int().positive().default(8),
   // How long a chromium launch may take to bring DevTools up. A cold start in
   // a container measured 5.3s; the old fixed 40×100ms budget failed the first
   // call of every fresh container and passed the second.

@@ -9,11 +9,11 @@ import {
   readText,
   evaluate,
   EVALUATE_MAX_CHARS,
-  type WarmSession,
+  type PageHandle,
 } from "../src/auth/browser-session";
 
-function sessionWithCdp(send: ReturnType<typeof vi.fn>): WarmSession {
-  return { cdp: { send } } as unknown as WarmSession;
+function sessionWithCdp(send: ReturnType<typeof vi.fn>): PageHandle {
+  return { cdp: { send } } as unknown as PageHandle;
 }
 
 describe("browser actions", () => {
