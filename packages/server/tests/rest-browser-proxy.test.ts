@@ -113,14 +113,28 @@ describe("POST /rest/browser affinity", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("handles locally when the header is already present", async () => {
+  it("handles locally when the header carries this user's own key", async () => {
     const res = await app.inject({
       method: "POST", url: "/rest/browser",
-      headers: { ...headers, [SESSION_HEADER]: "routed" },
+      headers: { ...headers, [SESSION_HEADER]: mintSessionKey("user-1") },
       payload: { tool: "start" },
     });
     expect(res.statusCode).toBe(200);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(browserStart.handler).toHaveBeenCalled();
+  });
+
+  it("forwards anyway when the inbound header does not verify, with the correct key", async () => {
+    // A value the agent chose must not suppress forwarding — see the comment
+    // in affinity-forward.ts.
+    fetchMock.mockResolvedValue({ status: 200, text: async () => JSON.stringify({ integration: "browser", result: {} }) });
+    const res = await app.inject({
+      method: "POST", url: "/rest/browser",
+      headers: { ...headers, [SESSION_HEADER]: "not-a-real-key" },
+      payload: { tool: "start" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][1].headers[SESSION_HEADER]).toBe(mintSessionKey("user-1"));
   });
 });

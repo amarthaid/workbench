@@ -184,6 +184,8 @@ export interface WarmSession {
    * downloads should not pay for a second socket.
    */
   browserCdp?: CdpClient;
+  /** In-flight browserClient() promise, so concurrent callers share one socket. */
+  browserCdpStarting?: Promise<CdpClient>;
   /**
    * Memoized download-routing setup. Started in the background at session
    * creation so opening a browser never waits on a second socket, and awaited
@@ -194,10 +196,30 @@ export interface WarmSession {
 
 const warmSessions = new Map<string, WarmSession>();
 
-export async function ensureSession(userId: string): Promise<WarmSession> {
-  const existing = warmSessions.get(userId);
-  if (existing) { existing.lastActivity = Date.now(); return existing; }
+/**
+ * In-flight cold starts, keyed by user. A chromium spawn takes seconds, and
+ * two agents calling browser_start at once is the normal case: without this
+ * the second caller sees the profile already claimed and throws
+ * BROWSER_SESSION_BUSY. The activeProfiles guard stays for the cross-process
+ * case it was written for.
+ */
+const startingSessions = new Map<string, Promise<WarmSession>>();
 
+export function ensureSession(userId: string): Promise<WarmSession> {
+  const existing = warmSessions.get(userId);
+  if (existing) { existing.lastActivity = Date.now(); return Promise.resolve(existing); }
+
+  const inFlight = startingSessions.get(userId);
+  if (inFlight) return inFlight;
+
+  const started = startSession(userId).finally(() => {
+    startingSessions.delete(userId);
+  });
+  startingSessions.set(userId, started);
+  return started;
+}
+
+async function startSession(userId: string): Promise<WarmSession> {
   if (activeProfiles.has(userId)) {
     throw new Error("BROWSER_SESSION_BUSY: a browser session is already active for this user");
   }
@@ -273,13 +295,32 @@ export function ensureDownloadRouting(s: WarmSession): Promise<void> {
   return s.downloadRouting;
 }
 
-/** The browser-target client, created on first use and cached on the session. */
-export async function browserClient(s: WarmSession): Promise<CdpClient> {
-  if (s.browserCdp) return s.browserCdp;
-  const client = new CdpClient(s.cdpBrowserWsUrl);
-  await client.ready;
-  s.browserCdp = client;
-  return client;
+/**
+ * The browser-target client, created on first use and cached on the session.
+ *
+ * Single-flight: the in-flight promise is memoized on the session, so N
+ * concurrent callers share one socket instead of opening N and dropping N-1
+ * on the floor (nothing would ever close them).
+ */
+export function browserClient(s: WarmSession): Promise<CdpClient> {
+  if (s.browserCdp) return Promise.resolve(s.browserCdp);
+  if (!s.browserCdpStarting) {
+    s.browserCdpStarting = (async () => {
+      const client = new CdpClient(s.cdpBrowserWsUrl);
+      await client.ready;
+      s.browserCdp = client;
+      return client;
+    })()
+      .catch((e) => {
+        // Let a later attempt retry rather than caching the failure forever.
+        s.browserCdpStarting = undefined;
+        throw e;
+      })
+      .finally(() => {
+        s.browserCdpStarting = undefined;
+      });
+  }
+  return s.browserCdpStarting;
 }
 
 export function touch(userId: string): void {
@@ -316,7 +357,13 @@ export async function openTab(userId: string): Promise<OpenTabResult> {
   s.pendingOpens += 1;
   try {
     const browser = await browserClient(s);
-    const { targetId } = (await browser.send("Target.createTarget", { url: "about:blank" })) as { targetId: string };
+    // background: true — a foreground-created target backgrounds the default
+    // tab, and chromium stops delivering Page.screencastFrame for a
+    // backgrounded target, which freezes the portal live view.
+    const { targetId } = (await browser.send("Target.createTarget", {
+      url: "about:blank",
+      background: true,
+    })) as { targetId: string };
     const tab = await attachTab(s, targetId, pageWsUrl(s.remotePort, targetId));
     s.lastActivity = Date.now();
     return { ok: true, tab };

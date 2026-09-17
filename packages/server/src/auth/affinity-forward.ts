@@ -1,5 +1,5 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { SESSION_HEADER, mintSessionKey } from "./cdp-bridge";
+import { SESSION_HEADER, mintSessionKey, verifySessionKey } from "./cdp-bridge";
 
 // A browser session is process-local (docs/findings/2026-09-10-browser-session-pod-affinity.md),
 // so under CLUSTER_ENABLED every call that touches one must reach the replica
@@ -33,12 +33,21 @@ export interface ForwardOpts {
 /**
  * Forward `body` to `target` with the caller's routing key. Returns true when
  * the reply has been sent (the upstream answered), false when the caller
- * should handle the request locally: the inbound request already carried the
- * header (we are the owning replica), or the hop failed at the network layer.
+ * should handle the request locally: the inbound request already carried *our
+ * own* routing key (we are the owning replica), or the hop failed at the
+ * network layer.
+ *
+ * The inbound header is checked against the bearer's user, not merely for
+ * presence: an authenticated agent that sent any value would otherwise
+ * suppress forwarding, the mesh would hash its value onto an arbitrary
+ * replica, and that replica would spawn a second chromium on the shared
+ * profile and fight the owner for SingletonLock. A header that does not
+ * verify is ignored and the request is forwarded with the correct key.
  */
 export async function forwardForBrowserAffinity(opts: ForwardOpts): Promise<boolean> {
   const { userId, request, reply, target, body } = opts;
-  if (request.headers[SESSION_HEADER]) return false;
+  const inbound = request.headers[SESSION_HEADER];
+  if (verifySessionKey(Array.isArray(inbound) ? inbound[0] : inbound, userId)) return false;
   const headers: Record<string, string> = {
     "content-type": "application/json",
     [SESSION_HEADER]: mintSessionKey(userId),

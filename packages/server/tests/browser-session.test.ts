@@ -5,6 +5,8 @@ const { spawnMock, cdpCallMock } = vi.hoisted(() => ({
   cdpCallMock: vi.fn(),
 }));
 const { proxyAuthMock } = vi.hoisted(() => ({ proxyAuthMock: vi.fn(() => ({ close: vi.fn() })) }));
+/** Every url a fake CdpClient socket was opened on, so tests can count sockets. */
+const { wsUrls } = vi.hoisted(() => ({ wsUrls: [] as string[] }));
 
 vi.mock("../src/auth/profile-chromium", async () => {
   const real = await vi.importActual<typeof import("../src/auth/profile-chromium")>(
@@ -32,8 +34,9 @@ vi.mock("ws", async () => {
     readyState = 1;
     send = vi.fn();
     close = vi.fn(() => { this.readyState = 3; });
-    constructor() {
+    constructor(url: string) {
       super();
+      wsUrls.push(url);
       setImmediate(() => this.emit("open"));
     }
   }
@@ -54,6 +57,7 @@ import {
   touchTab,
   browserClient,
 } from "../src/auth/browser-session";
+import type { WarmSession } from "../src/auth/browser-session";
 import { activeProfiles } from "../src/auth/profile-chromium";
 
 function fakeProc() {
@@ -73,6 +77,7 @@ beforeEach(() => {
     cdpPageTargetId: "T0",
   });
   activeProfiles.clear();
+  wsUrls.length = 0;
 });
 
 describe("reapIdleSessions", () => {
@@ -83,6 +88,18 @@ describe("reapIdleSessions", () => {
     reapIdleSessions(Date.now() + 10_000_000);
     expect(getWarmSession("user-r")).toBeUndefined();
     expect(activeProfiles.has("user-r")).toBe(false);
+  });
+});
+
+describe("ensureSession single-flight", () => {
+  afterEach(async () => { await closeBrowserSession("u-sf"); });
+
+  it("two concurrent cold callers share one spawn and one session", async () => {
+    const [a, b] = await Promise.all([ensureSession("u-sf"), ensureSession("u-sf")]);
+    // Without the in-flight memo the second caller finds the profile claimed
+    // and throws BROWSER_SESSION_BUSY while the first is still spawning.
+    expect(a).toBe(b);
+    expect(spawnMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -225,7 +242,12 @@ describe("tabs", () => {
     const sent = await stubBrowserTarget("u1", { "Target.createTarget": { targetId: "T1" } });
     const r = await openTab("u1");
     expect(r).toMatchObject({ ok: true, tab: { id: "T1" } });
-    expect(sent).toContainEqual({ method: "Target.createTarget", params: { url: "about:blank" } });
+    // background: true, or the new target steals the foreground and chromium
+    // stops sending screencast frames for the default tab (the live view).
+    expect(sent).toContainEqual({
+      method: "Target.createTarget",
+      params: { url: "about:blank", background: true },
+    });
     expect(getTab("u1", "T1")).toBeDefined();
     expect(getWarmSession("u1")!.tabs.size).toBe(2);
   });
@@ -302,6 +324,17 @@ describe("tabs", () => {
       { ok: false, error: "BROWSER_TAB_LIMIT", limit: 8 },
     ]);
     expect(getWarmSession("u1")!.tabs.size).toBe(8);
+  });
+
+  it("browserClient is single-flight: concurrent callers share one socket", async () => {
+    const url = "ws://127.0.0.1:4444/browser";
+    const s = { cdpBrowserWsUrl: url } as unknown as WarmSession;
+    const clients = await Promise.all(Array.from({ length: 8 }, () => browserClient(s)));
+    // Without the memo each caller opens its own socket and seven are dropped
+    // on the floor: never assigned, never closed.
+    expect(wsUrls.filter((u) => u === url)).toHaveLength(1);
+    expect(new Set(clients).size).toBe(1);
+    expect(s.browserCdp).toBe(clients[0]);
   });
 
   it("listTabs joins Target.getTargets with the map", async () => {

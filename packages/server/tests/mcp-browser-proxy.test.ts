@@ -126,15 +126,40 @@ describe("browser affinity forward", () => {
     await app.close();
   });
 
-  it("does not re-forward a request that already carries the header (the receiving replica)", async () => {
+  it("does not re-forward a request carrying this user's own key (the receiving replica)", async () => {
     const app = await buildApp();
     const res = await app.inject({
       method: "POST", url: "/mcp",
-      headers: { "x-workbench-api-key": "valid-key", "content-type": "application/json", [SESSION_HEADER]: "already-routed" },
+      headers: {
+        "x-workbench-api-key": "valid-key",
+        "content-type": "application/json",
+        [SESSION_HEADER]: mintSessionKey("user-1"),
+      },
       payload: wrapped("browser_navigate", { url: "https://example.com" }),
     });
     expect(res.json().result).toEqual({ local: true });
     expect(fetchMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("forwards anyway when the inbound header does not verify, with the correct key", async () => {
+    // An agent-chosen value must not suppress forwarding: the mesh would hash
+    // it onto an arbitrary replica, which would spawn a second chromium on the
+    // shared profile and fight the owner for SingletonLock.
+    fetchMock.mockResolvedValue({ status: 200, text: async () => JSON.stringify({ result: { forwarded: true } }) });
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "POST", url: "/mcp",
+      headers: {
+        "x-workbench-api-key": "valid-key",
+        "content-type": "application/json",
+        [SESSION_HEADER]: "not-a-real-key",
+      },
+      payload: wrapped("browser_navigate", { url: "https://example.com" }),
+    });
+    expect(res.json()).toEqual({ result: { forwarded: true } });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][1].headers[SESSION_HEADER]).toBe(mintSessionKey("user-1"));
     await app.close();
   });
 
