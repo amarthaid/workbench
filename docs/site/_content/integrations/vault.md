@@ -87,7 +87,7 @@ Two limits, whichever comes first, and neither is an access window:
 
 - the first `GET` returns the value and destroys it; a second `GET` is a 404
 - unused, the link expires after the time you picked (1, 5 or 10 minutes;
-  5 by default) and the value is destroyed then
+  5 by default); the ciphertext is swept within the minute after that
 
 The value is encrypted at rest in the link's row for as long as the link is
 alive, and nowhere else. There is no list of pending links and the URL is shown

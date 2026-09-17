@@ -217,6 +217,8 @@ describe("vault routes", () => {
       expect(expires_at).toBe(Math.ceil((t0 + OTL_PORTAL_DEFAULT_TTL_SECONDS * 1000) / 1000));
       expect(res.body).not.toContain("ZZ-ONE-SHOT");
       expect(await db.get("SELECT 1 FROM user_vaults WHERE user_id = ?", ["u1"])).toBeFalsy();
+      // A stored secret alongside is untouched by an ad hoc redeem: no last_used_at stamp.
+      await putSecret("u1", "pw", "hunter2");
 
       const path = new URL(url).pathname;
       const first = await app.inject({ method: "GET", url: path });
@@ -229,6 +231,11 @@ describe("vault routes", () => {
       expect(second.body).toBe("");
       expect(logged.join("\n")).not.toContain("ZZ-ONE-SHOT");
       expect(logged.join("\n")).not.toContain(path.split("/").pop());
+      const stored = await db.get<{ last_used_at: number | null }>(
+        "SELECT last_used_at FROM user_vaults WHERE user_id = ? AND name = ?",
+        ["u1", "pw"]
+      );
+      expect(stored?.last_used_at).toBeNull();
     });
 
     it("validates value and ttl", async () => {

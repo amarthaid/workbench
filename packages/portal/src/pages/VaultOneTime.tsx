@@ -50,10 +50,13 @@ export default function VaultOneTime() {
 
   function copy() {
     if (!minted) return;
-    navigator.clipboard?.writeText(minted.url).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+    navigator.clipboard
+      ?.writeText(minted.url)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      })
+      .catch(() => setFormError("Copy failed — select the link and copy it by hand."));
   }
 
   const ttlLabel = ONE_TIME_TTL_OPTIONS.find((o) => o.seconds === ttl)?.label ?? `${ttl} seconds`;
@@ -74,6 +77,7 @@ export default function VaultOneTime() {
               Works exactly once, then never again. Unused, it expires in {ttlLabel}. Paste it to your agent and
               tell it to fetch the value straight into a file or a variable, not to print it.
             </p>
+            {formError && <div className="ui-form-error">{formError}</div>}
             <div className="wb-form-actions">
               <Button type="button" onClick={copy}>
                 {copied ? "Copied" : "Copy link"}

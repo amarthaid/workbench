@@ -106,7 +106,10 @@ export async function consumeOtl(token: string): Promise<OtlGrant | null> {
   }
   const named = isValidVaultName(data.name);
   const adhoc = typeof data.adhoc === "string" && data.adhoc !== "";
-  if (named === adhoc) return null; // exactly one kind, or the row is not ours
+  // Exactly one kind. `named === adhoc` is false only for (true,false) and
+  // (false,true); a row claiming both, or neither (another flow's row, a
+  // malformed one), is refused and left for the reaper.
+  if (named === adhoc) return null;
   const { changes } = await db.run("DELETE FROM pending_auth WHERE state = ? AND integration = ?", [
     token,
     OTL_SENTINEL,

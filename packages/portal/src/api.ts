@@ -622,6 +622,11 @@ export async function mintVaultOneTimeLink(input: {
     headers: { ...authHeaders(), "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
+  if (res.status === 401) {
+    localStorage.removeItem("awb_token");
+    window.location.href = "/login";
+    throw new Error("Unauthorized");
+  }
   if (!res.ok) {
     const code = (await res.json().catch(() => ({}))).error;
     throw new Error(
@@ -629,7 +634,9 @@ export async function mintVaultOneTimeLink(input: {
         ? "Value is too large (8 KB max)."
         : code === "EMPTY_VALUE"
           ? "Value cannot be empty."
-          : "Could not create the link"
+          : code === "PORTAL_SESSION_REQUIRED"
+            ? "Only a signed-in portal session can create a link."
+            : "Could not create the link"
     );
   }
   return res.json();
