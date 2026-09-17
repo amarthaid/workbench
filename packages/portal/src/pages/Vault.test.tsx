@@ -1,21 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter, Routes, Route } from "react-router-dom";
 import Vault, { relativeTime } from "./Vault";
 
 vi.mock("../api", () => ({
   fetchVaultSecrets: vi.fn(),
-  putVaultSecret: vi.fn(async () => undefined),
   deleteVaultSecret: vi.fn(async () => undefined),
 }));
 
-import { fetchVaultSecrets, putVaultSecret, deleteVaultSecret } from "../api";
+import { fetchVaultSecrets, deleteVaultSecret } from "../api";
 
 function renderPage() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <Vault />
+      <MemoryRouter initialEntries={["/vault"]}>
+        <Routes>
+          <Route path="/vault" element={<Vault />} />
+          <Route path="/vault/new" element={<div>ADD PAGE</div>} />
+          <Route path="/vault/:name/replace" element={<div>REPLACE PAGE</div>} />
+        </Routes>
+      </MemoryRouter>
     </QueryClientProvider>
   );
 }
@@ -49,61 +55,18 @@ describe("Vault page", () => {
     expect(screen.queryByText(/reveal|show value|copy value/i)).not.toBeInTheDocument();
   });
 
-  it("adds a secret and clears the value field afterwards", async () => {
+  it("navigates to the add page and to a secret's replace page", async () => {
     renderPage();
     await screen.findByText("site_pw");
     fireEvent.click(screen.getByRole("button", { name: /add secret/i }));
-    fireEvent.change(screen.getByLabelText(/^name/i), { target: { value: "db_url" } });
-    fireEvent.change(screen.getByLabelText(/description/i), { target: { value: "prod" } });
-    const valueInput = screen.getByLabelText(/^value/i) as HTMLInputElement;
-    expect(valueInput.type).toBe("password");
-    fireEvent.change(valueInput, { target: { value: "postgres://x" } });
-    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
-    await waitFor(() =>
-      expect(putVaultSecret).toHaveBeenCalledWith({ name: "db_url", value: "postgres://x", description: "prod" })
-    );
-    await waitFor(() => expect(screen.queryByLabelText(/^value/i)).not.toBeInTheDocument());
-    expect(document.body.textContent).not.toContain("postgres://x");
+    expect(await screen.findByText("ADD PAGE")).toBeInTheDocument();
   });
 
-  it("toggles the value field between password and text with an icon button", async () => {
-    renderPage();
-    await screen.findByText("site_pw");
-    fireEvent.click(screen.getByRole("button", { name: /add secret/i }));
-    const valueInput = screen.getByLabelText(/^value/i) as HTMLInputElement;
-    const toggle = screen.getByRole("button", { name: /show value while typing/i });
-    expect(toggle.querySelector("svg")).not.toBeNull();
-    expect(valueInput.type).toBe("password");
-    fireEvent.click(toggle);
-    expect(valueInput.type).toBe("text");
-    expect(screen.getByRole("button", { name: /hide value/i })).toHaveAttribute("aria-pressed", "true");
-    fireEvent.click(screen.getByRole("button", { name: /hide value/i }));
-    expect(valueInput.type).toBe("password");
-  });
-
-  it("rejects an invalid name client-side", async () => {
-    renderPage();
-    await screen.findByText("site_pw");
-    fireEvent.click(screen.getByRole("button", { name: /add secret/i }));
-    fireEvent.change(screen.getByLabelText(/^name/i), { target: { value: "Bad Name" } });
-    fireEvent.change(screen.getByLabelText(/^value/i), { target: { value: "x" } });
-    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
-    expect(await screen.findByText(/lowercase/i)).toBeInTheDocument();
-    expect(putVaultSecret).not.toHaveBeenCalled();
-  });
-
-  it("overwrite locks the name", async () => {
+  it("replace goes to the secret's own page", async () => {
     renderPage();
     await screen.findByText("site_pw");
     fireEvent.click(screen.getAllByRole("button", { name: /replace/i })[0]);
-    const name = screen.getByLabelText(/^name/i) as HTMLInputElement;
-    expect(name.value).toBe("site_pw");
-    expect(name.disabled).toBe(true);
-    fireEvent.change(screen.getByLabelText(/^value/i), { target: { value: "new" } });
-    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
-    await waitFor(() =>
-      expect(putVaultSecret).toHaveBeenCalledWith({ name: "site_pw", value: "new", description: "login" })
-    );
+    expect(await screen.findByText("REPLACE PAGE")).toBeInTheDocument();
   });
 
   it("deletes after confirmation", async () => {
