@@ -43,14 +43,7 @@ export default function Vault() {
     <>
       <PageHeader title="Vault" actions={<Button onClick={() => navigate("/vault/new")}>Add secret</Button>} />
 
-      <Box
-        title="Secrets"
-        action={
-          <span className="ui-stat-note">
-            Encrypted at rest. Agents can use a secret but never read it — values are write-only here too.
-          </span>
-        }
-      >
+      <Box title="Secrets">
         {isLoading && <div className="ui-loading">Loading…</div>}
         {isError && <div className="ui-form-error">Couldn't load your vault.</div>}
 
