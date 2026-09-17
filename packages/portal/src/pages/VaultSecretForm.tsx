@@ -6,7 +6,7 @@ import { PageHeader } from "../components/ui/PageHeader";
 import { Box } from "../components/ui/Box";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
-import { EyeIcon, EyeOffIcon } from "../components/ui/EyeIcons";
+import { EyeIcon, EyeOffIcon } from "../components/ui/Icons";
 
 export const VAULT_NAME_RE = /^[a-z0-9][a-z0-9_.-]{0,63}$/;
 export const VAULT_NAME_HELP = "Lowercase letters, digits, and _ . - only (max 64).";

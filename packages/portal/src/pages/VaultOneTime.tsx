@@ -6,7 +6,7 @@ import { PageHeader } from "../components/ui/PageHeader";
 import { Box } from "../components/ui/Box";
 import { Button } from "../components/ui/Button";
 import { Input, Select } from "../components/ui/Input";
-import { EyeIcon, EyeOffIcon } from "../components/ui/EyeIcons";
+import { CheckIcon, CopyIcon, EyeIcon, EyeOffIcon, LinkIcon } from "../components/ui/Icons";
 
 export const ONE_TIME_TTL_OPTIONS: { seconds: number; label: string }[] = [
   { seconds: 60, label: "1 minute" },
@@ -80,6 +80,7 @@ export default function VaultOneTime() {
             {formError && <div className="ui-form-error">{formError}</div>}
             <div className="wb-form-actions">
               <Button type="button" onClick={copy}>
+                {copied ? <CheckIcon /> : <CopyIcon />}
                 {copied ? "Copied" : "Copy link"}
               </Button>
               <Button type="button" variant="ghost" onClick={() => navigate("/vault")}>
@@ -136,6 +137,7 @@ export default function VaultOneTime() {
             {formError && <div className="ui-form-error">{formError}</div>}
             <div className="wb-form-actions">
               <Button type="submit" disabled={mint.isPending}>
+                <LinkIcon />
                 {mint.isPending ? "Creating…" : "Create link"}
               </Button>
               <Button type="button" variant="ghost" onClick={() => navigate("/vault")} disabled={mint.isPending}>
