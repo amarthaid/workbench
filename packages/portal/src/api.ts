@@ -609,6 +609,32 @@ export async function putVaultSecret(input: {
   }
 }
 
+/**
+ * Mint a one-time link for a value that is never stored in the vault. The
+ * URL works exactly once and dies at `expires_at` (unix seconds) if unused.
+ */
+export async function mintVaultOneTimeLink(input: {
+  value: string;
+  ttl_seconds?: number;
+}): Promise<{ url: string; expires_at: number }> {
+  const res = await fetch(`${API_URL}/api/vault/otl`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const code = (await res.json().catch(() => ({}))).error;
+    throw new Error(
+      code === "TOO_LARGE"
+        ? "Value is too large (8 KB max)."
+        : code === "EMPTY_VALUE"
+          ? "Value cannot be empty."
+          : "Could not create the link"
+    );
+  }
+  return res.json();
+}
+
 export async function deleteVaultSecret(name: string): Promise<void> {
   const res = await fetch(`${API_URL}/api/vault/${encodeURIComponent(name)}`, {
     method: "DELETE",

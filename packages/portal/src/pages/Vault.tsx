@@ -41,7 +41,17 @@ export default function Vault() {
 
   return (
     <>
-      <PageHeader title="Vault" actions={<Button onClick={() => navigate("/vault/new")}>Add secret</Button>} />
+      <PageHeader
+        title="Vault"
+        actions={
+          <>
+            <Button variant="ghost" onClick={() => navigate("/vault/one-time")}>
+              One-time link
+            </Button>
+            <Button onClick={() => navigate("/vault/new")}>Add secret</Button>
+          </>
+        }
+      />
 
       <Box title="Secrets">
         {isLoading && <div className="ui-loading">Loading…</div>}

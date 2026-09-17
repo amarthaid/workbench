@@ -74,6 +74,27 @@ The URL works exactly once — the first `GET` spends it; a second returns 404 �
 
 The tool's description tells the agent not to fetch the URL itself and not to print the response. That is a behavioural guard rail, not a technical one: an agent that `curl`s the URL and echoes the output has put the value in its context. Pipe to a file.
 
+## A one-time secret, without storing it
+
+Sometimes a value is for one job and has no business living in the vault: a
+token you were just handed, a password for a single login the agent will do
+right now. Portal → Vault → **One-time link** takes a value and gives you a
+URL, without creating a vault entry. Paste the URL to the agent; it fetches
+the value the same way it would a `vault_presign` URL — to a file or a
+variable, never to its output.
+
+Two limits, whichever comes first, and neither is an access window:
+
+- the first `GET` returns the value and destroys it; a second `GET` is a 404
+- unused, the link expires after the time you picked (1, 5 or 10 minutes;
+  5 by default) and the value is destroyed then
+
+The value is encrypted at rest in the link's row for as long as the link is
+alive, and nowhere else. There is no list of pending links and the URL is shown
+once; leave the page and it is gone. Mint another. Only a portal session can
+mint one — there is no tool for it, so an agent cannot launder a value it holds
+through a link it then fetches.
+
 ## Tools
 
 | Tool | Does |
@@ -88,7 +109,8 @@ The tool's description tells the agent not to fetch the URL itself and not to pr
 | `GET` | `/api/vault` | list (any bearer: API key, OAuth token, or portal session) |
 | `PUT` | `/api/vault/:name` | `{ value, description? }` → 201 created / 200 replaced (portal session) |
 | `DELETE` | `/api/vault/:name` | 204; revokes outstanding one-time URLs (portal session) |
-| `GET` | `/api/vault/otl/:token` | redeem once → `text/plain` body; 404 otherwise. No auth. |
+| `POST` | `/api/vault/otl` | `{ value, ttl_seconds? }` → 201 `{ url, expires_at }`; a one-time URL for a value that is never stored (portal session; default 300 s, max 600) |
+| `GET` | `/api/vault/otl/:token` | redeem once → `text/plain` body; 404 otherwise. No auth. Serves both kinds of link. |
 
 Listing is readable with any bearer, including the agent's own API key or OAuth
 token. Writing and deleting are not: they need the portal-session token a
