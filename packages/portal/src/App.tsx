@@ -14,6 +14,7 @@ import Agents from "./pages/Agents";
 import Files from "./pages/Files";
 import Vault from "./pages/Vault";
 import VaultSecretForm from "./pages/VaultSecretForm";
+import VaultOneTime from "./pages/VaultOneTime";
 import Activity from "./pages/Activity";
 import Settings from "./pages/Settings";
 
@@ -77,6 +78,7 @@ function AppRoutes() {
         <Route path="/files" element={<Files />} />
         <Route path="/vault" element={<Vault />} />
         <Route path="/vault/new" element={<VaultSecretForm />} />
+        <Route path="/vault/one-time" element={<VaultOneTime />} />
         <Route path="/vault/:name/replace" element={<VaultSecretForm />} />
         <Route path="/activity" element={<Activity />} />
         <Route path="/settings" element={<Settings />} />

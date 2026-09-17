@@ -9,7 +9,7 @@ import {
   touchUsed,
   VaultError,
 } from "./store";
-import { consumeOtl, revokeFor } from "./otl";
+import { consumeOtl, mintAdhocOtl, OTL_MAX_TTL_SECONDS, revokeFor } from "./otl";
 import { verifySession } from "../auth/session";
 
 async function authenticate(request: FastifyRequest, reply: FastifyReply): Promise<string | null> {
@@ -64,6 +64,10 @@ async function authenticatePortal(
   return null;
 }
 
+// Portal-minted links default to 5 minutes: a human copies the URL into a chat
+// by hand. The hard ceiling stays OTL_MAX_TTL_SECONDS.
+export const OTL_PORTAL_DEFAULT_TTL_SECONDS = 300;
+
 function statusFor(code: VaultError["code"]): number {
   switch (code) {
     case "INVALID_NAME":
@@ -116,6 +120,31 @@ export async function registerVaultRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(204).send();
   });
 
+  // Mint a one-time link for a value that is never stored in the vault. The
+  // second route that carries a plaintext value in its body, portal-only for
+  // the same reason PUT is: an agent credential must not be able to launder a
+  // value through a link it can then fetch. Not exposed as an MCP tool.
+  app.post<{ Body: unknown }>("/api/vault/otl", async (request, reply) => {
+    const userId = await authenticatePortal(request, reply);
+    if (!userId) return reply;
+    const body = (request.body ?? {}) as { value?: unknown; ttl_seconds?: unknown };
+    if (typeof body.value !== "string") return reply.code(400).send({ error: "INVALID_VALUE" });
+    let ttl = OTL_PORTAL_DEFAULT_TTL_SECONDS;
+    if (body.ttl_seconds !== undefined) {
+      if (typeof body.ttl_seconds !== "number" || !Number.isFinite(body.ttl_seconds) || body.ttl_seconds < 1) {
+        return reply.code(400).send({ error: "INVALID_TTL" });
+      }
+      ttl = Math.min(body.ttl_seconds, OTL_MAX_TTL_SECONDS);
+    }
+    try {
+      const minted = await mintAdhocOtl(userId, body.value, ttl);
+      return reply.code(201).send({ url: minted.url, expires_at: Math.ceil(minted.expiresAt / 1000) });
+    } catch (e) {
+      if (e instanceof VaultError) return reply.code(statusFor(e.code)).send({ error: e.code });
+      throw e;
+    }
+  });
+
   // One-time redeem. No bearer: the token is the authorization, single-use,
   // minutes of TTL. The user whose value is read comes from the row. Silent in
   // the request log because the token is the URL.
@@ -128,6 +157,8 @@ export async function registerVaultRoutes(app: FastifyInstance): Promise<void> {
       reply.header("content-disposition", 'attachment; filename="secret.txt"');
       const grant = await consumeOtl(request.params.token);
       if (!grant) return reply.code(404).send();
+      // Ad hoc: the value came out of the row itself; nothing to stamp.
+      if (grant.value !== undefined) return reply.type("text/plain; charset=utf-8").send(grant.value);
       const value = await readSecretValue(grant.userId, grant.name);
       if (value === null) return reply.code(404).send();
       // Awaited, not fire-and-forget: the last_used_at test relies on the

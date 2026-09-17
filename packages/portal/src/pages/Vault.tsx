@@ -8,6 +8,7 @@ import { DataTable } from "../components/ui/DataTable";
 import { EmptyState } from "../components/ui/EmptyState";
 import { Button } from "../components/ui/Button";
 import { Modal } from "../components/ui/Modal";
+import { ClockIcon } from "../components/ui/Icons";
 
 
 export function relativeTime(sec: number | null, nowSec: number = Math.floor(Date.now() / 1000)): string {
@@ -41,7 +42,18 @@ export default function Vault() {
 
   return (
     <>
-      <PageHeader title="Vault" actions={<Button onClick={() => navigate("/vault/new")}>Add secret</Button>} />
+      <PageHeader
+        title="Vault"
+        actions={
+          <>
+            <Button variant="ghost" onClick={() => navigate("/vault/one-time")}>
+              <ClockIcon />
+              One-time link
+            </Button>
+            <Button onClick={() => navigate("/vault/new")}>Add secret</Button>
+          </>
+        }
+      />
 
       <Box title="Secrets">
         {isLoading && <div className="ui-loading">Loading…</div>}

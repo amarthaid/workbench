@@ -27,6 +27,9 @@ export async function createAuthState(
   return state;
 }
 
+// Same literal as OTL_SENTINEL in ../vault/otl.ts; a literal rather than an import keeps this module free of the vault. tests/vault-otl.test.ts enforces the behaviour.
+const VAULT_OTL_SENTINEL = "__vault_otl__";
+
 export async function verifyAuthState(
   state: string
 ): Promise<{ userId: string; integration: string; codeVerifier?: string; config?: string; nonce?: string } | null> {
@@ -37,13 +40,16 @@ export async function verifyAuthState(
     config: string | null;
     nonce: string | null;
   }>(
-    "SELECT user_id, integration, code_verifier, config, nonce FROM pending_auth WHERE state = ? AND expires_at > ?",
-    [state, Math.floor(Date.now() / 1000)]
+    // pending_auth is the shared short-TTL handshake table. A vault one-time
+    // link row (`__vault_otl__`) carries encrypted secret material, and its
+    // token has the same 32-hex shape as an OAuth state: never spend one here.
+    "SELECT user_id, integration, code_verifier, config, nonce FROM pending_auth WHERE state = ? AND integration != ? AND expires_at > ?",
+    [state, VAULT_OTL_SENTINEL, Math.floor(Date.now() / 1000)]
   );
 
   if (!row) return null;
 
-  await db.run("DELETE FROM pending_auth WHERE state = ?", [state]);
+  await db.run("DELETE FROM pending_auth WHERE state = ? AND integration != ?", [state, VAULT_OTL_SENTINEL]);
   return {
     userId: row.user_id,
     integration: row.integration,
