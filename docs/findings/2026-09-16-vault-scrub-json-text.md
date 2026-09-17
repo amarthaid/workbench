@@ -68,5 +68,16 @@ back as a number whose `String()` is `5432`, which is not the stored `"5432.0"`,
 so it is not caught. Same class of gap as the encoding limits already
 documented: base64, URL-escaping, a value split across DOM nodes.
 
+At the time this was written, scrubbing was also same-call-only: a value
+substituted in call N and echoed by an unrelated call N+1 (`browser_read_text`
+after a `browser_type`, `files_read` after a `files_write`) substituted
+nothing in that later call and so scrubbed nothing. `packages/server/src/vault/recent.ts`
+closes that: a short-window, per-user, in-process ring remembers what was
+substituted recently and scrubs it from every later result too, not just the
+one that did the substituting. The residual limits are now the encodings and
+canonicalisation gap above, plus the window itself and, under
+`CLUSTER_ENABLED`, a result served by a worker other than the one that
+remembered the value (`docs/findings/2026-09-10-browser-session-pod-affinity.md`).
+
 Scrubbing is containment for the common case. It is not a guarantee, and the
 docs say so.

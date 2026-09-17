@@ -14,6 +14,7 @@ import { signConnectToken } from "../auth/connect-token";
 import { signCurlToken } from "../auth/curl-session";
 import { resolveVaultRefs, scrubVaultValues, scrubString, VaultRefError, VaultScrubError } from "../vault/interpolate";
 import { touchUsed } from "../vault/store";
+import { rememberSubstituted, recentSubstituted } from "../vault/recent";
 
 // `connect` and `get_auth_url` are the same tool under two names (kept for
 // backward compatibility) — one description, so the security claim in it
@@ -146,6 +147,20 @@ export async function executeSingle(
         }
       }
 
+      // Values substituted in earlier calls within the recent window. Read
+      // the ring BEFORE remembering this call's own substitutions, so a name
+      // reused across calls with a different value (e.g. a secret rotated
+      // mid-session) still scrubs the stale value too, not just the fresh
+      // one — a plain `Map` merge can't hold two values under one key, so
+      // scrubbing runs as two passes (`scrubStringRecent` / `scrubResultRecent`
+      // below) rather than one combined map. Used everywhere below that
+      // scrubs a result or error message; NOT used for `touchUsed` above,
+      // which only ever records what THIS call used.
+      const recent = recentSubstituted(userId);
+      if (substituted.size > 0) rememberSubstituted(userId, substituted);
+      const scrubStringRecent = (s: string): string => scrubString(scrubString(s, recent), substituted);
+      const scrubResultRecent = <T,>(v: T): T => scrubVaultValues(scrubVaultValues(v, recent), substituted);
+
       // Validate args against the plugin tool's own schema so that
       // Zod defaults (e.g. pageSize=10) get applied. Without this,
       // we'd blindly forward whatever the caller sent and the plugin
@@ -164,7 +179,7 @@ export async function executeSingle(
             duration_ms: Date.now() - start,
           });
           return {
-            error: `Invalid arguments for ${toolName}: ${scrubString(parsed.error?.message ?? "schema mismatch", substituted)}`,
+            error: `Invalid arguments for ${toolName}: ${scrubStringRecent(parsed.error?.message ?? "schema mismatch")}`,
           };
         }
         parsedArgs = parsed.data;
@@ -172,7 +187,7 @@ export async function executeSingle(
         // Unexpected throw during schema parsing (e.g. a malformed schema).
         // Don't swallow silently: record it observably, then fall through
         // with raw args so execution still proceeds.
-        const err = scrubString(e instanceof Error ? e.message : String(e), substituted);
+        const err = scrubStringRecent(e instanceof Error ? e.message : String(e));
         await auditLogger.log({
           user_id: userId,
           integration: targetTool.integration,
@@ -186,9 +201,8 @@ export async function executeSingle(
 
       try {
         const toolCtx = await createContext(userId, targetTool.integration);
-        const result = scrubVaultValues(
-          await targetTool.handler(toolCtx, parsedArgs as Record<string, unknown>),
-          substituted
+        const result = scrubResultRecent(
+          await targetTool.handler(toolCtx, parsedArgs as Record<string, unknown>)
         );
         const duration_ms = Date.now() - start;
         await auditLogger.log({
@@ -247,7 +261,7 @@ export async function executeSingle(
           toolExecutionDuration.observe({ integration: targetTool.integration, tool: toolName, success: "false" }, durationS);
           return { error: e.code };
         }
-        const err = scrubString(e instanceof Error ? e.message : String(e), substituted);
+        const err = scrubStringRecent(e instanceof Error ? e.message : String(e));
         const duration_ms = Date.now() - start;
         await auditLogger.log({
           user_id: userId,
