@@ -90,6 +90,9 @@ vi.mock("../src/auth/browser-session", async () => {
   return {
     ...real,
     ensureSession: vi.fn(() => Promise.resolve({ cdpToken: "tok-123", userId: "user-1" })),
+    // Routes that drive the page navigate the session's default tab, not the
+    // session itself — the live view dials that same tab.
+    defaultTab: vi.fn(() => Promise.resolve({ id: "T0", cdp: { send: vi.fn() } })),
     captureLiveCookies: vi.fn(),
     navigate: vi.fn(() => Promise.resolve({ url: "https://x.test", title: "X" })),
   };

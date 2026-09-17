@@ -11,6 +11,12 @@ import { createPending } from "../../auth/connections";
 import {
   ensureSession,
   touch,
+  touchTab,
+  openTab,
+  getTab,
+  defaultTab,
+  closeTab,
+  listTabs,
   navigate as browserNavigate,
   screenshot as browserScreenshot,
   click as browserClick,
@@ -19,46 +25,63 @@ import {
   scroll as browserScroll,
   readText as browserReadText,
   evaluate as browserEvaluate,
-  closeBrowserSession,
   browserClient,
   ensureDownloadRouting,
+  type Tab,
 } from "../../auth/browser-session";
 import { expectDownload, awaitDownload } from "../../auth/browser-downloads";
 import { uploadWorkspaceFile, BrowserUploadError } from "../../auth/browser-upload";
-import { mintSessionKey, verifySessionKey } from "../../auth/cdp-bridge";
+import { verifySessionKey } from "../../auth/cdp-bridge";
 
 export const BROWSER_INTEGRATION_NAME = "browser";
 
 const SESSION_ID_DESC =
-  "The session_id returned by browser_start. It routes this call to the process that owns your browser.";
+  "The tab to act on: the session_id returned by browser_start. Each browser_start opens a new tab; use one per independent task.";
 
-// session_id is a routing key, not a credential: the bearer already named the
-// user, and the key is derived from that user. Checking it here still earns
-// its keep. Behind a load balancer a wrong key has already been hashed to the
-// wrong replica by the time it arrives; running the tool there would spawn a
-// second chromium on the shared profile (or look up a download handle that
-// lives in another process). Refusing is cheaper than either.
-function badSessionKey(ctx: { userId: string }, args: { session_id?: string }) {
-  if (verifySessionKey(args.session_id, ctx.userId)) return null;
+type TabNotFound = { error: "BROWSER_TAB_NOT_FOUND"; detail: string };
+
+// session_id names a tab in this user's own chromium. Lookup is scoped to the
+// caller's session, so another user's tab id can never resolve. Routing to the
+// replica that owns the chromium happened before this handler ran, keyed on
+// the bearer (auth/affinity-forward.ts) — nothing here is a routing check.
+//
+// Compat, one release: a value that is the pre-upgrade routing key maps onto
+// the default tab, so agents holding an old session_id keep working.
+async function resolveTab(ctx: { userId: string }, args: { session_id?: string }): Promise<Tab | TabNotFound> {
+  const id = args.session_id ?? "";
+  const tab = getTab(ctx.userId, id);
+  if (tab) { touchTab(ctx.userId, id); return tab; }
+  if (verifySessionKey(id, ctx.userId)) {
+    const d = await defaultTab(ctx.userId);
+    touchTab(ctx.userId, d.id);
+    return d;
+  }
   return {
-    error: "BAD_SESSION_KEY",
-    detail: "session_id is not the routing key for this user; call browser_start and pass what it returns",
+    error: "BROWSER_TAB_NOT_FOUND",
+    detail: "session_id is not an open tab of yours; call browser_start and pass the session_id it returns, or browser_tabs to list them",
   };
+}
+
+function isNotFound(x: Tab | TabNotFound): x is TabNotFound {
+  return (x as TabNotFound).error === "BROWSER_TAB_NOT_FOUND";
 }
 
 const tools: PluginTool[] = [
   {
     name: "browser_start",
-    description: "Mint a browser session token. Call this first and pass the returned session_id to every subsequent browser_* call. Re-using the same token across a task keeps all actions on the same Chromium instance.",
+    description:
+      "Open a new tab in your browser and return its session_id. Pass it to every other browser_* call. Call it once per independent task; two agents each get their own tab and never step on each other. All tabs share one browser, so a login in one is visible in the others.",
     integration: BROWSER_INTEGRATION_NAME,
     inputSchema: z.object({}),
     handler: async (ctx: any) => {
-      return { session_id: mintSessionKey(ctx.userId) };
+      const r = await openTab(ctx.userId);
+      if (!r.ok) return { error: r.error, limit: r.limit };
+      return { session_id: r.tab.id };
     },
   },
   {
     name: "browser_navigate",
-    description: "Navigate the per-user browser session to a URL. Opens a warm session if none is active. Returns the final url and page title.",
+    description: "Navigate this tab to a URL. Returns the final url and page title.",
     integration: BROWSER_INTEGRATION_NAME,
     inputSchema: z.object({
       session_id: z.string().describe(SESSION_ID_DESC),
@@ -68,10 +91,8 @@ const tools: PluginTool[] = [
       ),
     }),
     handler: async (ctx: any, args: any) => {
-      const bad = badSessionKey(ctx, args);
-      if (bad) return bad;
-      const s = await ensureSession(ctx.userId);
-      touch(ctx.userId);
+      const s = await resolveTab(ctx, args);
+      if (isNotFound(s)) return s;
       return browserNavigate(s, args.url);
     },
   },
@@ -86,16 +107,14 @@ const tools: PluginTool[] = [
       maxWidth: z.number().int().positive().optional(),
     }),
     handler: async (ctx: any, args: any) => {
-      const bad = badSessionKey(ctx, args);
-      if (bad) return bad;
-      const s = await ensureSession(ctx.userId);
-      touch(ctx.userId);
+      const s = await resolveTab(ctx, args);
+      if (isNotFound(s)) return s;
       return browserScreenshot(s, args);
     },
   },
   {
     name: "browser_click",
-    description: "Click at viewport coordinates (x, y) in the per-user browser session.",
+    description: "Click at viewport coordinates (x, y) in this tab.",
     integration: BROWSER_INTEGRATION_NAME,
     inputSchema: z.object({
       session_id: z.string().describe(SESSION_ID_DESC),
@@ -104,10 +123,8 @@ const tools: PluginTool[] = [
       button: z.enum(["left", "right", "middle"]).default("left"),
     }),
     handler: async (ctx: any, args: any) => {
-      const bad = badSessionKey(ctx, args);
-      if (bad) return bad;
-      const s = await ensureSession(ctx.userId);
-      touch(ctx.userId);
+      const s = await resolveTab(ctx, args);
+      if (isNotFound(s)) return s;
       await browserClick(s, args.x, args.y, args.button);
       return { ok: true };
     },
@@ -118,10 +135,8 @@ const tools: PluginTool[] = [
     integration: BROWSER_INTEGRATION_NAME,
     inputSchema: z.object({ session_id: z.string().describe(SESSION_ID_DESC), text: z.string() }),
     handler: async (ctx: any, args: any) => {
-      const bad = badSessionKey(ctx, args);
-      if (bad) return bad;
-      const s = await ensureSession(ctx.userId);
-      touch(ctx.userId);
+      const s = await resolveTab(ctx, args);
+      if (isNotFound(s)) return s;
       await browserType(s, args.text);
       return { ok: true };
     },
@@ -132,10 +147,8 @@ const tools: PluginTool[] = [
     integration: BROWSER_INTEGRATION_NAME,
     inputSchema: z.object({ session_id: z.string().describe(SESSION_ID_DESC), keys: z.string() }),
     handler: async (ctx: any, args: any) => {
-      const bad = badSessionKey(ctx, args);
-      if (bad) return bad;
-      const s = await ensureSession(ctx.userId);
-      touch(ctx.userId);
+      const s = await resolveTab(ctx, args);
+      if (isNotFound(s)) return s;
       await browserKey(s, args.keys);
       return { ok: true };
     },
@@ -150,10 +163,8 @@ const tools: PluginTool[] = [
       amount: z.number().int().positive().default(600),
     }),
     handler: async (ctx: any, args: any) => {
-      const bad = badSessionKey(ctx, args);
-      if (bad) return bad;
-      const s = await ensureSession(ctx.userId);
-      touch(ctx.userId);
+      const s = await resolveTab(ctx, args);
+      if (isNotFound(s)) return s;
       await browserScroll(s, args.direction, args.amount);
       return { ok: true };
     },
@@ -164,10 +175,8 @@ const tools: PluginTool[] = [
     integration: BROWSER_INTEGRATION_NAME,
     inputSchema: z.object({ session_id: z.string().describe(SESSION_ID_DESC), maxChars: z.number().int().positive().optional() }),
     handler: async (ctx: any, args: any) => {
-      const bad = badSessionKey(ctx, args);
-      if (bad) return bad;
-      const s = await ensureSession(ctx.userId);
-      touch(ctx.userId);
+      const s = await resolveTab(ctx, args);
+      if (isNotFound(s)) return s;
       return browserReadText(s, args.maxChars);
     },
   },
@@ -183,10 +192,8 @@ const tools: PluginTool[] = [
       timeoutMs: z.number().int().positive().max(60_000).optional(),
     }),
     handler: async (ctx: any, args: any) => {
-      const bad = badSessionKey(ctx, args);
-      if (bad) return bad;
-      const s = await ensureSession(ctx.userId);
-      touch(ctx.userId);
+      const s = await resolveTab(ctx, args);
+      if (isNotFound(s)) return s;
       return browserEvaluate(s, args.expression, { awaitPromise: args.awaitPromise ?? true, timeoutMs: args.timeoutMs });
     },
   },
@@ -197,10 +204,9 @@ const tools: PluginTool[] = [
     integration: BROWSER_INTEGRATION_NAME,
     inputSchema: z.object({ session_id: z.string().describe(SESSION_ID_DESC) }),
     handler: async (ctx: any, args: any) => {
-      const bad = badSessionKey(ctx, args);
-      if (bad) return bad;
+      const t = await resolveTab(ctx, args);
+      if (isNotFound(t)) return t;
       const s = await ensureSession(ctx.userId);
-      touch(ctx.userId);
       // Arming is the point at which routing has to be real, so wait for it
       // here rather than at session creation.
       await ensureDownloadRouting(s);
@@ -220,9 +226,10 @@ const tools: PluginTool[] = [
     }),
     handler: async (ctx: any, args: any) => {
       // The handle lives in this process's memory, so this call has to reach
-      // the process that armed it — same routing key as everything else.
-      const bad = badSessionKey(ctx, args);
-      if (bad) return bad;
+      // the process that armed it — the bearer-derived affinity header already
+      // routed it here.
+      const t = await resolveTab(ctx, args);
+      if (isNotFound(t)) return t;
       try {
         return await awaitDownload(args.handle, args.timeoutMs);
       } catch (e) {
@@ -241,10 +248,8 @@ const tools: PluginTool[] = [
       name: z.string(),
     }),
     handler: async (ctx: any, args: any) => {
-      const bad = badSessionKey(ctx, args);
-      if (bad) return bad;
-      const s = await ensureSession(ctx.userId);
-      touch(ctx.userId);
+      const s = await resolveTab(ctx, args);
+      if (isNotFound(s)) return s;
       try {
         const done = await uploadWorkspaceFile(s.cdp, ctx.userId, args.selector, args.name);
         return { ok: true, name: done.name };
@@ -258,24 +263,32 @@ const tools: PluginTool[] = [
   },
   {
     name: "browser_close",
-    description: "Close the per-user warm browser session (the persistent profile is kept). Frees the single-writer lock so a cookie capture can run.",
+    description: "Close this tab. The browser and its logged-in profile stay; other tabs are untouched. An idle browser closes itself after BROWSER_SESSION_TTL_SECONDS.",
     integration: BROWSER_INTEGRATION_NAME,
     inputSchema: z.object({ session_id: z.string().describe(SESSION_ID_DESC) }),
     handler: async (ctx: any, args: any) => {
-      const bad = badSessionKey(ctx, args);
-      if (bad) return bad;
-      await closeBrowserSession(ctx.userId);
+      const t = await resolveTab(ctx, args);
+      if (isNotFound(t)) return t;
+      await closeTab(ctx.userId, t.id);
       return { ok: true };
     },
   },
   {
-    name: "browser_live_url",
-    description: "Get a short-lived URL to watch and take over the per-user browser session in a web canvas. Open it to drive the same browser by hand, then return control to the model.",
+    name: "browser_tabs",
+    description: "List the tabs open in your browser: session_id, url, title, and whether this toolset can drive it (a popup the page opened is listed but not driveable).",
     integration: BROWSER_INTEGRATION_NAME,
-    inputSchema: z.object({ session_id: z.string().describe(SESSION_ID_DESC) }),
-    handler: async (ctx: any, args: any) => {
-      const bad = badSessionKey(ctx, args);
-      if (bad) return bad;
+    inputSchema: z.object({}),
+    handler: async (ctx: any) => {
+      const tabs = await listTabs(ctx.userId);
+      return { tabs: tabs.map((t) => ({ session_id: t.id, url: t.url, title: t.title, active: t.active })) };
+    },
+  },
+  {
+    name: "browser_live_url",
+    description: "Get a short-lived URL to watch and take over your browser in a web canvas. Open it to drive the same browser by hand, then return control to the model.",
+    integration: BROWSER_INTEGRATION_NAME,
+    inputSchema: z.object({}),
+    handler: async (ctx: any) => {
       // No ensureSession here: the session is warmed at redeem time, after the
       // opener proves they own this account.
       const rec = createPending({

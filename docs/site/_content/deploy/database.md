@@ -49,6 +49,7 @@ bound what they hold:
 | `BROWSER_PROFILE_TTL_DAYS` | `30` | Age at which an unused whole profile is **deleted** — logging that user out of every cookie-auth integration. `0` disables |
 | `BROWSER_PROFILE_REAP_INTERVAL_SECONDS` | `3600` | How often the profile disk reaper runs. It also runs once at boot |
 | `BROWSER_DISK_CACHE_MB` | `32` | Chromium's `--disk-cache-size` per profile |
+| `BROWSER_TAB_LIMIT` | `8` | Maximum tabs one user's browser session may hold at once, including the default tab |
 | `JOTS_MAX_BYTES` | `5242880` (5 MiB) | Per-file and total decompressed size cap on a jot upload |
 | `JOTS_MAX_FILES` | `1000` | Maximum files in one jot archive |
 | `JOTS_UPLOAD_TTL_SECONDS` | `300` | Lifetime of a single-use upload token |

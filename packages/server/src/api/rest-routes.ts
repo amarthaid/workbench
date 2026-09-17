@@ -7,6 +7,7 @@ import { executeSingle, executeMany, type ExecResult } from "../mcp/meta-tools";
 import { resolveMcpUser } from "../auth/oauth-server/resolve";
 import { getToken } from "../auth/tokens";
 import { hasValidCookies } from "../auth/cookie";
+import { forwardForBrowserAffinity } from "../auth/affinity-forward";
 
 // Plain-REST alternative to `POST /mcp`: same credentials, same execution
 // engine (`executeSingle`/`executeMany` from the meta-tools module), same
@@ -173,6 +174,17 @@ export async function registerRestRoutes(app: FastifyInstance): Promise<void> {
         const { integration } = request.params;
         if (!registry.getIntegration(integration)) {
           return reply.status(404).send({ error: `Integration not found: ${integration}` });
+        }
+
+        // The browser integration is process-local: route it to the replica
+        // that owns this user's chromium, exactly as /mcp does. Same origin as
+        // INTERNAL_MCP_URL, this endpoint's own path.
+        if (integration === "browser" && config.INTERNAL_MCP_URL) {
+          const target = new URL("/rest/browser", config.INTERNAL_MCP_URL).toString();
+          const sent = await forwardForBrowserAffinity({
+            userId, request, reply, target, body: request.body ?? {},
+          });
+          if (sent) return reply;
         }
 
         const body = request.body;

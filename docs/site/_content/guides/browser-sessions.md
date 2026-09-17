@@ -81,11 +81,15 @@ Only two endpoints map it to **409**: `POST /api/browser-session/reset` and
 `POST /api/browser-session/live-url`. The capture endpoints do not — they turn every
 error, this one included, into **400** with the error message in the body.
 
-If an agent is holding a warm browser session, `browser_close` ends the process without
-destroying the profile.
+`browser_close` does **not** release the profile. It closes one tab; the browser process
+stays up for the session's other tabs, and the profile stays claimed. Nothing an agent
+can call ends the process.
 
-Warm sessions are also idle-reaped: `BROWSER_SESSION_TTL_SECONDS` (default 300),
-checked every 30 seconds, then the process is killed. The profile survives.
+The release path is the idle reaper: after `BROWSER_SESSION_TTL_SECONDS` (default 300)
+with no activity, checked every 30 seconds, the process is killed and the claim drops.
+The profile survives. `POST /api/browser-session/reset` wipes the profile, but only once
+it is unclaimed — it returns **409** while a session is warm, so wait out the reaper
+first.
 
 ## Cookie domain scoping
 
@@ -181,6 +185,7 @@ every profile look freshly used forever.
 | `BROWSER_PROFILE_TTL_DAYS` | `30` | no | Age at which a whole profile is deleted. `0` disables profile deletion |
 | `BROWSER_PROFILE_REAP_INTERVAL_SECONDS` | `3600` | no | Sweep interval; also runs once at boot |
 | `BROWSER_DISK_CACHE_MB` | `32` | no | Becomes Chromium's `--disk-cache-size` |
+| `BROWSER_TAB_LIMIT` | `8` | no | Maximum tabs one user's browser session may hold at once, including the default tab |
 | `CAPTURE_PROXY` | — | no | Upstream proxy for the capture browser, e.g. `http://host:3128` or `socks5://host:1080` |
 | `CAPTURE_PROXY_USERNAME` | — | no | Proxy username; needs `CAPTURE_PROXY` and the password too |
 | `CAPTURE_PROXY_PASSWORD` | — | no | Proxy password |

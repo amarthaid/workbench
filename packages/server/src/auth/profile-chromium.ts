@@ -148,6 +148,8 @@ export interface SpawnedChromium {
   remotePort: number;
   cdpBrowserWsUrl: string;
   cdpPageWsUrl: string;
+  /** targetId of the page chromium opened at spawn; the session's default tab. */
+  cdpPageTargetId: string;
   timings: SpawnStageTimings;
 }
 
@@ -254,6 +256,7 @@ export async function spawnProfileChromium(
       remotePort,
       cdpBrowserWsUrl: versionInfo.webSocketDebuggerUrl,
       cdpPageWsUrl: target.webSocketDebuggerUrl,
+      cdpPageTargetId: target.id,
       timings,
     };
   } catch (e) {

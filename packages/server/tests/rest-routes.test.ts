@@ -8,6 +8,10 @@ vi.mock("../src/config", () => ({
     SERVER_PUBLIC_URL: "http://localhost:3000",
     CONNECT_TTL_SECONDS: 600,
     SESSION_SECRET: "test-session-secret-32-chars-long!!",
+    NODE_ENV: "test",
+    DATABASE_URL: process.env.DATABASE_URL, // pinned to a temp dir by vitest.config.ts
+    ENCRYPTION_KEY: "0".repeat(64),
+    PORT: "3000",
   },
 }));
 

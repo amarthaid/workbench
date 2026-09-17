@@ -124,6 +124,36 @@ export class CdpClient {
   }
 }
 
+/** What the CDP action helpers need: one page-level client and its last screenshot hash. */
+export interface PageHandle {
+  cdp: CdpClient;
+  lastShotHash?: string;
+}
+
+export interface Tab extends PageHandle {
+  id: string;
+  lastActivity: number;
+  createdAt: number;
+}
+
+function pageWsUrl(remotePort: number, targetId: string): string {
+  return `ws://127.0.0.1:${remotePort}/devtools/page/${targetId}`;
+}
+
+async function attachTab(s: WarmSession, targetId: string, wsUrl: string): Promise<Tab> {
+  const cdp = new CdpClient(wsUrl, () => {
+    // Only this tab is gone. Never tear the session down from here: chromium
+    // is still up and the other tabs are still driveable.
+    const cur = s.tabs.get(targetId);
+    if (cur && cur.cdp === cdp) s.tabs.delete(targetId);
+  });
+  await cdp.ready;
+  const now = Date.now();
+  const tab: Tab = { id: targetId, cdp, lastActivity: now, createdAt: now };
+  s.tabs.set(targetId, tab);
+  return tab;
+}
+
 export interface WarmSession {
   proc: ChildProcess;
   remotePort: number;
@@ -131,8 +161,21 @@ export interface WarmSession {
   cdpBrowserWsUrl: string;
   userId: string;
   lastActivity: number;
-  lastShotHash?: string;
-  cdp: CdpClient;
+  /**
+   * Page targets this session drives, keyed by chromium targetId. The agent's
+   * `session_id` is one of these keys. `defaultTabId` is the page chromium
+   * opened at spawn; the live view dials it (`cdpPageWsUrl`) and pre-upgrade
+   * agents holding the old routing key are mapped onto it.
+   */
+  tabs: Map<string, Tab>;
+  defaultTabId: string;
+  /**
+   * Tabs whose target is being created right now. openTab reserves its slot
+   * here before its first await: the size check and the map insert are
+   * separated by three round trips, so without a synchronous reservation N
+   * concurrent calls all pass a check that only one of them should.
+   */
+  pendingOpens: number;
   authWs?: WebSocket;
   /**
    * Second client, on the BROWSER target rather than the page target.
@@ -141,6 +184,8 @@ export interface WarmSession {
    * downloads should not pay for a second socket.
    */
   browserCdp?: CdpClient;
+  /** In-flight browserClient() promise, so concurrent callers share one socket. */
+  browserCdpStarting?: Promise<CdpClient>;
   /**
    * Memoized download-routing setup. Started in the background at session
    * creation so opening a browser never waits on a second socket, and awaited
@@ -151,18 +196,36 @@ export interface WarmSession {
 
 const warmSessions = new Map<string, WarmSession>();
 
-export async function ensureSession(userId: string): Promise<WarmSession> {
-  const existing = warmSessions.get(userId);
-  if (existing) { existing.lastActivity = Date.now(); return existing; }
+/**
+ * In-flight cold starts, keyed by user. A chromium spawn takes seconds, and
+ * two agents calling browser_start at once is the normal case: without this
+ * the second caller sees the profile already claimed and throws
+ * BROWSER_SESSION_BUSY. The activeProfiles guard stays for the cross-process
+ * case it was written for.
+ */
+const startingSessions = new Map<string, Promise<WarmSession>>();
 
+export function ensureSession(userId: string): Promise<WarmSession> {
+  const existing = warmSessions.get(userId);
+  if (existing) { existing.lastActivity = Date.now(); return Promise.resolve(existing); }
+
+  const inFlight = startingSessions.get(userId);
+  if (inFlight) return inFlight;
+
+  const started = startSession(userId).finally(() => {
+    startingSessions.delete(userId);
+  });
+  startingSessions.set(userId, started);
+  return started;
+}
+
+async function startSession(userId: string): Promise<WarmSession> {
   if (activeProfiles.has(userId)) {
     throw new Error("BROWSER_SESSION_BUSY: a browser session is already active for this user");
   }
   activeProfiles.add(userId);
   try {
     const spawned = await spawnProfileChromium(userId, {});
-    const cdp = new CdpClient(spawned.cdpPageWsUrl, () => { void closeBrowserSession(userId); });
-    await cdp.ready;
     const proxyUser = process.env.CAPTURE_PROXY_USERNAME;
     const proxyPass = process.env.CAPTURE_PROXY_PASSWORD;
     const authWs =
@@ -176,9 +239,12 @@ export async function ensureSession(userId: string): Promise<WarmSession> {
       cdpBrowserWsUrl: spawned.cdpBrowserWsUrl,
       userId,
       lastActivity: Date.now(),
-      cdp,
+      tabs: new Map(),
+      defaultTabId: spawned.cdpPageTargetId,
+      pendingOpens: 0,
       authWs,
     };
+    await attachTab(session, spawned.cdpPageTargetId, spawned.cdpPageWsUrl);
     warmSessions.set(userId, session);
     // Kick off download routing, but do not block on it: opening a browser
     // must not wait on a second socket, and must not hang if that socket never
@@ -189,7 +255,8 @@ export async function ensureSession(userId: string): Promise<WarmSession> {
       activeProfiles.delete(userId);
       warmSessions.delete(userId);
       cancelDownloads(userId);
-      try { session.cdp.close(); } catch { /* noop */ }
+      for (const t of session.tabs.values()) { try { t.cdp.close(); } catch { /* noop */ } }
+      session.tabs.clear();
       try { session.browserCdp?.close(); } catch { /* noop */ }
       try { session.authWs?.close(); } catch { /* noop */ }
       // The profile outlives the process on purpose — that's what keeps the user
@@ -228,13 +295,32 @@ export function ensureDownloadRouting(s: WarmSession): Promise<void> {
   return s.downloadRouting;
 }
 
-/** The browser-target client, created on first use and cached on the session. */
-export async function browserClient(s: WarmSession): Promise<CdpClient> {
-  if (s.browserCdp) return s.browserCdp;
-  const client = new CdpClient(s.cdpBrowserWsUrl);
-  await client.ready;
-  s.browserCdp = client;
-  return client;
+/**
+ * The browser-target client, created on first use and cached on the session.
+ *
+ * Single-flight: the in-flight promise is memoized on the session, so N
+ * concurrent callers share one socket instead of opening N and dropping N-1
+ * on the floor (nothing would ever close them).
+ */
+export function browserClient(s: WarmSession): Promise<CdpClient> {
+  if (s.browserCdp) return Promise.resolve(s.browserCdp);
+  if (!s.browserCdpStarting) {
+    s.browserCdpStarting = (async () => {
+      const client = new CdpClient(s.cdpBrowserWsUrl);
+      await client.ready;
+      s.browserCdp = client;
+      return client;
+    })()
+      .catch((e) => {
+        // Let a later attempt retry rather than caching the failure forever.
+        s.browserCdpStarting = undefined;
+        throw e;
+      })
+      .finally(() => {
+        s.browserCdpStarting = undefined;
+      });
+  }
+  return s.browserCdpStarting;
 }
 
 export function touch(userId: string): void {
@@ -244,6 +330,101 @@ export function touch(userId: string): void {
 
 export function getWarmSession(userId: string): WarmSession | undefined {
   return warmSessions.get(userId);
+}
+
+export function getTab(userId: string, tabId: string): Tab | undefined {
+  return warmSessions.get(userId)?.tabs.get(tabId);
+}
+
+export function touchTab(userId: string, tabId: string): void {
+  const s = warmSessions.get(userId);
+  if (!s) return;
+  const now = Date.now();
+  s.lastActivity = now;
+  const t = s.tabs.get(tabId);
+  if (t) t.lastActivity = now;
+}
+
+export type OpenTabResult =
+  | { ok: true; tab: Tab }
+  | { ok: false; error: "BROWSER_TAB_LIMIT"; limit: number };
+
+/** Open a fresh about:blank tab in this user's chromium and register it. */
+export async function openTab(userId: string): Promise<OpenTabResult> {
+  const s = await ensureSession(userId);
+  const limit = config.BROWSER_TAB_LIMIT;
+  if (s.tabs.size + s.pendingOpens >= limit) return { ok: false, error: "BROWSER_TAB_LIMIT", limit };
+  s.pendingOpens += 1;
+  try {
+    const browser = await browserClient(s);
+    // background: true — a foreground-created target backgrounds the default
+    // tab, and chromium stops delivering Page.screencastFrame for a
+    // backgrounded target, which freezes the portal live view.
+    const { targetId } = (await browser.send("Target.createTarget", {
+      url: "about:blank",
+      background: true,
+    })) as { targetId: string };
+    const tab = await attachTab(s, targetId, pageWsUrl(s.remotePort, targetId));
+    s.lastActivity = Date.now();
+    return { ok: true, tab };
+  } finally {
+    s.pendingOpens -= 1;
+  }
+}
+
+/**
+ * The default tab, ensuring the session. If the default was closed, adopt the
+ * first live page target (or create one) so the live view and compat callers
+ * always have somewhere to land.
+ */
+export async function defaultTab(userId: string): Promise<Tab> {
+  const s = await ensureSession(userId);
+  const existing = s.tabs.get(s.defaultTabId);
+  if (existing) return existing;
+  const browser = await browserClient(s);
+  const { targetInfos } = (await browser.send("Target.getTargets")) as {
+    targetInfos?: Array<{ targetId: string; type: string }>;
+  };
+  const pages = (targetInfos ?? []).filter((t) => t.type === "page");
+  // Prefer a page nothing is driving yet, so adopting a default does not hand
+  // the live view a tab an agent is already working in.
+  let targetId = (pages.find((t) => !s.tabs.has(t.targetId)) ?? pages[0])?.targetId;
+  if (!targetId) {
+    targetId = ((await browser.send("Target.createTarget", { url: "about:blank" })) as { targetId: string }).targetId;
+  }
+  const tab = s.tabs.get(targetId) ?? (await attachTab(s, targetId, pageWsUrl(s.remotePort, targetId)));
+  s.defaultTabId = targetId;
+  s.cdpPageWsUrl = pageWsUrl(s.remotePort, targetId);
+  return tab;
+}
+
+/** Close one tab. False when it is not a tab of this user's session. */
+export async function closeTab(userId: string, tabId: string): Promise<boolean> {
+  const s = warmSessions.get(userId);
+  const tab = s?.tabs.get(tabId);
+  if (!s || !tab) return false;
+  s.tabs.delete(tabId);
+  try { tab.cdp.close(); } catch { /* noop */ }
+  try {
+    const browser = await browserClient(s);
+    await browser.send("Target.closeTarget", { targetId: tabId });
+  } catch { /* target already gone */ }
+  s.lastActivity = Date.now();
+  return true;
+}
+
+export interface TabInfo { id: string; url: string; title: string; active: boolean }
+
+/** Every page target in the user's chromium; `active` = driveable through a registered tab. */
+export async function listTabs(userId: string): Promise<TabInfo[]> {
+  const s = await ensureSession(userId);
+  const browser = await browserClient(s);
+  const { targetInfos } = (await browser.send("Target.getTargets")) as {
+    targetInfos?: Array<{ targetId: string; type: string; url: string; title: string }>;
+  };
+  return (targetInfos ?? [])
+    .filter((t) => t.type === "page")
+    .map((t) => ({ id: t.targetId, url: t.url, title: t.title, active: s.tabs.has(t.targetId) }));
 }
 
 // Read the user's live browser cookies, scoped to an integration's domains.
@@ -272,7 +453,8 @@ export async function closeBrowserSession(userId: string): Promise<void> {
   warmSessions.delete(userId);
   activeProfiles.delete(userId);
   cancelDownloads(userId);
-  try { s.cdp.close(); } catch { /* noop */ }
+  for (const t of s.tabs.values()) { try { t.cdp.close(); } catch { /* noop */ } }
+  s.tabs.clear();
   try { s.browserCdp?.close(); } catch { /* noop */ }
   try { s.authWs?.close(); } catch { /* noop */ }
   try { s.proc.kill("SIGKILL"); } catch { /* noop */ }
@@ -293,10 +475,10 @@ export function startBrowserReaper(): void {
 }
 
 // ─── CDP action helpers ───────────────────────────────────────────────────
-// Each takes a WarmSession and speaks CDP through its persistent client.
+// Each takes a PageHandle (a tab) and speaks CDP through its page-level client.
 
 export async function navigate(
-  s: WarmSession,
+  s: PageHandle,
   url: string
 ): Promise<{ url: string; title: string }> {
   await s.cdp.send("Page.navigate", { url });
@@ -308,7 +490,7 @@ export async function navigate(
   return { url, title };
 }
 
-async function pageTitle(s: WarmSession): Promise<string> {
+async function pageTitle(s: PageHandle): Promise<string> {
   try {
     const r = (await s.cdp.send("Runtime.evaluate", {
       expression: "document.title",
@@ -324,7 +506,7 @@ async function pageTitle(s: WarmSession): Promise<string> {
 export interface ShotOpts { format?: "jpeg" | "png"; quality?: number; maxWidth?: number }
 
 export async function screenshot(
-  s: WarmSession,
+  s: PageHandle,
   opts: ShotOpts = {}
 ): Promise<{ _mcpImage: { data: string; mimeType: string } } | { unchanged: true }> {
   const format = opts.format ?? "jpeg";
@@ -352,12 +534,12 @@ export async function screenshot(
 }
 
 type MouseButton = "left" | "right" | "middle";
-export async function click(s: WarmSession, x: number, y: number, button: MouseButton = "left"): Promise<void> {
+export async function click(s: PageHandle, x: number, y: number, button: MouseButton = "left"): Promise<void> {
   await s.cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button, clickCount: 1 });
   await s.cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button, clickCount: 1 });
 }
 
-export async function typeText(s: WarmSession, text: string): Promise<void> {
+export async function typeText(s: PageHandle, text: string): Promise<void> {
   await s.cdp.send("Input.insertText", { text });
 }
 
@@ -377,7 +559,7 @@ const KEYS: Record<string, { keyCode: number; key: string }> = {
   arrowright: { keyCode: 39, key: "ArrowRight" },
 };
 
-export async function pressKey(s: WarmSession, keys: string): Promise<void> {
+export async function pressKey(s: PageHandle, keys: string): Promise<void> {
   const parts = keys.split("+").map((p) => p.trim().toLowerCase()).filter(Boolean);
   let modifiers = 0;
   let last = "";
@@ -400,13 +582,13 @@ export async function pressKey(s: WarmSession, keys: string): Promise<void> {
 }
 
 type ScrollDir = "up" | "down" | "left" | "right";
-export async function scroll(s: WarmSession, direction: ScrollDir, amount = 600): Promise<void> {
+export async function scroll(s: PageHandle, direction: ScrollDir, amount = 600): Promise<void> {
   const deltaX = direction === "left" ? -amount : direction === "right" ? amount : 0;
   const deltaY = direction === "up" ? -amount : direction === "down" ? amount : 0;
   await s.cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: 640, y: 400, deltaX, deltaY });
 }
 
-export async function readText(s: WarmSession, maxChars = 20000): Promise<{ text: string; truncated: boolean }> {
+export async function readText(s: PageHandle, maxChars = 20000): Promise<{ text: string; truncated: boolean }> {
   const r = (await s.cdp.send("Runtime.evaluate", {
     expression: "document.body.innerText",
     returnByValue: true,
@@ -433,7 +615,7 @@ export type EvaluateResult =
 // `page.evaluate` shape. returnByValue means DOM nodes and functions come
 // back as {} rather than a handle; return a plain value from the expression.
 export async function evaluate(
-  s: WarmSession,
+  s: PageHandle,
   expression: string,
   opts: EvaluateOpts = {}
 ): Promise<EvaluateResult> {

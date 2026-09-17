@@ -3,7 +3,7 @@ title: Browser
 description: The built-in headless browser an agent drives directly — navigate, click, type, read, screenshot, and hand control to a human.
 ---
 
-`browser` is an internal plugin. It lives in the server's own source rather than under `PLUGINS_DIR`, and it declares `auth: { type: "none" }`. It is therefore always connected and needs no setup. Its fourteen tools drive a warm headless Chromium session that belongs to one user.
+`browser` is an internal plugin. It lives in the server's own source rather than under `PLUGINS_DIR`, and it declares `auth: { type: "none" }`. It is therefore always connected and needs no setup. Its fifteen tools drive a warm headless Chromium session that belongs to one user.
 
 It is internal on purpose. The handlers reach straight into the browser-session layer. Keeping that out of the plugin context means a third-party plugin can never drive a user's logged-in browser and steal their cookies. The name `browser` is reserved, and a plugin directory using it is refused at load time.
 
@@ -13,16 +13,18 @@ It is internal on purpose. The handlers reach straight into the browser-session 
 |---|---|
 | Plugin id | `browser` |
 | Auth | None (internal, always connected) |
-| Tools | 14 |
+| Tools | 15 |
 | Session lifetime | `BROWSER_SESSION_TTL_SECONDS`, default 300 seconds idle |
 
 ## The per-user session model
 
-There is exactly one browser per user, backed by a persistent profile on disk. Every action tool opens the session if it is not already running, and refreshes its idle timer. A sequence of calls therefore reuses one warm browser instead of paying the startup cost each time.
+There is exactly one browser per user, backed by a persistent profile on disk. Every action tool opens that browser if it is not already running, and refreshes its idle timer. A sequence of calls therefore reuses one warm browser — and whichever of its tabs the call names — instead of paying the startup cost each time.
 
-**One user, one browser, one page.** That is the whole model, and it is worth being precise about what `session_id` is and is not. `browser_start` returns `session_id = HMAC(SESSION_SECRET, userId)`: the same value every time for the same user. It is a *routing key*, so that behind a load balancer every `browser_*` call can be hashed to the replica that owns the Chromium process (see [browser session pod affinity](../field-notes/2026-09-10-browser-session-pod-affinity.md)). It is not a credential — the bearer still authorizes every call — and it is not a session handle: calling `browser_start` twice does not give you two browsers. Two agents driving the same user at once share one tab and will step on each other. Every tool except `browser_start` requires it, and a value that is not this user's key is refused with `BAD_SESSION_KEY` rather than run on whichever replica it happened to reach.
+**One user, one browser, many tabs.** `browser_start` opens a new tab and returns its `session_id`. Every other driving tool takes that id and acts on that tab only. Two agents (or one agent with subagents) each call `browser_start` and get their own tab; they never step on each other. All tabs live in one Chromium with one profile and one cookie jar, so a login in one tab is visible in the others, and downloads from any tab land in the same [workspace](files.md). A user may hold `BROWSER_TAB_LIMIT` tabs at once (default 8); `browser_start` past that returns `BROWSER_TAB_LIMIT`. `browser_tabs` lists what is open. An id that is not one of your open tabs is refused with `BROWSER_TAB_NOT_FOUND`.
 
-The cookie-auth capture flow uses that same browser. The two **share** it rather than excluding each other. Capture and the `browser_*` tools resolve the same warm session, so a capture can start while an agent is driving. `browser_close` ends the process but keeps the profile, so the logged-in state survives.
+`session_id` is not a credential and not a routing key. Behind a load balancer every `browser_*` call still has to reach the replica that owns the Chromium process (see [browser session pod affinity](../field-notes/2026-09-10-browser-session-pod-affinity.md)); the server derives that routing key from the bearer itself, so the agent never sees or carries it. Until v0.31, a `session_id` minted by a pre-v0.30 `browser_start` still works and drives the default tab.
+
+The cookie-auth capture flow uses that same browser. The two **share** it rather than excluding each other. Capture and the `browser_*` tools resolve the same warm session, so a capture can start while an agent is driving. `browser_close` ends one tab, not the browser; the profile — and the logged-in state in it — survives regardless.
 
 Because the profile persists, sites the user logged into stay logged in across sessions. The server kills an idle session after `BROWSER_SESSION_TTL_SECONDS`. The profile itself is separately subject to `BROWSER_PROFILE_TTL_DAYS`.
 
@@ -30,7 +32,7 @@ Because the profile persists, sites the user logged into stay logged in across s
 
 | Tool | Purpose |
 |---|---|
-| `browser_start` | Mint the `session_id` every other tool takes. Call it once per task |
+| `browser_start` | Open a new tab and return its `session_id`. Once per independent task |
 | `browser_navigate` | Navigate to a URL; returns the final URL and page title |
 | `browser_read_text` | Read the page's visible text (`document.body.innerText`) |
 | `browser_evaluate` | Run JavaScript in the page and get its value back — click by selector, scrape the DOM, wait on a promise |
@@ -42,7 +44,8 @@ Because the profile persists, sites the user logged into stay logged in across s
 | `browser_expect_download` | Arm a wait for a download, **before** the click that triggers it |
 | `browser_await_download` | Wait for that download and get the file now in your [workspace](files.md) |
 | `browser_upload_file` | Put a workspace file into an `<input type="file">` |
-| `browser_close` | Close the session, keep the profile |
+| `browser_close` | Close this tab; the browser and profile stay |
+| `browser_tabs` | List open tabs with their `session_id`, url, title |
 | `browser_live_url` | Mint a short-lived URL for a human to watch and take over |
 
 ## Screenshots and the token budget
@@ -59,9 +62,9 @@ The cheaper habit is to prefer `browser_read_text` for text-heavy pages, forms, 
 
 `browser_live_url` returns a URL into the portal's browser canvas — `${PORTAL_URL}/browser?t=<token>` — carrying a signed token whose lifetime is `CONNECT_TTL_SECONDS` (default 600 seconds).
 
-Opening it attaches a live view of the *same* session the agent is driving — the portal's canvas dials the very page target the tools speak to, so the human sees the agent's tab, not a new one. A person can take over by hand to solve a CAPTCHA, complete an SSO prompt, or click through a consent screen. They can then leave the page. The agent's next tool call continues in the browser they just used. This is the escape hatch for anything an agent cannot or should not do itself.
+Opening it attaches a live view of the *same* browser the agent is driving — same process, same profile, same cookies, same logged-in state — not a new one. The canvas dials the default tab, though, which is not necessarily the tab an agent opened with `browser_start`; a human taking over sees whatever tab is default, and an agent working in a tab of its own is driving a different one. A person can take over by hand on that default tab to solve a CAPTCHA, complete an SSO prompt, or click through a consent screen, then leave the page. This is the escape hatch for anything an agent cannot or should not do itself.
 
-The link is a claim, not a capability: the person opening it has to be signed in to the portal as the same workbench user, or the server refuses with an account mismatch before warming anything. The live-view connection is then authorized by an `Authorization` header on every request, not through the URL, the browser canvas only accepts connections from allowed origins, and every request after the first carries the same per-user routing key the agent's `session_id` is — the portal mints it from `/attach`, so the view and the tools land on the same replica. Closing the tab detaches the view; it does not close the browser.
+The link is a claim, not a capability: the person opening it has to be signed in to the portal as the same workbench user, or the server refuses with an account mismatch before warming anything. The live-view connection is then authorized by an `Authorization` header on every request, not through the URL, the browser canvas only accepts connections from allowed origins, and every request after the first carries the same per-user routing key the server uses for the agent's tool calls — the portal mints it from `/attach`, so the view and the tools land on the same replica. The live view shows the default tab, even when the agent has several open. Closing the tab detaches the view; it does not close the browser.
 
 ## Notes and gotchas
 
@@ -94,4 +97,4 @@ Downloads land in the [files workspace](files.md) **whether or not a wait was ar
 
 Going the other way, `browser_upload_file({ selector, name })` puts a workspace file into a file input. `name` is a workspace-relative filename and never a path: it is resolved server-side against your own directory, symlinks included. Chromium will upload whatever path it is given to whatever form is on the page, so that resolution is load-bearing rather than decorative.
 
-`browser_close` is worth calling when the agent is done. It ends the Chromium process early rather than waiting for the idle reaper, and the profile is untouched.
+`browser_close` is worth calling when the agent is done with a tab. It ends that tab immediately rather than waiting for the idle reaper; the browser, the profile, and any other tabs are untouched.

@@ -25,7 +25,6 @@ vi.mock("../src/auth/connections", () => ({
 }));
 
 import { browserPlugin } from "../src/plugins/internal/browser";
-import { mintSessionKey } from "../src/auth/cdp-bridge";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -37,7 +36,7 @@ beforeEach(() => {
 describe("browser_live_url", () => {
   it("mints a connect JWT for the pending record and returns a /browser URL", async () => {
     const t = browserPlugin.tools.find((m) => m.name === "browser_live_url")!;
-    const out = (await (t.handler as any)({ userId: "u1" }, { session_id: mintSessionKey("u1") })) as { url: string };
+    const out = (await (t.handler as any)({ userId: "u1" }, {})) as { url: string };
     expect(createPendingMock).toHaveBeenCalledWith(
       expect.objectContaining({ userId: "u1", integration: "__browser__", type: "cookie" })
     );
@@ -61,7 +60,7 @@ describe("browser_live_url", () => {
     signMock.mockImplementation(actualToken.signConnectToken);
 
     const t = browserPlugin.tools.find((m) => m.name === "browser_live_url")!;
-    const out = (await (t.handler as any)({ userId: "user-1" }, { session_id: mintSessionKey("user-1") })) as { url: string };
+    const out = (await (t.handler as any)({ userId: "user-1" }, {})) as { url: string };
 
     expect(out.url).toMatch(/\/browser\?t=/);
     expect(ensureSession).not.toHaveBeenCalled();

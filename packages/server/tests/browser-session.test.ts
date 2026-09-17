@@ -5,6 +5,8 @@ const { spawnMock, cdpCallMock } = vi.hoisted(() => ({
   cdpCallMock: vi.fn(),
 }));
 const { proxyAuthMock } = vi.hoisted(() => ({ proxyAuthMock: vi.fn(() => ({ close: vi.fn() })) }));
+/** Every url a fake CdpClient socket was opened on, so tests can count sockets. */
+const { wsUrls } = vi.hoisted(() => ({ wsUrls: [] as string[] }));
 
 vi.mock("../src/auth/profile-chromium", async () => {
   const real = await vi.importActual<typeof import("../src/auth/profile-chromium")>(
@@ -32,8 +34,9 @@ vi.mock("ws", async () => {
     readyState = 1;
     send = vi.fn();
     close = vi.fn(() => { this.readyState = 3; });
-    constructor() {
+    constructor(url: string) {
       super();
+      wsUrls.push(url);
       setImmediate(() => this.emit("open"));
     }
   }
@@ -46,7 +49,15 @@ import {
   closeBrowserSession,
   reapIdleSessions,
   captureLiveCookies,
+  openTab,
+  getTab,
+  defaultTab,
+  closeTab,
+  listTabs,
+  touchTab,
+  browserClient,
 } from "../src/auth/browser-session";
+import type { WarmSession } from "../src/auth/browser-session";
 import { activeProfiles } from "../src/auth/profile-chromium";
 
 function fakeProc() {
@@ -63,8 +74,10 @@ beforeEach(() => {
     remotePort: 9999,
     cdpBrowserWsUrl: "ws://127.0.0.1:9999/browser",
     cdpPageWsUrl: "ws://127.0.0.1:9999/page",
+    cdpPageTargetId: "T0",
   });
   activeProfiles.clear();
+  wsUrls.length = 0;
 });
 
 describe("reapIdleSessions", () => {
@@ -75,6 +88,18 @@ describe("reapIdleSessions", () => {
     reapIdleSessions(Date.now() + 10_000_000);
     expect(getWarmSession("user-r")).toBeUndefined();
     expect(activeProfiles.has("user-r")).toBe(false);
+  });
+});
+
+describe("ensureSession single-flight", () => {
+  afterEach(async () => { await closeBrowserSession("u-sf"); });
+
+  it("two concurrent cold callers share one spawn and one session", async () => {
+    const [a, b] = await Promise.all([ensureSession("u-sf"), ensureSession("u-sf")]);
+    // Without the in-flight memo the second caller finds the profile claimed
+    // and throws BROWSER_SESSION_BUSY while the first is still spawning.
+    expect(a).toBe(b);
+    expect(spawnMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -183,5 +208,167 @@ describe("captureLiveCookies", () => {
     });
     const data = await captureLiveCookies("user-cap2", "jira.com", ["atlassian.net"]);
     expect(data.cookies.map((c) => c.name).sort()).toEqual(["primary", "secondary"]);
+  });
+});
+
+// browserClient opens a second FakeWebSocket on the browser target; Target.*
+// replies come from cdpSend below, patched onto that client after creation.
+async function stubBrowserTarget(userId: string, replies: Record<string, unknown>) {
+  const s = getWarmSession(userId)!;
+  const client = await browserClient(s);
+  const sent: Array<{ method: string; params: Record<string, unknown> }> = [];
+  (client as unknown as { send: unknown }).send = vi.fn(
+    async (method: string, params: Record<string, unknown> = {}) => {
+      sent.push({ method, params });
+      const r = replies[method];
+      return typeof r === "function" ? r(params) : (r ?? {});
+    }
+  );
+  return sent;
+}
+
+describe("tabs", () => {
+  afterEach(async () => { await closeBrowserSession("u1"); });
+
+  it("ensureSession registers the spawn's page as the default tab", async () => {
+    const s = await ensureSession("u1");
+    expect(s.defaultTabId).toBe("T0");
+    expect(s.tabs.get("T0")).toMatchObject({ id: "T0" });
+    expect(s.cdpPageWsUrl).toBe("ws://127.0.0.1:9999/page");
+  });
+
+  it("openTab creates a target, registers it under its id, and returns it", async () => {
+    await ensureSession("u1");
+    const sent = await stubBrowserTarget("u1", { "Target.createTarget": { targetId: "T1" } });
+    const r = await openTab("u1");
+    expect(r).toMatchObject({ ok: true, tab: { id: "T1" } });
+    // background: true, or the new target steals the foreground and chromium
+    // stops sending screencast frames for the default tab (the live view).
+    expect(sent).toContainEqual({
+      method: "Target.createTarget",
+      params: { url: "about:blank", background: true },
+    });
+    expect(getTab("u1", "T1")).toBeDefined();
+    expect(getWarmSession("u1")!.tabs.size).toBe(2);
+  });
+
+  it("openTab refuses past BROWSER_TAB_LIMIT", async () => {
+    await ensureSession("u1");
+    let n = 0;
+    await stubBrowserTarget("u1", { "Target.createTarget": () => ({ targetId: `T${++n}` }) });
+    for (let i = 1; i < 8; i++) expect((await openTab("u1")).ok).toBe(true); // 7 + default = 8
+    const r = await openTab("u1");
+    expect(r).toEqual({ ok: false, error: "BROWSER_TAB_LIMIT", limit: 8 });
+  });
+
+  it("closeTab closes the target and removes only that tab; the session stays warm", async () => {
+    await ensureSession("u1");
+    const sent = await stubBrowserTarget("u1", { "Target.createTarget": { targetId: "T1" } });
+    await openTab("u1");
+    expect(await closeTab("u1", "T1")).toBe(true);
+    expect(sent).toContainEqual({ method: "Target.closeTarget", params: { targetId: "T1" } });
+    expect(getTab("u1", "T1")).toBeUndefined();
+    expect(getWarmSession("u1")).toBeDefined();
+    expect(await closeTab("u1", "nope")).toBe(false);
+  });
+
+  it("a tab whose socket dies is dropped without taking the session down", async () => {
+    await ensureSession("u1");
+    await stubBrowserTarget("u1", { "Target.createTarget": { targetId: "T1" } });
+    const r = await openTab("u1");
+    if (!r.ok) throw new Error("open failed");
+    (r.tab.cdp as unknown as { ws: { emit: (e: string) => void } }).ws.emit("close");
+    expect(getTab("u1", "T1")).toBeUndefined();
+    expect(getWarmSession("u1")).toBeDefined();
+  });
+
+  it("defaultTab re-registers from Target.getTargets when the default was closed", async () => {
+    await ensureSession("u1");
+    const sent = await stubBrowserTarget("u1", {
+      "Target.getTargets": { targetInfos: [{ targetId: "T9", type: "page", url: "about:blank", title: "" }] },
+    });
+    await closeTab("u1", "T0");
+    const t = await defaultTab("u1");
+    expect(t.id).toBe("T9");
+    expect(getWarmSession("u1")!.defaultTabId).toBe("T9");
+    expect(getWarmSession("u1")!.cdpPageWsUrl).toBe("ws://127.0.0.1:9999/devtools/page/T9");
+    expect(sent.map((x) => x.method)).toContain("Target.getTargets");
+  });
+
+  it("defaultTab prefers a page target no tab is already driving", async () => {
+    await ensureSession("u1");
+    await stubBrowserTarget("u1", { "Target.createTarget": { targetId: "T1" } });
+    await openTab("u1");
+    await closeTab("u1", "T0");
+    // T1 is registered and an agent may be driving it; T9 is free.
+    await stubBrowserTarget("u1", {
+      "Target.getTargets": { targetInfos: [
+        { targetId: "T1", type: "page", url: "about:blank", title: "" },
+        { targetId: "T9", type: "page", url: "about:blank", title: "" },
+      ] },
+    });
+    const t = await defaultTab("u1");
+    expect(t.id).toBe("T9");
+    expect(getWarmSession("u1")!.cdpPageWsUrl).toBe("ws://127.0.0.1:9999/devtools/page/T9");
+  });
+
+  it("concurrent openTab calls cannot race past BROWSER_TAB_LIMIT", async () => {
+    await ensureSession("u1");
+    let n = 0;
+    await stubBrowserTarget("u1", { "Target.createTarget": () => ({ targetId: `T${++n}` }) });
+    // 8 at once against a session already holding the default tab: the limit is
+    // 8, so exactly 7 may land.
+    const results = await Promise.all(Array.from({ length: 8 }, () => openTab("u1")));
+    expect(results.filter((r) => r.ok)).toHaveLength(7);
+    expect(results.filter((r) => !r.ok)).toEqual([
+      { ok: false, error: "BROWSER_TAB_LIMIT", limit: 8 },
+    ]);
+    expect(getWarmSession("u1")!.tabs.size).toBe(8);
+  });
+
+  it("browserClient is single-flight: concurrent callers share one socket", async () => {
+    const url = "ws://127.0.0.1:4444/browser";
+    const s = { cdpBrowserWsUrl: url } as unknown as WarmSession;
+    const clients = await Promise.all(Array.from({ length: 8 }, () => browserClient(s)));
+    // Without the memo each caller opens its own socket and seven are dropped
+    // on the floor: never assigned, never closed.
+    expect(wsUrls.filter((u) => u === url)).toHaveLength(1);
+    expect(new Set(clients).size).toBe(1);
+    expect(s.browserCdp).toBe(clients[0]);
+  });
+
+  it("listTabs joins Target.getTargets with the map", async () => {
+    await ensureSession("u1");
+    await stubBrowserTarget("u1", {
+      "Target.getTargets": { targetInfos: [
+        { targetId: "T0", type: "page", url: "https://example.com", title: "Ex" },
+        { targetId: "POP", type: "page", url: "https://example.com/pop", title: "Pop" },
+        { targetId: "SW", type: "service_worker", url: "x", title: "" },
+      ] },
+    });
+    expect(await listTabs("u1")).toEqual([
+      { id: "T0", url: "https://example.com", title: "Ex", active: true },
+      { id: "POP", url: "https://example.com/pop", title: "Pop", active: false },
+    ]);
+  });
+
+  it("touchTab bumps the tab and the session", async () => {
+    const s = await ensureSession("u1");
+    s.lastActivity = 0;
+    s.tabs.get("T0")!.lastActivity = 0;
+    touchTab("u1", "T0");
+    expect(s.tabs.get("T0")!.lastActivity).toBeGreaterThan(0);
+    expect(s.lastActivity).toBeGreaterThan(0);
+  });
+
+  it("closeBrowserSession closes every tab client", async () => {
+    await ensureSession("u1");
+    await stubBrowserTarget("u1", { "Target.createTarget": { targetId: "T1" } });
+    const r = await openTab("u1");
+    if (!r.ok) throw new Error("open failed");
+    const spy = vi.spyOn(r.tab.cdp, "close");
+    await closeBrowserSession("u1");
+    expect(spy).toHaveBeenCalled();
+    expect(getWarmSession("u1")).toBeUndefined();
   });
 });

@@ -1,13 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 
-const { verifySessionMock, ensureSessionMock } = vi.hoisted(() => ({
+const { verifySessionMock, ensureSessionMock, sessionFor } = vi.hoisted(() => ({
   verifySessionMock: (token: string) => {
     if (token === "user-1-jwt") return Promise.resolve({ userId: "user-1" });
     if (token === "user-2-jwt") return Promise.resolve({ userId: "user-2" });
     return Promise.reject(new Error("Invalid token"));
   },
   ensureSessionMock: vi.fn(),
+  sessionFor: (userId: string) => ({
+    userId,
+    cdpPageWsUrl: `ws://127.0.0.1:9222/devtools/page/${userId}`,
+  }),
 }));
 
 vi.mock("../src/config", () => ({
@@ -18,7 +22,12 @@ vi.mock("../src/config", () => ({
   },
 }));
 vi.mock("../src/auth/session", () => ({ verifySession: verifySessionMock }));
-vi.mock("../src/auth/browser-session", () => ({ ensureSession: ensureSessionMock }));
+// The bridge warms the session through defaultTab, then reads the (possibly
+// re-adopted) default page url back off the session.
+vi.mock("../src/auth/browser-session", () => ({
+  defaultTab: ensureSessionMock,
+  getWarmSession: sessionFor,
+}));
 
 import {
   registerCdpBridgeRoutes,
@@ -60,10 +69,7 @@ let app: FastifyInstance;
 beforeEach(async () => {
   links = [];
   ensureSessionMock.mockReset();
-  ensureSessionMock.mockImplementation(async (userId: string) => ({
-    userId,
-    cdpPageWsUrl: `ws://127.0.0.1:9222/devtools/page/${userId}`,
-  }));
+  ensureSessionMock.mockImplementation(async (userId: string) => sessionFor(userId));
   _setDialer((target, handlers) => {
     const link: FakeLink = { target, sent: [], closed: false, handlers };
     links.push(link);

@@ -25,7 +25,7 @@ import { signConnectToken } from "../auth/connect-token";
 import { markConnected, startReaper, redeemPending, getPending, createPending } from "../auth/connections";
 import { resumeAuthorize } from "../auth/oauth-server/resume";
 import { listAgents, revokeAgent } from "../auth/oauth-server/agents";
-import { ensureSession, navigate, captureLiveCookies } from "../auth/browser-session";
+import { ensureSession, defaultTab, navigate, captureLiveCookies } from "../auth/browser-session";
 import {
   auditStored,
   encodeCursor,
@@ -350,7 +350,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     }
 
     if (integ.auth.type === "cookie") {
-      const session = await ensureSession(user.userId);
+      const session = await defaultTab(user.userId);
       await navigate(session, integ.auth.loginUrl);
       return {
         type: "cookie",
@@ -589,7 +589,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(400).send({ error: "url must be http(s)" });
     }
     try {
-      const s = await ensureSession(user.userId);
+      const s = await defaultTab(user.userId);
       if (url) await navigate(s, url);
       const rec = createPending({
         userId: user.userId,
@@ -676,7 +676,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
 
     if (integ.auth.type === "cookie") {
       try {
-        const session = await ensureSession(user.userId);
+        const session = await defaultTab(user.userId);
         await navigate(session, integ.auth.loginUrl);
         return {
           type: "cookie",
