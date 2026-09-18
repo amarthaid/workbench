@@ -4,6 +4,8 @@ import {
   StreamableHTTPError,
 } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { safeFetch } from "./ssrf";
 
 export interface RemoteTool {
@@ -16,7 +18,18 @@ export interface RemoteTool {
   inputSchema: unknown;
 }
 
-const CLIENT_INFO = { name: "workbench", version: "0.29.0" };
+// Identifies workbench to the remote MCP server (logs / consent screens).
+function readVersion(): string {
+  try {
+    // packages/server/{src,dist}/custom-apps → repo root package.json.
+    const pkg = JSON.parse(readFileSync(join(__dirname, "../../../../package.json"), "utf8")) as { version: string };
+    return pkg.version;
+  } catch {
+    return "0.0.0";
+  }
+}
+
+const CLIENT_INFO = { name: "workbench", version: readVersion() };
 
 // Tool calls can be long-running; without this the SDK's default ~60s timeout
 // kills them. Progress resets the per-request timer, maxTotal is a hard ceiling.

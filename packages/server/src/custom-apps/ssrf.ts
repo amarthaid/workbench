@@ -81,20 +81,34 @@ function isBlockedIp(addr: string): boolean {
 export async function safeFetch(url: string | URL, init?: RequestInit): Promise<Response> {
   const u = new URL(url);
   const hostname = u.hostname.replace(/^\[|\]$/g, "");
-  // The literal host check above can't see a DNS name that RESOLVES privately
+  const originalHost = u.host;
+
+  // The literal host check can't see a DNS name that RESOLVES privately
   // (169.254.169.254.nip.io, an internal name) — resolve and check the IPs.
-  // Rebinding (public on first lookup, private on the fetch) is not pinned;
-  // that needs connecting to the resolved IP with a Host/SNI override.
+  let resolved: { address: string }[] | null = null;
   try {
-    const addrs = await lookup(hostname, { all: true });
-    if (addrs.some((a) => isBlockedIp(a.address))) {
-      throw new Error(`Refusing to fetch ${hostname}: resolves to a private IP`);
-    }
-  } catch (e) {
-    if (e instanceof Error && e.message.startsWith("Refusing to fetch")) throw e;
-    // DNS failure — let the fetch below surface the real error.
+    resolved = await lookup(hostname, { all: true });
+  } catch {
+    resolved = null; // DNS failure — let the fetch below surface the real error
   }
-  const res = await fetch(url, { ...init, redirect: "manual" });
+  if (resolved && resolved.some((a) => isBlockedIp(a.address))) {
+    throw new Error(`Refusing to fetch ${hostname}: resolves to a private IP`);
+  }
+
+  // Pin plain-HTTP fetches to the resolved address so a second DNS lookup can't
+  // rebind to a private IP (TOCTOU). HTTPS keeps the hostname — the cert/SNI
+  // are bound to it, so connecting to the raw IP would fail verification.
+  let target: string | URL = url;
+  let headers: RequestInit["headers"] = init?.headers;
+  if (u.protocol === "http:" && resolved && resolved.length) {
+    target = new URL(url);
+    target.hostname = resolved[0].address;
+    const h = new Headers(init?.headers);
+    h.set("Host", originalHost);
+    headers = h;
+  }
+
+  const res = await fetch(target, { ...init, headers, redirect: "manual" });
   if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
     throw new Error(`Refusing to follow redirect from ${String(url)} to ${res.headers.get("location")}`);
   }

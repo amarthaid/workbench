@@ -68,23 +68,15 @@ async function discover(userId: string): Promise<IndexedTool[]> {
     customApps = [];
   }
 
-  const tools: IndexedTool[] = [];
-  for (const c of customApps) {
-    let token: string;
-    try {
-      token = await ensureCustomAppToken(userId, c);
-    } catch {
-      continue; // not connected / refresh failed — tools simply don't appear
-    }
-    try {
-      const remote = await Promise.race([
-        discoverTools(userId, c.baseUrl, token),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`discovery timed out after ${DISCOVERY_TIMEOUT_MS}ms`)), DISCOVERY_TIMEOUT_MS)
-        ),
-      ]);
-      for (const t of remote) {
-        tools.push({
+  // Discover every app in parallel; each app's whole slice (token refresh +
+  // tools/list) is bounded by the timeout, so one hung server can't serialize
+  // the page or leak an unbounded refresh past the deadline.
+  const settled = await Promise.allSettled(
+    customApps.map((c) =>
+      withTimeout(DISCOVERY_TIMEOUT_MS, async (): Promise<IndexedTool[]> => {
+        const token = await ensureCustomAppToken(userId, c);
+        const remote = await discoverTools(userId, c.baseUrl, token);
+        return remote.map((t) => ({
           name: namespacedName(c.name, t.name),
           integration: integrationKey(c.id),
           appId: c.id,
@@ -94,14 +86,27 @@ async function discover(userId: string): Promise<IndexedTool[]> {
           title: t.title,
           annotations: t.annotations,
           inputSchema: t.inputSchema,
-        });
-      }
-    } catch {
-      // discovery failure / timeout: skip this app for this cycle
-    }
+        }));
+      })
+    )
+  );
+
+  const tools: IndexedTool[] = [];
+  for (const r of settled) {
+    if (r.status === "fulfilled") tools.push(...r.value);
+    // rejected = not connected / timeout / discovery failure — skip this app
   }
   cache.set(userId, { at: Date.now(), tools });
   return tools;
+}
+
+function withTimeout<T>(ms: number, fn: () => Promise<T>): Promise<T> {
+  return Promise.race([
+    fn(),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`discovery timed out after ${ms}ms`)), ms)
+    ),
+  ]);
 }
 
 export async function getToolForUser(userId: string, name: string): Promise<IndexedTool | undefined> {

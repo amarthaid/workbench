@@ -21,6 +21,15 @@ async function fetchJson(url: string, init?: RequestInit): Promise<Record<string
   return (await res.json()) as Record<string, unknown>;
 }
 
+/** RFC 8414 §3.1: insert the well-known path after the HOST, before any issuer
+ * path (issuer https://idp/oauth → https://idp/.well-known/…/oauth). */
+function wellKnownUrl(issuer: string, wellKnown: string): string {
+  const u = new URL(issuer);
+  const path = u.pathname.replace(/\/$/, "");
+  u.pathname = `${wellKnown}${path}`;
+  return u.toString();
+}
+
 /**
  * Discover the OAuth authorization-server and protected-resource metadata for
  * a app base URL (MCP auth spec). Well-known paths are host-rooted, so
@@ -59,8 +68,16 @@ export async function discoverMetadata(baseUrl: string): Promise<CustomAppMetada
   let asMeta: Record<string, unknown> = {};
   for (const asUrl of [...asServers, origin]) {
     try {
-      const as = assertSafeUrl(asUrl, "authorization_server").replace(/\/$/, "");
-      asMeta = await fetchJson(`${as}/.well-known/oauth-authorization-server`);
+      const as = assertSafeUrl(asUrl, "authorization_server");
+      // RFC 8414 §3.1: the well-known path is inserted after the HOST, not
+      // appended to the issuer's own path (issuer https://idp/oauth →
+      // https://idp/.well-known/oauth-authorization-server/oauth).
+      // OIDC-only IdPs expose openid-configuration instead — fall back.
+      try {
+        asMeta = await fetchJson(wellKnownUrl(as, "/.well-known/oauth-authorization-server"));
+      } catch {
+        asMeta = await fetchJson(wellKnownUrl(as, "/.well-known/openid-configuration"));
+      }
       if (asMeta.authorization_endpoint || asMeta.token_endpoint) break;
     } catch {
       /* try the next authorization server */
