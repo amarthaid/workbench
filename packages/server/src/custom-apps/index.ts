@@ -11,6 +11,9 @@ export interface IndexedTool {
   baseUrl: string;
   remoteName: string;
   description: string;
+  /** 2025-spec tool metadata (readOnlyHint/destructiveHint) — preserved. */
+  title?: string;
+  annotations?: unknown;
   /** JSON Schema passthrough from the remote server. */
   inputSchema: unknown;
 }
@@ -51,15 +54,15 @@ async function discover(userId: string): Promise<IndexedTool[]> {
   // Never throw — executeSingle's contract is "never throws", and a DB hiccup
   // here would otherwise propagate up through getToolForUser. Degrade to "no
   // app tools this cycle" instead.
-  let custom_apps: CustomApp[] = [];
+  let customApps: CustomApp[] = [];
   try {
-    custom_apps = await listCustomApps(userId);
+    customApps = await listCustomApps(userId);
   } catch {
-    custom_apps = [];
+    customApps = [];
   }
 
   const tools: IndexedTool[] = [];
-  for (const c of custom_apps) {
+  for (const c of customApps) {
     let token: string;
     try {
       token = await ensureCustomAppToken(userId, c);
@@ -81,6 +84,8 @@ async function discover(userId: string): Promise<IndexedTool[]> {
           baseUrl: c.baseUrl,
           remoteName: t.name,
           description: t.description ?? "",
+          title: t.title,
+          annotations: t.annotations,
           inputSchema: t.inputSchema,
         });
       }
