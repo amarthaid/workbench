@@ -44,6 +44,13 @@ describe("connector URL guard", () => {
     expect(isBlockedHost("127.0.0.1")).toBe(false);
     expect(isBlockedHost("example.com")).toBe(false);
   });
+
+  it("blocks IPv4-mapped IPv6 private hosts", () => {
+    // [::ffff:a9fe:a9fe] is 169.254.169.254 in IPv4-mapped IPv6 notation.
+    expect(isBlockedHost("[::ffff:a9fe:a9fe]")).toBe(true);
+    expect(isBlockedHost("[::ffff:169.254.169.254]")).toBe(true);
+    expect(isBlockedHost("[::ffff:7f00:1]")).toBe(true); // 127.0.0.1 mapped
+  });
 });
 
 describe("connector store", () => {

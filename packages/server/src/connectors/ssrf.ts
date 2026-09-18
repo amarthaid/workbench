@@ -1,13 +1,16 @@
 import { isPrivateHost } from "../auth/plugin-oauth";
+import { config } from "../config";
 
 /**
- * Connector base URLs are user-supplied and the server fetches them (metadata
- * discovery, client registration, token exchange, tool calls) — the SSRF
- * surface. Loopback is allowed so a local MCP server can be tested in dev;
- * everything else private (RFC1918, link-local incl. cloud metadata,
- * unique/local link IPv6) is blocked. Hostnames that resolve privately still
- * get through this literal check — that is a DNS-level concern out of scope
- * here, same as the existing plugin-instance allowlist.
+ * Connector base URLs AND every endpoint the remote metadata advertises are
+ * user/attacker-influenced and fetched server-side (metadata discovery, client
+ * registration, token exchange, tool calls) — the SSRF surface. Everything
+ * private (RFC1918, link-local incl. cloud metadata, unique/local IPv6) is
+ * blocked. Loopback is allowed ONLY in development so a local MCP server can
+ * be tested — in production any user could otherwise reach the server's own
+ * loopback (CDP, admin, metrics). Hostnames that resolve privately still get
+ * through this literal check — a DNS-level concern out of scope here, same as
+ * the existing plugin-instance allowlist.
  */
 export function isBlockedHost(hostname: string): boolean {
   const h = hostname.toLowerCase();
@@ -17,7 +20,7 @@ export function isBlockedHost(hostname: string): boolean {
     h === "::1" ||
     h === "[::1]" ||
     /^127\./.test(h);
-  if (loopback) return false;
+  if (loopback) return config.NODE_ENV === "production";
   return isPrivateHost(h);
 }
 
@@ -36,4 +39,41 @@ export function normalizeBaseUrl(raw: string): string | null {
   u.search = "";
   u.hash = "";
   return u.toString().replace(/\/$/, "");
+}
+
+/**
+ * Assert a URL (discovered endpoint, redirect target) is safe to fetch: http(s)
+ * only, no embedded creds, host not blocked. Throws — callers surface the error.
+ */
+export function assertSafeUrl(raw: string, label: string): string {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    throw new Error(`${label}: invalid URL ${raw}`);
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") {
+    throw new Error(`${label}: unsupported protocol ${u.protocol}`);
+  }
+  if (u.username || u.password) {
+    throw new Error(`${label}: URL must not contain credentials`);
+  }
+  if (isBlockedHost(u.hostname)) {
+    throw new Error(`${label}: host ${u.hostname} is not allowed`);
+  }
+  return u.toString();
+}
+
+/**
+ * fetch that refuses to follow redirects to a blocked host. `redirect:
+ * "manual"` stops the built-in follow; a 3xx is then treated as a hard error
+ * (OAuth/registration endpoints should not redirect), so a public endpoint can
+ * never bounce the request to an internal host.
+ */
+export async function safeFetch(url: string, init?: RequestInit): Promise<Response> {
+  const res = await fetch(url, { ...init, redirect: "manual" });
+  if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
+    throw new Error(`Refusing to follow redirect from ${url} to ${res.headers.get("location")}`);
+  }
+  return res;
 }

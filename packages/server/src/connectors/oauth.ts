@@ -1,5 +1,5 @@
 import { config } from "../config";
-import { normalizeBaseUrl } from "./ssrf";
+import { normalizeBaseUrl, assertSafeUrl, safeFetch } from "./ssrf";
 import { Connector, ConnectorMetadata, integrationKey } from "./store";
 import {
   createAuthState,
@@ -16,7 +16,7 @@ export function connectorCallbackUrl(connectorId: string): string {
 }
 
 async function fetchJson(url: string, init?: RequestInit): Promise<Record<string, unknown>> {
-  const res = await fetch(url, init);
+  const res = await safeFetch(url, init);
   if (!res.ok) throw new Error(`fetch ${url} -> ${res.status}`);
   return (await res.json()) as Record<string, unknown>;
 }
@@ -53,6 +53,12 @@ export async function discoverMetadata(baseUrl: string): Promise<ConnectorMetada
       `Connector at ${baseUrl} did not advertise an OAuth authorization server (/.well-known/oauth-authorization-server)`
     );
   }
+  // The AS metadata is attacker-influenced: every endpoint the server will
+  // later fetch (registration, token) — or hand to the browser — must be a
+  // safe, non-private URL, or a hostile server points us at 169.254.169.254.
+  assertSafeUrl(metadata.authorizationEndpoint, "authorization_endpoint");
+  assertSafeUrl(metadata.tokenEndpoint, "token_endpoint");
+  if (metadata.registrationEndpoint) assertSafeUrl(metadata.registrationEndpoint, "registration_endpoint");
   return metadata;
 }
 
@@ -80,7 +86,7 @@ export async function registerClient(
     grant_types: ["authorization_code", "refresh_token"],
     response_types: ["code"],
   };
-  const res = await fetch(metadata.registrationEndpoint, {
+  const res = await safeFetch(metadata.registrationEndpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify(body),
@@ -92,12 +98,13 @@ export async function registerClient(
   if (typeof data.client_id !== "string") {
     throw new Error("Registration response missing client_id");
   }
+  // RFC 7591: omitted token_endpoint_auth_method defaults to client_secret_basic.
   const authMethod =
-    data.token_endpoint_auth_method === "client_secret_basic"
-      ? "client_secret_basic"
-      : data.token_endpoint_auth_method === "none"
-        ? "none"
-        : "client_secret_post";
+    data.token_endpoint_auth_method === "none"
+      ? "none"
+      : data.token_endpoint_auth_method === "client_secret_post"
+        ? "client_secret_post"
+        : "client_secret_basic";
   return {
     clientId: data.client_id,
     clientSecret: typeof data.client_secret === "string" ? data.client_secret : undefined,
@@ -157,7 +164,7 @@ async function exchangeConnectorToken(
   }
   if (resourceUrl) body.set("resource", resourceUrl);
 
-  const res = await fetch(tokenEndpoint, { method: "POST", headers, body });
+  const res = await safeFetch(tokenEndpoint, { method: "POST", headers, body });
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Token exchange failed ${res.status}: ${text.slice(0, 200)}`);
@@ -212,7 +219,10 @@ export async function ensureConnectorToken(userId: string, connector: Connector)
     const refreshed = await refreshConnectorToken(connector, data.refreshToken);
     await storeToken(userId, integrationKey(connector.id), {
       accessToken: refreshed.accessToken,
-      refreshToken: refreshed.refreshToken,
+      // Many ASes omit refresh_token on refresh (rotation windows, opaque
+      // tokens) — falling back to the stored one keeps the connection alive
+      // instead of wiping it to NULL and forcing a reconnect next expiry.
+      refreshToken: refreshed.refreshToken ?? data.refreshToken,
       expiresAt: refreshed.expiresAt,
       scopes: data.scopes,
       config: data.config,
@@ -247,7 +257,7 @@ export async function refreshConnectorToken(
   }
   if (resourceUrl) body.set("resource", resourceUrl);
 
-  const res = await fetch(tokenEndpoint, { method: "POST", headers, body });
+  const res = await safeFetch(tokenEndpoint, { method: "POST", headers, body });
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Refresh failed ${res.status}: ${text.slice(0, 200)}`);
