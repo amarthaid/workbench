@@ -70,18 +70,43 @@ async function getSession(userId: string, baseUrl: string, token: string): Promi
   return client;
 }
 
+/** Drop a cached session (delete/disconnect, or server-side expiry). */
+export function evictSession(userId: string, baseUrl: string): void {
+  const key = `${userId}::${baseUrl}`;
+  const s = sessions.get(key);
+  if (s) {
+    void s.client.close().catch(() => undefined);
+    sessions.delete(key);
+  }
+}
+
+// A 404/410 means the server killed the session — evict so the next call
+// reconnects instead of reusing a dead client until the token changes.
+async function withEviction<T>(userId: string, baseUrl: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    if (e instanceof StreamableHTTPError && (e.code === 404 || e.code === 410)) {
+      evictSession(userId, baseUrl);
+    }
+    throw e;
+  }
+}
+
 export async function discoverTools(userId: string, baseUrl: string, token: string): Promise<RemoteTool[]> {
   const client = await getSession(userId, baseUrl, token);
-  const { tools } = await client.listTools();
-  return tools.map((t) => {
-    const tool = t as { name: string; description?: string; title?: string; annotations?: unknown; inputSchema: unknown };
-    return {
-      name: tool.name,
-      description: tool.description,
-      title: tool.title,
-      annotations: tool.annotations,
-      inputSchema: tool.inputSchema,
-    };
+  return withEviction(userId, baseUrl, async () => {
+    const { tools } = await client.listTools();
+    return tools.map((t) => {
+      const tool = t as { name: string; description?: string; title?: string; annotations?: unknown; inputSchema: unknown };
+      return {
+        name: tool.name,
+        description: tool.description,
+        title: tool.title,
+        annotations: tool.annotations,
+        inputSchema: tool.inputSchema,
+      };
+    });
   });
 }
 
@@ -93,20 +118,22 @@ export async function callRemoteTool(
   args: Record<string, unknown>
 ): Promise<unknown> {
   const client = await getSession(userId, baseUrl, token);
-  const result = (await client.callTool(
-    { name: remoteName, arguments: args },
-    undefined,
-    { timeout: TOOL_TIMEOUT_MS, resetTimeoutOnProgress: true, maxTotalTimeout: TOOL_MAX_TOTAL_MS }
-  )) as {
-    content?: Array<Record<string, unknown>>;
-    isError?: boolean;
-  };
-  // Image blocks are reduced to a marker — the base64 would bloat the model
-  // context, and the _mcpImage renderer only surfaces one image per node anyway.
-  const content = (result.content ?? []).map((block) =>
-    block.type === "image"
-      ? { type: "image", mimeType: block.mimeType, data: "<image omitted>" }
-      : block
-  );
-  return { content, isError: result.isError };
+  return withEviction(userId, baseUrl, async () => {
+    const result = (await client.callTool(
+      { name: remoteName, arguments: args },
+      undefined,
+      { timeout: TOOL_TIMEOUT_MS, resetTimeoutOnProgress: true, maxTotalTimeout: TOOL_MAX_TOTAL_MS }
+    )) as {
+      content?: Array<Record<string, unknown>>;
+      isError?: boolean;
+    };
+    // Image blocks are reduced to a marker — the base64 would bloat the model
+    // context, and the _mcpImage renderer only surfaces one image per node anyway.
+    const content = (result.content ?? []).map((block) =>
+      block.type === "image"
+        ? { type: "image", mimeType: block.mimeType, data: "<image omitted>" }
+        : block
+    );
+    return { content, isError: result.isError };
+  });
 }

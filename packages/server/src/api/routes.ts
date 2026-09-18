@@ -40,6 +40,7 @@ import {
 } from "../custom-apps/oauth";
 import { normalizeBaseUrl } from "../custom-apps/ssrf";
 import { invalidateIndex, ensureIndex } from "../custom-apps/index";
+import { evictSession } from "../custom-apps/client";
 import { markConnected, startReaper, redeemPending, getPending, createPending } from "../auth/connections";
 import { resumeAuthorize } from "../auth/oauth-server/resume";
 import { listAgents, revokeAgent } from "../auth/oauth-server/agents";
@@ -848,6 +849,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       if (customId) {
         const app = await getCustomApp(user.userId, customId);
         if (!app) return reply.status(404).send({ error: "Integration not found" });
+        evictSession(user.userId, app.baseUrl);
         await deleteToken(user.userId, integration);
         invalidateIndex(user.userId);
         return { success: true };
@@ -915,6 +917,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     if (!user) return reply.status(401).send({ error: "Unauthorized" });
     const app = await getCustomApp(user.userId, request.params.id);
     if (!app) return reply.status(404).send({ error: "Custom app not found" });
+    evictSession(user.userId, app.baseUrl);
     await deleteCustomApp(user.userId, request.params.id);
     invalidateIndex(user.userId);
     return { success: true };

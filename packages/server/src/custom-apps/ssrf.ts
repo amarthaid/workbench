@@ -1,3 +1,4 @@
+import { lookup } from "node:dns/promises";
 import { isPrivateHost } from "../auth/plugin-oauth";
 
 /**
@@ -71,7 +72,28 @@ export function assertSafeUrl(raw: string, label: string): string {
  * (OAuth/registration endpoints should not redirect), so a public endpoint can
  * never bounce the request to an internal host.
  */
+/** DNS-resolved address → blocked?, same loopback-in-dev rule as isBlockedHost. */
+function isBlockedIp(addr: string): boolean {
+  // lookup() returns bracketless IPv6; isBlockedHost expects hostname form.
+  return isBlockedHost(addr.includes(":") ? `[${addr}]` : addr);
+}
+
 export async function safeFetch(url: string | URL, init?: RequestInit): Promise<Response> {
+  const u = new URL(url);
+  const hostname = u.hostname.replace(/^\[|\]$/g, "");
+  // The literal host check above can't see a DNS name that RESOLVES privately
+  // (169.254.169.254.nip.io, an internal name) — resolve and check the IPs.
+  // Rebinding (public on first lookup, private on the fetch) is not pinned;
+  // that needs connecting to the resolved IP with a Host/SNI override.
+  try {
+    const addrs = await lookup(hostname, { all: true });
+    if (addrs.some((a) => isBlockedIp(a.address))) {
+      throw new Error(`Refusing to fetch ${hostname}: resolves to a private IP`);
+    }
+  } catch (e) {
+    if (e instanceof Error && e.message.startsWith("Refusing to fetch")) throw e;
+    // DNS failure — let the fetch below surface the real error.
+  }
   const res = await fetch(url, { ...init, redirect: "manual" });
   if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
     throw new Error(`Refusing to follow redirect from ${String(url)} to ${res.headers.get("location")}`);

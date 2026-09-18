@@ -17,6 +17,11 @@ describe("app naming", () => {
     expect(namespacedName("github", "search")).toBe("github__search");
   });
 
+  it("slugifies the app name in the tool prefix", () => {
+    expect(namespacedName("My custom app", "search")).toBe("my-custom-app__search");
+    expect(namespacedName("Notion", "search")).toBe("notion__search");
+  });
+
   it("round-trips the integration key", () => {
     const key = integrationKey("abc-123");
     expect(key).toBe("custom:abc-123");

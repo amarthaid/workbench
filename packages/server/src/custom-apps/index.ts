@@ -18,8 +18,15 @@ export interface IndexedTool {
   inputSchema: unknown;
 }
 
+// App names become the tool prefix (`name__tool`); "My app" must not produce
+// a tool name with a space in it.
+function slugify(name: string): string {
+  const s = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return s || "app";
+}
+
 export function namespacedName(appName: string, remoteName: string): string {
-  return `${appName}__${remoteName}`;
+  return `${slugify(appName)}__${remoteName}`;
 }
 
 // Per-user cache of discovered tools. Live discovery happens at connect and is
