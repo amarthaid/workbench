@@ -82,7 +82,11 @@ export default function Home() {
                       logo={appFor(stats.most_used_integration).logo}
                       size={20}
                     />
-                    {appFor(stats.most_used_integration).label}
+                    {appFor(stats.most_used_integration).deleted ? (
+                      <span className="wb-app-deleted">{appFor(stats.most_used_integration).label}</span>
+                    ) : (
+                      appFor(stats.most_used_integration).label
+                    )}
                   </span>
                 ) : (
                   "—"

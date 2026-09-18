@@ -7,6 +7,8 @@ import { dayLabel, timeLabel, durationLabel } from "../format";
 export interface AppLabel {
   label: string;
   logo?: string;
+  /** True when the app was deleted — render muted, not as a live app. */
+  deleted?: boolean;
 }
 
 // Shared by every page that shows an integration by name: resolve a stable
@@ -17,7 +19,7 @@ export function integrationLookup(integrations: IntegrationSummary[]): (name: st
   integrations.forEach((i) => map.set(i.name, { label: i.displayName || i.name, logo: i.logo }));
   // A custom-app key no longer in the registry is a deleted app — show that
   // instead of leaking the raw `custom:<uuid>` key.
-  return (name: string) => map.get(name) ?? (name.startsWith("custom:") ? { label: "Deleted app" } : { label: name });
+  return (name: string) => map.get(name) ?? (name.startsWith("custom:") ? { label: "Deleted app", deleted: true } : { label: name });
 }
 
 // Rows arrive newest-first; walk them in order and emit a group header row
@@ -75,7 +77,11 @@ export function ActivityTable({
                       logo={app(e.integration).logo}
                       size={16}
                     />
-                    {app(e.integration).label}
+                    {app(e.integration).deleted ? (
+                      <span className="wb-app-deleted">{app(e.integration).label}</span>
+                    ) : (
+                      app(e.integration).label
+                    )}
                   </span>
                 ) : (
                   "—"
