@@ -139,18 +139,21 @@ async function exchangeConnectorToken(
   };
   const body = new URLSearchParams({
     grant_type: "authorization_code",
-    client_id: connector.clientId!,
     code,
     redirect_uri: connectorCallbackUrl(connector.id),
     code_verifier: codeVerifier,
   });
 
-  if (connector.clientSecret) {
-    if (connector.metadata.authMethod === "client_secret_basic") {
-      headers.Authorization = `Basic ${Buffer.from(`${connector.clientId}:${connector.clientSecret}`).toString("base64")}`;
-    } else {
-      body.set("client_secret", connector.clientSecret);
-    }
+  if (connector.clientSecret && connector.metadata.authMethod === "client_secret_basic") {
+    // Credentials live only in the Basic header — client_id must NOT also
+    // appear in the body, or strict ASes (Notion) reject it as "multiple
+    // authentication methods".
+    headers.Authorization = `Basic ${Buffer.from(`${connector.clientId}:${connector.clientSecret}`).toString("base64")}`;
+  } else {
+    // client_secret_post or public client (none): client_id in the body; the
+    // secret joins it only for the post method.
+    body.set("client_id", connector.clientId!);
+    if (connector.clientSecret) body.set("client_secret", connector.clientSecret);
   }
   if (resourceUrl) body.set("resource", resourceUrl);
 
@@ -235,14 +238,12 @@ export async function refreshConnectorToken(
   const body = new URLSearchParams({
     grant_type: "refresh_token",
     refresh_token: refreshToken,
-    client_id: connector.clientId,
   });
-  if (connector.clientSecret) {
-    if (connector.metadata.authMethod === "client_secret_basic") {
-      headers.Authorization = `Basic ${Buffer.from(`${connector.clientId}:${connector.clientSecret}`).toString("base64")}`;
-    } else {
-      body.set("client_secret", connector.clientSecret);
-    }
+  if (connector.clientSecret && connector.metadata.authMethod === "client_secret_basic") {
+    headers.Authorization = `Basic ${Buffer.from(`${connector.clientId}:${connector.clientSecret}`).toString("base64")}`;
+  } else {
+    body.set("client_id", connector.clientId);
+    if (connector.clientSecret) body.set("client_secret", connector.clientSecret);
   }
   if (resourceUrl) body.set("resource", resourceUrl);
 

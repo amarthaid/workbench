@@ -29,6 +29,11 @@ id/secret live on the `connectors` row (secret encrypted); the OAuth access and
 refresh tokens reuse the existing `connections` table under
 `integration = connector:<id>`.
 
+Real-provider gotcha (Notion `https://mcp.notion.com/mcp`): with
+`client_secret_basic` the credentials go **only** in the Basic header — sending
+`client_id` in the body too is rejected as `invalid_request: "Client must not
+use multiple authentication methods"`.
+
 ## No local arg validation (Claude Desktop parity)
 
 Connector tools carry JSON Schema from the remote server, not Zod. Args pass
