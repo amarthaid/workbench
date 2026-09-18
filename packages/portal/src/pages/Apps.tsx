@@ -179,7 +179,7 @@ export default function Apps() {
         <form id="new-custom-app-form" className="wb-section-gap" onSubmit={submitNewApp}>
           <div className="ui-field">
             <label className="ui-field-label" htmlFor="new-app-name">Name</label>
-            <Input id="new-app-name" placeholder="notion" value={newName} onChange={(e) => setNewName(e.target.value)} autoFocus />
+            <Input id="new-app-name" placeholder="e.g. github-mcp" value={newName} onChange={(e) => setNewName(e.target.value)} autoFocus />
           </div>
           <div className="ui-field">
             <label className="ui-field-label" htmlFor="new-app-url">MCP server URL</label>
