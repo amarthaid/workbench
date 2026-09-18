@@ -108,6 +108,12 @@ export async function getCustomAppById(id: string): Promise<CustomApp | null> {
   return row ? toCustomApp(row) : null;
 }
 
+/** Name is unique per user (the tool namespace is built from it). */
+export async function getCustomAppByName(userId: string, name: string): Promise<CustomApp | null> {
+  const row = await db.get<Row>("SELECT * FROM custom_apps WHERE user_id = ? AND name = ?", [userId, name]);
+  return row ? toCustomApp(row) : null;
+}
+
 export async function listCustomApps(userId: string): Promise<CustomApp[]> {
   const rows = await db.all<Row>(
     "SELECT * FROM custom_apps WHERE user_id = ? ORDER BY created_at ASC",

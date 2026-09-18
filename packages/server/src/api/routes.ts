@@ -26,6 +26,7 @@ import {
   createCustomApp,
   getCustomApp,
   getCustomAppById,
+  getCustomAppByName,
   listCustomApps,
   deleteCustomApp,
   integrationKey,
@@ -876,6 +877,12 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     const baseUrl = (request.body?.baseUrl ?? "").trim();
     if (!name || !baseUrl) return reply.status(400).send({ error: "name and baseUrl are required" });
     if (name.length > 64) return reply.status(400).send({ error: "name too long" });
+
+    // Name is unique per user (it becomes the tool namespace); the UNIQUE
+    // constraint backs this, but a friendly message beats a raw SQL error.
+    if (await getCustomAppByName(user.userId, name)) {
+      return reply.status(409).send({ error: `An app named "${name}" already exists` });
+    }
 
     try {
       const normalized = normalizeBaseUrl(baseUrl);
