@@ -146,6 +146,58 @@ export async function fetchKeycloakAuthUrl(ticket?: string): Promise<{ url: stri
   return res.json();
 }
 
+export interface ConnectorSummary {
+  id: string;
+  name: string;
+  baseUrl: string;
+  connected: boolean;
+  scopes: string[];
+}
+
+export async function fetchConnectors(): Promise<{ connectors: ConnectorSummary[] }> {
+  const res = await fetch(`${API_URL}/api/connectors`, { headers: getHeaders() });
+  if (res.status === 401) {
+    localStorage.removeItem("awb_token");
+    window.location.href = "/login";
+    throw new Error("Unauthorized");
+  }
+  if (!res.ok) throw new Error("Failed to fetch connectors");
+  return res.json();
+}
+
+export async function createConnector(name: string, baseUrl: string): Promise<{ connector: { id: string; name: string; baseUrl: string } }> {
+  const res = await fetch(`${API_URL}/api/connectors`, {
+    method: "POST",
+    headers: getHeaders(),
+    body: JSON.stringify({ name, baseUrl }),
+  });
+  if (!res.ok) {
+    const detail = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(detail.error || "Failed to register connector");
+  }
+  return res.json();
+}
+
+export async function removeConnector(id: string): Promise<{ success: boolean }> {
+  const res = await fetch(`${API_URL}/api/connectors/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to delete connector");
+  return res.json();
+}
+
+export async function startConnectorAuth(id: string): Promise<{ url: string }> {
+  const res = await fetch(`${API_URL}/api/auth/connector/${encodeURIComponent(id)}`, {
+    headers: getHeaders(),
+  });
+  if (!res.ok) {
+    const detail = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(detail.error || "Failed to start connector auth");
+  }
+  return res.json();
+}
+
 export async function fetchConnections() {
   const res = await fetch(`${API_URL}/api/connections`, { headers: getHeaders() });
   if (res.status === 401) {

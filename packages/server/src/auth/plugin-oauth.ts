@@ -58,7 +58,7 @@ export function getPluginCallbackUrl(integration: string): string {
  * isInstanceAllowed — but rejecting these outright stops the dumbest mistakes
  * even for an allowlisted-but-misconfigured deployment.
  */
-function isPrivateHost(host: string): boolean {
+export function isPrivateHost(host: string): boolean {
   const h = host.toLowerCase();
   if (h === "localhost" || h.endsWith(".localhost")) return true;
   if (h === "[::1]" || h === "::1") return true;

@@ -1091,3 +1091,47 @@ body {
 
 .connect-pair-link.is-connected .connect-pair-dash,
 .connect-pair-link.is-connected .connect-pair-node { background: var(--ok); }
+
+/* --- Connectors --- */
+.wb-connector-form {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s-8);
+  flex-wrap: wrap;
+  margin-bottom: var(--s-16);
+}
+.wb-connector-list {
+  list-style: none;
+  display: grid;
+  gap: var(--s-8);
+}
+.wb-connector-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-12);
+  padding: var(--s-12);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.wb-connector-text { display: grid; gap: var(--s-4); min-width: 0; }
+.wb-connector-name { font-weight: 600; }
+.wb-connector-url { font-size: 12px; color: var(--text-3); overflow-wrap: anywhere; }
+.wb-connector-action {
+  margin-left: auto;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-8);
+}
+.wb-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-8);
+  padding: var(--s-8) var(--s-12);
+  border-radius: var(--radius);
+  margin-bottom: var(--s-12);
+}
+.wb-banner-ok { background: var(--ok-soft); color: var(--ok); }
+.wb-banner-error { background: var(--danger-soft); color: var(--danger); }

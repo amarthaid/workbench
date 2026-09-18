@@ -22,6 +22,22 @@ import {
 } from "../auth/cookie";
 import { verifyConnectToken } from "../auth/connect-token";
 import { signConnectToken } from "../auth/connect-token";
+import {
+  createConnector,
+  getConnector,
+  getConnectorById,
+  listConnectors,
+  deleteConnector,
+  integrationKey,
+} from "../connectors/store";
+import {
+  discoverMetadata,
+  registerClient,
+  buildConnectorAuthUrl,
+  handleConnectorCallback,
+} from "../connectors/oauth";
+import { normalizeBaseUrl } from "../connectors/ssrf";
+import { invalidateIndex } from "../connectors/index";
 import { markConnected, startReaper, redeemPending, getPending, createPending } from "../auth/connections";
 import { resumeAuthorize } from "../auth/oauth-server/resume";
 import { listAgents, revokeAgent } from "../auth/oauth-server/agents";
@@ -786,6 +802,113 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       return { success: true };
     }
   );
+
+  // --- Connectors (external MCP servers registered per-user) ---
+
+  app.post<{ Body: { name?: string; baseUrl?: string } }>("/api/connectors", async (request, reply) => {
+    const user = await authenticate(request);
+    if (!user) return reply.status(401).send({ error: "Unauthorized" });
+
+    const name = (request.body?.name ?? "").trim();
+    const baseUrl = (request.body?.baseUrl ?? "").trim();
+    if (!name || !baseUrl) return reply.status(400).send({ error: "name and baseUrl are required" });
+    if (name.length > 64) return reply.status(400).send({ error: "name too long" });
+
+    try {
+      // Normalize up front so the stored URL is what discovery/client use.
+      const normalized = normalizeBaseUrl(baseUrl);
+      if (!normalized) return reply.status(400).send({ error: `Invalid or blocked connector URL: ${baseUrl}` });
+
+      const id = crypto.randomUUID();
+      const metadata = await discoverMetadata(normalized);
+      const reg = await registerClient(metadata, name, id);
+      const connector = await createConnector({
+        id,
+        userId: user.userId,
+        name,
+        baseUrl: normalized,
+        metadata: { ...metadata, authMethod: reg.authMethod },
+        clientId: reg.clientId,
+        clientSecret: reg.clientSecret,
+      });
+      return { connector: { id: connector.id, name: connector.name, baseUrl: connector.baseUrl } };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      request.log.warn({ name, err: message }, "connector register failed");
+      return reply.status(400).send({ error: message });
+    }
+  });
+
+  app.get("/api/connectors", async (request, reply) => {
+    const user = await authenticate(request);
+    if (!user) return reply.status(401).send({ error: "Unauthorized" });
+    const connectors = await listConnectors(user.userId);
+    const items = await Promise.all(
+      connectors.map(async (c) => ({
+        id: c.id,
+        name: c.name,
+        baseUrl: c.baseUrl,
+        connected: !!(await getToken(user.userId, integrationKey(c.id))),
+        scopes: c.metadata.scopes ?? [],
+      }))
+    );
+    return { connectors: items };
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/connectors/:id", async (request, reply) => {
+    const user = await authenticate(request);
+    if (!user) return reply.status(401).send({ error: "Unauthorized" });
+    const connector = await getConnector(user.userId, request.params.id);
+    if (!connector) return reply.status(404).send({ error: "Connector not found" });
+    await deleteConnector(user.userId, request.params.id);
+    invalidateIndex(user.userId);
+    return { success: true };
+  });
+
+  // Start the OAuth connect for a connector (portal triggers, user authorizes).
+  app.get<{ Params: { id: string } }>("/api/auth/connector/:id", async (request, reply) => {
+    const user = await authenticate(request);
+    if (!user) return reply.status(401).send({ error: "Unauthorized" });
+    const connector = await getConnector(user.userId, request.params.id);
+    if (!connector) return reply.status(404).send({ error: "Connector not found" });
+    try {
+      const url = await buildConnectorAuthUrl(user.userId, connector);
+      return { type: "oauth2", url };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return reply.status(503).send({ error: message });
+    }
+  });
+
+  // Provider redirects here after the user authorizes.
+  app.get<{ Params: { id: string } }>("/api/connectors/:id/callback", async (request, reply) => {
+    const { id } = request.params;
+    const { code, state, error } = request.query as Record<string, string>;
+
+    const result = (status: "ok" | "denied" | "expired" | "failed") => {
+      const url = new URL(config.PORTAL_URL);
+      url.pathname = "/connectors";
+      url.searchParams.set("status", status);
+      return reply.redirect(url.toString());
+    };
+
+    if (error) return result(error === "access_denied" ? "denied" : "failed");
+    if (!code || !state) return result("failed");
+
+    const connector = await getConnectorById(id);
+    if (!connector) return result("failed");
+
+    try {
+      const { userId } = await handleConnectorCallback(connector, code, state);
+      markConnected(userId, integrationKey(id));
+      invalidateIndex(userId);
+      return result("ok");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      request.log.warn({ id, err: message }, "connector oauth callback failed");
+      return result(message === "Invalid state" ? "expired" : "failed");
+    }
+  });
 
   // Connected agents: MCP/OAuth clients the user has authorized to reach their
   // workbench. Distinct from /api/connections (workbench → SaaS). One row per

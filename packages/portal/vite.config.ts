@@ -32,7 +32,11 @@ export default defineConfig({
       "/authorize": "http://localhost:3001",
       "/token": "http://localhost:3001",
       "/j": "http://localhost:3001",
-      "/c": "http://localhost:3001",
+      // Trailing slash matters: the proxy matches a raw path prefix, so a
+      // bare "/c" would also swallow the SPA's /connectors and /connect
+      // routes. Curl-proxy paths are always /c/<integration>/..., so "/c/"
+      // is exact enough.
+      "/c/": "http://localhost:3001",
     },
   },
 });

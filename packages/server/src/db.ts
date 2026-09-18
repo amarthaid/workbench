@@ -100,6 +100,19 @@ const SQLITE_SCHEMA = `
     last_used_at INTEGER,
     UNIQUE(user_id, name)
   );
+
+  CREATE TABLE IF NOT EXISTS connectors (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    base_url TEXT NOT NULL,
+    metadata TEXT NOT NULL,
+    client_id TEXT,
+    client_secret_enc BLOB,
+    created_at INTEGER DEFAULT (unixepoch()),
+    updated_at INTEGER DEFAULT (unixepoch()),
+    UNIQUE(user_id, name)
+  );
 `;
 
 const POSTGRES_SCHEMA = `
@@ -183,6 +196,19 @@ const POSTGRES_SCHEMA = `
     created_at INTEGER DEFAULT EXTRACT(EPOCH FROM NOW())::INTEGER,
     updated_at INTEGER DEFAULT EXTRACT(EPOCH FROM NOW())::INTEGER,
     last_used_at INTEGER,
+    UNIQUE(user_id, name)
+  );
+
+  CREATE TABLE IF NOT EXISTS connectors (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    base_url TEXT NOT NULL,
+    metadata TEXT NOT NULL,
+    client_id TEXT,
+    client_secret_enc BYTEA,
+    created_at INTEGER DEFAULT EXTRACT(EPOCH FROM NOW())::INTEGER,
+    updated_at INTEGER DEFAULT EXTRACT(EPOCH FROM NOW())::INTEGER,
     UNIQUE(user_id, name)
   );
 `;
