@@ -4,6 +4,7 @@ import {
   StreamableHTTPError,
 } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { safeFetch } from "./ssrf";
 
 export interface RemoteTool {
   name: string;
@@ -43,17 +44,21 @@ async function getSession(userId: string, baseUrl: string, token: string): Promi
     await client.connect(
       new StreamableHTTPClientTransport(new URL(baseUrl), {
         requestInit: { headers: authHeaders(token) },
+        fetch: safeFetch,
       })
     );
   } catch (e) {
     await client.close().catch(() => undefined);
     // Legacy HTTP+SSE-only servers (2024-11-05 spec) reject the streamable
     // handshake with a 4xx — retry over SSE (SDK-recommended fallback).
-    if (e instanceof StreamableHTTPError && e.code !== undefined && e.code >= 400 && e.code < 500) {
+    // Fall back to SSE only when the streamable handshake is genuinely
+    // unsupported (404/405), not on 401/403 (an auth failure is a real error).
+    if (e instanceof StreamableHTTPError && (e.code === 404 || e.code === 405)) {
       const sse = new Client(CLIENT_INFO);
       await sse.connect(
         new SSEClientTransport(new URL(baseUrl), {
           requestInit: { headers: authHeaders(token) },
+          fetch: safeFetch,
         })
       );
       sessions.set(key, { client: sse, token });

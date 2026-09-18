@@ -581,8 +581,10 @@ export const metaTools = [
       const customApps = await listCustomApps(ctx.userId);
       const customAppItems = await Promise.all(
         customApps.map(async (c) => ({
-          name: c.name,
-          version: "custom",
+          // Same key as search_tools/execute_tools (`custom:<id>`), so agents
+          // see one consistent identifier.
+          name: integrationKey(c.id),
+          version: "MCP",
           connected: !!(await getToken(ctx.userId, integrationKey(c.id))),
         }))
       );

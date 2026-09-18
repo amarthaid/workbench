@@ -266,7 +266,9 @@ export async function ensureCustomAppToken(userId: string, app: CustomApp): Prom
     if (!refresh) {
       refresh = doRefresh(userId, app, data.refreshToken, data.scopes, data.config);
       refreshLocks.set(key, refresh);
-      void refresh.finally(() => refreshLocks.delete(key));
+      // .finally() chains a second promise; swallow its rejection or a failed
+      // refresh becomes an unhandled rejection and kills the process.
+      void refresh.finally(() => refreshLocks.delete(key)).catch(() => {});
     }
     return refresh;
   }

@@ -1,5 +1,4 @@
 import { isPrivateHost } from "../auth/plugin-oauth";
-import { config } from "../config";
 
 /**
  * CustomApp base URLs AND every endpoint the remote metadata advertises are
@@ -20,7 +19,9 @@ export function isBlockedHost(hostname: string): boolean {
     h === "::1" ||
     h === "[::1]" ||
     /^127\./.test(h);
-  if (loopback) return config.NODE_ENV === "production";
+  // Allow loopback ONLY when NODE_ENV is explicitly "development" — a prod
+  // deploy that forgets to set NODE_ENV must not silently open loopback.
+  if (loopback) return process.env.NODE_ENV !== "development";
   return isPrivateHost(h);
 }
 
@@ -70,10 +71,10 @@ export function assertSafeUrl(raw: string, label: string): string {
  * (OAuth/registration endpoints should not redirect), so a public endpoint can
  * never bounce the request to an internal host.
  */
-export async function safeFetch(url: string, init?: RequestInit): Promise<Response> {
+export async function safeFetch(url: string | URL, init?: RequestInit): Promise<Response> {
   const res = await fetch(url, { ...init, redirect: "manual" });
   if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
-    throw new Error(`Refusing to follow redirect from ${url} to ${res.headers.get("location")}`);
+    throw new Error(`Refusing to follow redirect from ${String(url)} to ${res.headers.get("location")}`);
   }
   return res;
 }

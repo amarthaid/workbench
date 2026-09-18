@@ -28,7 +28,6 @@ describe("app naming", () => {
 describe("app URL guard", () => {
   it("accepts http(s) and strips trailing slash + query", () => {
     expect(normalizeBaseUrl("https://mcp.example.com/api/?x=1")).toBe("https://mcp.example.com/api");
-    expect(normalizeBaseUrl("http://localhost:8080/mcp")).toBe("http://localhost:8080/mcp");
   });
 
   it("rejects non-http schemes and creds", () => {
@@ -36,13 +35,20 @@ describe("app URL guard", () => {
     expect(normalizeBaseUrl("https://user:pass@example.com/mcp")).toBeNull();
   });
 
-  it("blocks private hosts but allows loopback (dev)", () => {
+  it("blocks private hosts; loopback only when NODE_ENV=development", () => {
     expect(isBlockedHost("10.0.0.5")).toBe(true);
     expect(isBlockedHost("192.168.1.1")).toBe(true);
     expect(isBlockedHost("169.254.169.254")).toBe(true);
+    expect(isBlockedHost("example.com")).toBe(false);
+
+    const orig = process.env.NODE_ENV;
+    process.env.NODE_ENV = "test";
+    expect(isBlockedHost("localhost")).toBe(true);
+    expect(isBlockedHost("127.0.0.1")).toBe(true);
+    process.env.NODE_ENV = "development";
     expect(isBlockedHost("localhost")).toBe(false);
     expect(isBlockedHost("127.0.0.1")).toBe(false);
-    expect(isBlockedHost("example.com")).toBe(false);
+    process.env.NODE_ENV = orig;
   });
 
   it("blocks IPv4-mapped IPv6 private hosts", () => {
