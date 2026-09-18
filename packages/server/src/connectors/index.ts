@@ -1,4 +1,4 @@
-import { listConnectors, integrationKey } from "./store";
+import { listConnectors, integrationKey, type Connector } from "./store";
 import { ensureConnectorToken } from "./oauth";
 import { discoverTools } from "./client";
 
@@ -23,6 +23,12 @@ export function namespacedName(connectorName: string, remoteName: string): strin
 // re-run lazily once this TTL lapses — the remote tool list is not immutable.
 const cache = new Map<string, { at: number; tools: IndexedTool[] }>();
 const TTL_MS = 60_000;
+// A hung connector must not stall search_tools/execute_tools forever.
+const DISCOVERY_TIMEOUT_MS = 10_000;
+
+// Single-flight: concurrent search_tools calls on a cold cache share one
+// discovery, instead of N serial tools/list round-trips to the same server.
+const inflight = new Map<string, Promise<IndexedTool[]>>();
 
 export function invalidateIndex(userId: string): void {
   cache.delete(userId);
@@ -32,7 +38,26 @@ export async function ensureIndex(userId: string): Promise<IndexedTool[]> {
   const cached = cache.get(userId);
   if (cached && Date.now() - cached.at < TTL_MS) return cached.tools;
 
-  const connectors = await listConnectors(userId);
+  let run = inflight.get(userId);
+  if (!run) {
+    run = discover(userId);
+    inflight.set(userId, run);
+    void run.finally(() => inflight.delete(userId));
+  }
+  return run;
+}
+
+async function discover(userId: string): Promise<IndexedTool[]> {
+  // Never throw — executeSingle's contract is "never throws", and a DB hiccup
+  // here would otherwise propagate up through getToolForUser. Degrade to "no
+  // connector tools this cycle" instead.
+  let connectors: Connector[] = [];
+  try {
+    connectors = await listConnectors(userId);
+  } catch {
+    connectors = [];
+  }
+
   const tools: IndexedTool[] = [];
   for (const c of connectors) {
     let token: string;
@@ -42,7 +67,12 @@ export async function ensureIndex(userId: string): Promise<IndexedTool[]> {
       continue; // not connected / refresh failed — tools simply don't appear
     }
     try {
-      const remote = await discoverTools(c.baseUrl, token);
+      const remote = await Promise.race([
+        discoverTools(c.baseUrl, token),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`discovery timed out after ${DISCOVERY_TIMEOUT_MS}ms`)), DISCOVERY_TIMEOUT_MS)
+        ),
+      ]);
       for (const t of remote) {
         tools.push({
           name: namespacedName(c.name, t.name),
@@ -55,7 +85,7 @@ export async function ensureIndex(userId: string): Promise<IndexedTool[]> {
         });
       }
     } catch {
-      // discovery failure: skip this connector for this cycle
+      // discovery failure / timeout: skip this connector for this cycle
     }
   }
   cache.set(userId, { at: Date.now(), tools });

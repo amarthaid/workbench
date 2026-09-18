@@ -408,8 +408,32 @@ export async function executeConnectorSingle(
           await callRemoteTool(connector.baseUrl, accessToken, tool.remoteName, effectiveArgs),
           scrubEntries,
           substringOk
-        );
+        ) as { content?: Array<{ type?: string; text?: string }>; isError?: boolean };
         const duration_ms = Date.now() - start;
+
+        if (result.isError) {
+          // The remote MCP server reported a failed tool call — audit, metrics
+          // and REST status must reflect that, not a 200 "success".
+          const errText = (result.content ?? [])
+            .filter((b) => b.type === "text")
+            .map((b) => b.text ?? "")
+            .join("\n")
+            .slice(0, 500) || "Remote tool returned isError";
+          await auditLogger.log({
+            user_id: userId,
+            integration: tool.integration,
+            tool: tool.name,
+            action: "EXECUTE",
+            success: false,
+            error: errText,
+            duration_ms,
+          });
+          const durationS = duration_ms / 1000;
+          toolExecutionsTotal.inc({ integration: tool.integration, tool: tool.name, success: "false" });
+          toolExecutionDuration.observe({ integration: tool.integration, tool: tool.name, success: "false" }, durationS);
+          return { error: errText };
+        }
+
         await auditLogger.log({
           user_id: userId,
           integration: tool.integration,

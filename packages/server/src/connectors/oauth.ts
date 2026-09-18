@@ -210,26 +210,48 @@ export async function handleConnectorCallback(
  * when the stored one is within the expiry skew. Throws NOT_CONNECTED when the
  * user has no stored token.
  */
+// Single-flight refresh: concurrent tool calls on an expired token must not
+// fire N refresh requests with the same refresh_token (rotation rejects the
+// extras / revokes the family). One refresh, everyone awaits it.
+const refreshLocks = new Map<string, Promise<string>>();
+
 export async function ensureConnectorToken(userId: string, connector: Connector): Promise<string> {
   const data = await getToken(userId, integrationKey(connector.id));
   if (!data) throw new Error("NOT_CONNECTED");
   const now = Math.floor(Date.now() / 1000);
   if (data.expiresAt && data.expiresAt - TOKEN_EXPIRY_SKEW_SECONDS <= now) {
     if (!data.refreshToken) throw new Error("Token expired and no refresh_token stored");
-    const refreshed = await refreshConnectorToken(connector, data.refreshToken);
-    await storeToken(userId, integrationKey(connector.id), {
-      accessToken: refreshed.accessToken,
-      // Many ASes omit refresh_token on refresh (rotation windows, opaque
-      // tokens) — falling back to the stored one keeps the connection alive
-      // instead of wiping it to NULL and forcing a reconnect next expiry.
-      refreshToken: refreshed.refreshToken ?? data.refreshToken,
-      expiresAt: refreshed.expiresAt,
-      scopes: data.scopes,
-      config: data.config,
-    });
-    return refreshed.accessToken;
+    const key = `${userId}:${connector.id}`;
+    let refresh = refreshLocks.get(key);
+    if (!refresh) {
+      refresh = doRefresh(userId, connector, data.refreshToken, data.scopes, data.config);
+      refreshLocks.set(key, refresh);
+      void refresh.finally(() => refreshLocks.delete(key));
+    }
+    return refresh;
   }
   return data.accessToken;
+}
+
+async function doRefresh(
+  userId: string,
+  connector: Connector,
+  refreshToken: string,
+  scopes: string,
+  config: string | undefined
+): Promise<string> {
+  const refreshed = await refreshConnectorToken(connector, refreshToken);
+  await storeToken(userId, integrationKey(connector.id), {
+    accessToken: refreshed.accessToken,
+    // Many ASes omit refresh_token on refresh (rotation windows, opaque
+    // tokens) — falling back to the stored one keeps the connection alive
+    // instead of wiping it to NULL and forcing a reconnect next expiry.
+    refreshToken: refreshed.refreshToken ?? refreshToken,
+    expiresAt: refreshed.expiresAt,
+    scopes,
+    config,
+  });
+  return refreshed.accessToken;
 }
 
 /** Refresh a connector's access token (called from the tool context). */
