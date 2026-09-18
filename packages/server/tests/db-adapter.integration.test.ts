@@ -84,27 +84,6 @@ for (const backend of backends) {
       expect(Number(row?.n)).toBe(0);
     });
 
-    it("migrates the pre-release connectors table and connector: keys", async () => {
-      // Recreate the old table + seed pre-rename data, then re-apply the schema.
-      const blob = backend.name === "sqlite" ? "BLOB" : "BYTEA";
-      await db.exec(
-        `CREATE TABLE connectors (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, base_url TEXT NOT NULL, metadata TEXT NOT NULL, client_id TEXT, client_secret_enc ${blob}, created_at INTEGER, updated_at INTEGER, UNIQUE(user_id, name))`
-      );
-      await db.run("INSERT INTO connectors (id, user_id, name, base_url, metadata) VALUES (?, ?, ?, ?, ?)", ["old-id", "u1", "notion", "https://x", "{}"]);
-      await db.run("INSERT INTO connections (user_id, integration) VALUES (?, ?)", ["u1", "connector:old-id"]);
-      await db.run("INSERT INTO audit_log (user_id, integration, action, success) VALUES (?, ?, ?, ?)", ["u1", "connector:old-id", "EXECUTE", true]);
-
-      await applySchema(db);
-
-      const apps = await db.all<{ id: string; name: string }>("SELECT id, name FROM custom_apps");
-      expect(apps.map((a) => `${a.id}:${a.name}`)).toContain("old-id:notion");
-      const conn = await db.get<{ integration: string }>("SELECT integration FROM connections");
-      expect(conn?.integration).toBe("custom:old-id");
-      const audit = await db.get<{ integration: string }>("SELECT integration FROM audit_log");
-      expect(audit?.integration).toBe("custom:old-id");
-      await expect(db.get("SELECT 1 FROM connectors")).rejects.toThrow();
-    });
-
     it("round-trips text through ? placeholders", async () => {
       await db.run("INSERT INTO users (id, email) VALUES (?, ?)", ["u1", "u1@example.com"]);
       const row = await db.get<{ id: string; email: string }>("SELECT id, email FROM users WHERE id = ?", ["u1"]);

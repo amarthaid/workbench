@@ -53,23 +53,6 @@ rejects a 3xx rather than following it to an internal host. `isPrivateHost`
 handles IPv4-mapped IPv6 (`[::ffff:a9fe:a9fe]` = 169.254.169.254), and loopback
 is allowed only outside production.
 
-## Schema: `custom_apps` + a pre-release migration
-
-The feature first landed on this branch as a `connectors` table with
-`connector:<id>` integration keys, then was renamed to custom apps. The rename
-ships with a migration (`migrateConnectorsToCustomApps` in `db.ts`): copy
-`connectors` → `custom_apps`, drop `connectors`, rewrite `connector:<id>` →
-`custom:<id>` in `connections` and `audit_log`. Two gotchas that matter even for
-pre-release data:
-
-- Copy keyed on (user, name) and **skip** rows whose name already exists —
-  otherwise the `UNIQUE(user_id, name)` constraint throws when a user re-created
-  the app under a new id mid-rename (the first cut crashed the server on exactly
-  that).
-- After the rewrite, **delete** any `connector:<id>` row whose id no longer maps
-  to a `custom_apps` row — a re-created app leaves an orphaned reference, and
-  leaving it leaks the raw key onto the Home page's "Most used app" stat.
-
 ## encryption.ts load-time side effect broke config-mocked tests
 
 `src/auth/encryption.ts` computed `Buffer.from(config.ENCRYPTION_KEY, "hex")` at
