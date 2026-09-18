@@ -821,7 +821,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
 
       const id = crypto.randomUUID();
       const metadata = await discoverMetadata(normalized);
-      const reg = await registerClient(metadata, name, id);
+      const reg = await registerClient(metadata, id);
       const connector = await createConnector({
         id,
         userId: user.userId,

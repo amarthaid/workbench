@@ -31,21 +31,59 @@ export async function discoverMetadata(baseUrl: string): Promise<ConnectorMetada
   if (!normalized) throw new Error(`Invalid or blocked connector URL: ${baseUrl}`);
   const origin = new URL(normalized).origin;
 
-  const asMeta = await fetchJson(`${origin}/.well-known/oauth-authorization-server`).catch(
-    () => ({} as Record<string, unknown>)
-  );
-  const resourceMeta = await fetchJson(`${origin}/.well-known/oauth-protected-resource`).catch(
-    () => ({} as Record<string, unknown>)
-  );
+  // 1. Protected-resource metadata (PRM). Prefer the URL the server advertises
+  // in a 401 WWW-Authenticate challenge (resource_metadata=...) — it may be
+  // path-qualified or on a separate IdP host. Fall back to origin-root
+  // well-known. Also capture the challenge's scope= when present.
+  let prmUrl = `${origin}/.well-known/oauth-protected-resource`;
+  let challengeScope: string | undefined;
+  try {
+    const probe = await safeFetch(normalized, { method: "GET" });
+    if (probe.status === 401) {
+      const www = probe.headers.get("www-authenticate") ?? "";
+      const rm = www.match(/resource_metadata="([^"]+)"/);
+      if (rm) prmUrl = assertSafeUrl(rm[1], "resource_metadata");
+      const sm = www.match(/(?:^|[,\s])scope="([^"]+)"/);
+      if (sm) challengeScope = sm[1];
+    }
+  } catch {
+    /* probe is best-effort */
+  }
+  const resourceMeta = await fetchJson(prmUrl).catch(() => ({} as Record<string, unknown>));
+
+  // 2. Authorization-server metadata: PRM's authorization_servers list (a
+  // separate IdP), falling back to the connector's own origin.
+  const asServers = Array.isArray(resourceMeta.authorization_servers)
+    ? (resourceMeta.authorization_servers as unknown[]).filter((s): s is string => typeof s === "string")
+    : [];
+  let asMeta: Record<string, unknown> = {};
+  for (const asUrl of [...asServers, origin]) {
+    try {
+      const as = assertSafeUrl(asUrl, "authorization_server").replace(/\/$/, "");
+      asMeta = await fetchJson(`${as}/.well-known/oauth-authorization-server`);
+      if (asMeta.authorization_endpoint || asMeta.token_endpoint) break;
+    } catch {
+      /* try the next authorization server */
+    }
+  }
+
+  // Scope to request: the PRM's scopes_supported, then the 401 challenge's
+  // scope, then the AS's scopes_supported — never blindly every AS scope.
+  const scopes = (() => {
+    const from = (v: unknown) =>
+      Array.isArray(v) ? (v as unknown[]).filter((s): s is string => typeof s === "string") : [];
+    const prm = from(resourceMeta.scopes_supported);
+    if (prm.length) return prm;
+    if (challengeScope) return challengeScope.split(" ").filter(Boolean);
+    return from(asMeta.scopes_supported);
+  })();
 
   const metadata: ConnectorMetadata = {
     authorizationEndpoint: typeof asMeta.authorization_endpoint === "string" ? asMeta.authorization_endpoint : undefined,
     tokenEndpoint: typeof asMeta.token_endpoint === "string" ? asMeta.token_endpoint : undefined,
     registrationEndpoint: typeof asMeta.registration_endpoint === "string" ? asMeta.registration_endpoint : undefined,
     resourceUrl: typeof resourceMeta.resource === "string" ? resourceMeta.resource : undefined,
-    scopes: Array.isArray(asMeta.scopes_supported)
-      ? (asMeta.scopes_supported as unknown[]).filter((s): s is string => typeof s === "string")
-      : undefined,
+    scopes: scopes.length ? scopes : undefined,
   };
 
   if (!metadata.authorizationEndpoint || !metadata.tokenEndpoint) {
@@ -74,14 +112,16 @@ interface Registration {
  */
 export async function registerClient(
   metadata: ConnectorMetadata,
-  connectorName: string,
   connectorId: string
 ): Promise<Registration> {
   if (!metadata.registrationEndpoint) {
     throw new Error("Connector's authorization server does not support dynamic client registration");
   }
   const body = {
-    client_name: `workbench:${connectorName}`,
+    // Shown on the provider's consent screen — identify as the workbench app,
+    // not "workbench:<connector name>".
+    client_name: "Workbench",
+    client_uri: config.SERVER_PUBLIC_URL,
     redirect_uris: [connectorCallbackUrl(connectorId)],
     grant_types: ["authorization_code", "refresh_token"],
     response_types: ["code"],

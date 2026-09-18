@@ -19,7 +19,7 @@ async function withClient<T>(
   const transport = new StreamableHTTPClientTransport(new URL(baseUrl), {
     requestInit: { headers: { Authorization: `Bearer ${token}` } },
   });
-  const client = new Client({ name: "a-workbench", version: "0.1.0" });
+  const client = new Client({ name: "workbench", version: "0.29.0" });
   try {
     await client.connect(transport);
     return await fn(client);
