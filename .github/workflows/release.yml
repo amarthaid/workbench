@@ -79,7 +79,10 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          NOTES_FILE="docs/releases/${REF_NAME}.md"
+          # Notes live under the stable name from the first RC onward
+          # (docs/releases/vX.Y.Z.md), so an RC tag reuses them.
+          STABLE_NAME="${REF_NAME%-rc.*}"
+          NOTES_FILE="docs/releases/${STABLE_NAME}.md"
           if [ -f "$NOTES_FILE" ]; then
             echo "Using hand-written notes from $NOTES_FILE"
             cp "$NOTES_FILE" RELEASE_NOTES.md
