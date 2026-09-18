@@ -246,6 +246,7 @@ async function initSqliteSchema(db: DbAdapter): Promise<void> {
       "CREATE INDEX IF NOT EXISTS idx_users_api_key_sha ON users(api_key_sha) WHERE api_key_sha IS NOT NULL"
     );
   } catch { /* already exists */ }
+  migrateConnectorsToCustomApps(db, "no such table");
 }
 
 async function initPostgresSchema(db: DbAdapter): Promise<void> {
@@ -267,6 +268,42 @@ async function initPostgresSchema(db: DbAdapter): Promise<void> {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_keycloak_sub ON users(keycloak_sub) WHERE keycloak_sub IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_users_api_key_sha ON users(api_key_sha) WHERE api_key_sha IS NOT NULL;
   `);
+  migrateConnectorsToCustomApps(db, "does not exist");
+}
+
+/**
+ * Rename the feature's pre-release table/keys: "connectors" → "custom_apps"
+ * and `connector:<id>` → `custom:<id>` in connections + audit_log. Idempotent —
+ * a fresh DB has no `connectors` table and no `connector:` rows, so it is a
+ * no-op. `missingTableMsg` is the dialect-specific error fragment to ignore.
+ */
+async function migrateConnectorsToCustomApps(db: DbAdapter, missingTableMsg: string): Promise<void> {
+  // Move pre-rename rows, skipping any (user, name) the user already re-created
+  // under a new id — otherwise the UNIQUE(user_id, name) constraint throws.
+  try {
+    await db.exec(`
+      INSERT INTO custom_apps (id, user_id, name, base_url, metadata, client_id, client_secret_enc, created_at, updated_at)
+      SELECT c.id, c.user_id, c.name, c.base_url, c.metadata, c.client_id, c.client_secret_enc, c.created_at, c.updated_at
+      FROM connectors c
+      WHERE NOT EXISTS (SELECT 1 FROM custom_apps a WHERE a.user_id = c.user_id AND a.name = c.name)
+    `);
+    await db.exec("DROP TABLE IF EXISTS connectors");
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (!msg.includes(missingTableMsg)) throw e;
+  }
+  // Rewrite keys whose app still exists under the migrated id; drop the rest
+  // (the app was re-created under a new id, so the old reference is orphaned).
+  await db.exec(
+    "UPDATE connections SET integration = 'custom:' || substr(integration, 11) " +
+    "WHERE integration LIKE 'connector:%' AND EXISTS (SELECT 1 FROM custom_apps a WHERE a.id = substr(connections.integration, 11))"
+  );
+  await db.exec("DELETE FROM connections WHERE integration LIKE 'connector:%'");
+  await db.exec(
+    "UPDATE audit_log SET integration = 'custom:' || substr(integration, 11) " +
+    "WHERE integration LIKE 'connector:%' AND EXISTS (SELECT 1 FROM custom_apps a WHERE a.id = substr(audit_log.integration, 11))"
+  );
+  await db.exec("DELETE FROM audit_log WHERE integration LIKE 'connector:%'");
 }
 
 /**
