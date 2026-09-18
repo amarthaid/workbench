@@ -102,6 +102,7 @@ export default function Apps() {
     <>
       <PageHeader
         title="Apps"
+        actions={<Button onClick={() => setShowNewApp(true)}>New custom app</Button>}
         toolbar={
           <>
             <Tabs
@@ -115,7 +116,6 @@ export default function Apps() {
               ]}
             />
             <div className="wb-toolbar-controls">
-              <Button size="sm" onClick={() => setShowNewApp(true)}>New custom app</Button>
               <label className="ui-sr-only" htmlFor="apps-search">Search apps</label>
               <Input
                 id="apps-search"
