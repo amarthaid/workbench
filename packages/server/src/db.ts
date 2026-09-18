@@ -101,7 +101,7 @@ const SQLITE_SCHEMA = `
     UNIQUE(user_id, name)
   );
 
-  CREATE TABLE IF NOT EXISTS connectors (
+  CREATE TABLE IF NOT EXISTS custom_apps (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
     name TEXT NOT NULL,
@@ -199,7 +199,7 @@ const POSTGRES_SCHEMA = `
     UNIQUE(user_id, name)
   );
 
-  CREATE TABLE IF NOT EXISTS connectors (
+  CREATE TABLE IF NOT EXISTS custom_apps (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
     name TEXT NOT NULL,

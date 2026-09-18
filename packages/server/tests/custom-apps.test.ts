@@ -1,31 +1,31 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { db } from "../src/db";
-import { normalizeBaseUrl, isBlockedHost } from "../src/connectors/ssrf";
-import { namespacedName } from "../src/connectors/index";
+import { normalizeBaseUrl, isBlockedHost } from "../src/custom-apps/ssrf";
+import { namespacedName } from "../src/custom-apps/index";
 import {
-  createConnector,
-  getConnector,
-  getConnectorById,
-  listConnectors,
-  deleteConnector,
+  createCustomApp,
+  getCustomApp,
+  getCustomAppById,
+  listCustomApps,
+  deleteCustomApp,
   integrationKey,
   idFromIntegrationKey,
-} from "../src/connectors/store";
+} from "../src/custom-apps/store";
 
-describe("connector naming", () => {
-  it("namespaces a remote tool under the connector name", () => {
+describe("app naming", () => {
+  it("namespaces a remote tool under the app name", () => {
     expect(namespacedName("github", "search")).toBe("github__search");
   });
 
   it("round-trips the integration key", () => {
     const key = integrationKey("abc-123");
-    expect(key).toBe("connector:abc-123");
+    expect(key).toBe("custom:abc-123");
     expect(idFromIntegrationKey(key)).toBe("abc-123");
     expect(idFromIntegrationKey("jira")).toBeNull();
   });
 });
 
-describe("connector URL guard", () => {
+describe("app URL guard", () => {
   it("accepts http(s) and strips trailing slash + query", () => {
     expect(normalizeBaseUrl("https://mcp.example.com/api/?x=1")).toBe("https://mcp.example.com/api");
     expect(normalizeBaseUrl("http://localhost:8080/mcp")).toBe("http://localhost:8080/mcp");
@@ -53,13 +53,13 @@ describe("connector URL guard", () => {
   });
 });
 
-describe("connector store", () => {
+describe("app store", () => {
   beforeEach(async () => {
-    await db.run("DELETE FROM connectors");
+    await db.run("DELETE FROM custom_apps");
   });
 
-  it("creates, lists, and deletes a connector", async () => {
-    const c = await createConnector({
+  it("creates, lists, and deletes a app", async () => {
+    const c = await createCustomApp({
       userId: "u1",
       name: "github-mcp",
       baseUrl: "https://mcp.example.com/mcp",
@@ -69,19 +69,19 @@ describe("connector store", () => {
     });
     expect(c.id).toBeDefined();
 
-    const listed = await listConnectors("u1");
+    const listed = await listCustomApps("u1");
     expect(listed).toHaveLength(1);
     expect(listed[0].name).toBe("github-mcp");
     // secret round-trips through encryption
     expect(listed[0].clientSecret).toBe("csecret");
 
-    const byId = await getConnectorById(c.id);
+    const byId = await getCustomAppById(c.id);
     expect(byId?.userId).toBe("u1");
 
     // other users cannot see it
-    expect(await getConnector("u2", c.id)).toBeNull();
+    expect(await getCustomApp("u2", c.id)).toBeNull();
 
-    await deleteConnector("u1", c.id);
-    expect(await listConnectors("u1")).toHaveLength(0);
+    await deleteCustomApp("u1", c.id);
+    expect(await listCustomApps("u1")).toHaveLength(0);
   });
 });

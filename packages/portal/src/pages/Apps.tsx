@@ -1,13 +1,14 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { fetchIntegrations, fetchConnections, type IntegrationSummary } from "../api";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { fetchIntegrations, fetchConnections, createCustomApp, type IntegrationSummary } from "../api";
 import { PageHeader } from "../components/ui/PageHeader";
 import { Tabs } from "../components/ui/Tabs";
 import { EmptyState } from "../components/ui/EmptyState";
 import { Input, Select } from "../components/ui/Input";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
+import { Modal } from "../components/ui/Modal";
 import IntegrationLogo from "../components/IntegrationLogo";
 import { useConnectFlow } from "../hooks/useConnectFlow";
 
@@ -20,6 +21,31 @@ export default function Apps() {
     queryFn: fetchConnections,
   });
   const { connect, error, busy, dialogs } = useConnectFlow();
+  const qc = useQueryClient();
+
+  const [showNewApp, setShowNewApp] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newUrl, setNewUrl] = useState("");
+  const [newBusy, setNewBusy] = useState(false);
+  const [newError, setNewError] = useState<string | null>(null);
+
+  async function submitNewApp(e: React.FormEvent) {
+    e.preventDefault();
+    setNewError(null);
+    setNewBusy(true);
+    try {
+      await createCustomApp(newName.trim(), newUrl.trim());
+      setNewName("");
+      setNewUrl("");
+      setShowNewApp(false);
+      qc.invalidateQueries({ queryKey: ["integrations"] });
+      qc.invalidateQueries({ queryKey: ["connections"] });
+    } catch (err) {
+      setNewError(err instanceof Error ? err.message : "Failed to register custom app");
+    } finally {
+      setNewBusy(false);
+    }
+  }
 
   const [filter, setFilter] = useState<Filter>("all");
   const [category, setCategory] = useState("all");
@@ -89,6 +115,7 @@ export default function Apps() {
               ]}
             />
             <div className="wb-toolbar-controls">
+              <Button size="sm" onClick={() => setShowNewApp(true)}>New custom app</Button>
               <label className="ui-sr-only" htmlFor="apps-search">Search apps</label>
               <Input
                 id="apps-search"
@@ -134,6 +161,33 @@ export default function Apps() {
       )}
 
       {dialogs}
+
+      <Modal
+        open={showNewApp}
+        onClose={() => setShowNewApp(false)}
+        title="New custom app"
+        size="md"
+        footer={
+          <>
+            <Button variant="outline" onClick={() => setShowNewApp(false)}>Cancel</Button>
+            <Button type="submit" form="new-custom-app-form" disabled={newBusy || !newName.trim() || !newUrl.trim()}>
+              {newBusy ? "Registering…" : "Create"}
+            </Button>
+          </>
+        }
+      >
+        <form id="new-custom-app-form" className="wb-section-gap" onSubmit={submitNewApp}>
+          <div className="ui-field">
+            <label className="ui-field-label" htmlFor="new-app-name">Name</label>
+            <Input id="new-app-name" placeholder="notion" value={newName} onChange={(e) => setNewName(e.target.value)} autoFocus />
+          </div>
+          <div className="ui-field">
+            <label className="ui-field-label" htmlFor="new-app-url">MCP server URL</label>
+            <Input id="new-app-url" placeholder="https://mcp.example.com/mcp" value={newUrl} onChange={(e) => setNewUrl(e.target.value)} />
+          </div>
+          {newError && <div className="ui-form-error">{newError}</div>}
+        </form>
+      </Modal>
     </>
   );
 }

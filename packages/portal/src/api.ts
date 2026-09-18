@@ -102,6 +102,8 @@ export interface IntegrationSummary {
   toolCount: number;
   configured?: boolean;
   authType?: string;
+  // True for a per-user custom app (external MCP server).
+  custom?: boolean;
   // Present when the integration supports a self-hosted instance URL prompt.
   instance?: InstanceConfig;
   // Present for apikey integrations: the connect-time form field spec.
@@ -146,55 +148,25 @@ export async function fetchKeycloakAuthUrl(ticket?: string): Promise<{ url: stri
   return res.json();
 }
 
-export interface ConnectorSummary {
-  id: string;
-  name: string;
-  baseUrl: string;
-  connected: boolean;
-  scopes: string[];
-}
-
-export async function fetchConnectors(): Promise<{ connectors: ConnectorSummary[] }> {
-  const res = await fetch(`${API_URL}/api/connectors`, { headers: getHeaders() });
-  if (res.status === 401) {
-    localStorage.removeItem("awb_token");
-    window.location.href = "/login";
-    throw new Error("Unauthorized");
-  }
-  if (!res.ok) throw new Error("Failed to fetch connectors");
-  return res.json();
-}
-
-export async function createConnector(name: string, baseUrl: string): Promise<{ connector: { id: string; name: string; baseUrl: string } }> {
-  const res = await fetch(`${API_URL}/api/connectors`, {
+export async function createCustomApp(name: string, baseUrl: string): Promise<{ app: { id: string; name: string; baseUrl: string } }> {
+  const res = await fetch(`${API_URL}/api/custom-apps`, {
     method: "POST",
     headers: getHeaders(),
     body: JSON.stringify({ name, baseUrl }),
   });
   if (!res.ok) {
     const detail = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(detail.error || "Failed to register connector");
+    throw new Error(detail.error || "Failed to register custom app");
   }
   return res.json();
 }
 
-export async function removeConnector(id: string): Promise<{ success: boolean }> {
-  const res = await fetch(`${API_URL}/api/connectors/${encodeURIComponent(id)}`, {
+export async function removeCustomApp(id: string): Promise<{ success: boolean }> {
+  const res = await fetch(`${API_URL}/api/custom-apps/${encodeURIComponent(id)}`, {
     method: "DELETE",
     headers: authHeaders(),
   });
-  if (!res.ok) throw new Error("Failed to delete connector");
-  return res.json();
-}
-
-export async function startConnectorAuth(id: string): Promise<{ url: string }> {
-  const res = await fetch(`${API_URL}/api/auth/connector/${encodeURIComponent(id)}`, {
-    headers: getHeaders(),
-  });
-  if (!res.ok) {
-    const detail = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(detail.error || "Failed to start connector auth");
-  }
+  if (!res.ok) throw new Error("Failed to delete custom app");
   return res.json();
 }
 

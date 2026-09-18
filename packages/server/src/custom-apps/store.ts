@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import { db } from "../db";
 import { encrypt, decrypt } from "../auth/encryption";
 
-/** Discovered OAuth server + protected-resource metadata for a connector. */
-export interface ConnectorMetadata {
+/** Discovered OAuth server + protected-resource metadata for a app. */
+export interface CustomAppMetadata {
   /** /.well-known/oauth-authorization-server */
   authorizationEndpoint?: string;
   tokenEndpoint?: string;
@@ -15,12 +15,12 @@ export interface ConnectorMetadata {
   authMethod?: "client_secret_basic" | "client_secret_post" | "none";
 }
 
-export interface Connector {
+export interface CustomApp {
   id: string;
   userId: string;
   name: string;
   baseUrl: string;
-  metadata: ConnectorMetadata;
+  metadata: CustomAppMetadata;
   clientId?: string;
   /** Decrypted client secret — only held in memory, never serialized to logs. */
   clientSecret?: string;
@@ -28,13 +28,13 @@ export interface Connector {
   updatedAt: number;
 }
 
-/** `connections.integration` key for a connector's OAuth token row. */
+/** `connections.integration` key for a custom app's OAuth token row. */
 export function integrationKey(id: string): string {
-  return `connector:${id}`;
+  return `custom:${id}`;
 }
 
 export function idFromIntegrationKey(key: string): string | null {
-  return key.startsWith("connector:") ? key.slice("connector:".length) : null;
+  return key.startsWith("custom:") ? key.slice("custom:".length) : null;
 }
 
 interface Row {
@@ -49,10 +49,10 @@ interface Row {
   updated_at: number;
 }
 
-function toConnector(row: Row): Connector {
-  let metadata: ConnectorMetadata = {};
+function toCustomApp(row: Row): CustomApp {
+  let metadata: CustomAppMetadata = {};
   try {
-    metadata = JSON.parse(row.metadata) as ConnectorMetadata;
+    metadata = JSON.parse(row.metadata) as CustomAppMetadata;
   } catch {
     /* corrupt metadata degrades to empty */
   }
@@ -69,19 +69,19 @@ function toConnector(row: Row): Connector {
   };
 }
 
-export async function createConnector(args: {
+export async function createCustomApp(args: {
   /** Pre-generated id (the OAuth redirect URI embeds it before insert). */
   id?: string;
   userId: string;
   name: string;
   baseUrl: string;
-  metadata: ConnectorMetadata;
+  metadata: CustomAppMetadata;
   clientId?: string;
   clientSecret?: string;
-}): Promise<Connector> {
+}): Promise<CustomApp> {
   const id = args.id ?? randomUUID();
   await db.run(
-    `INSERT INTO connectors (id, user_id, name, base_url, metadata, client_id, client_secret_enc)
+    `INSERT INTO custom_apps (id, user_id, name, base_url, metadata, client_id, client_secret_enc)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
@@ -93,31 +93,31 @@ export async function createConnector(args: {
       args.clientSecret ? encrypt(args.clientSecret) : null,
     ]
   );
-  return (await getConnector(args.userId, id))!;
+  return (await getCustomApp(args.userId, id))!;
 }
 
-export async function getConnector(userId: string, id: string): Promise<Connector | null> {
-  const row = await db.get<Row>("SELECT * FROM connectors WHERE id = ? AND user_id = ?", [id, userId]);
-  return row ? toConnector(row) : null;
+export async function getCustomApp(userId: string, id: string): Promise<CustomApp | null> {
+  const row = await db.get<Row>("SELECT * FROM custom_apps WHERE id = ? AND user_id = ?", [id, userId]);
+  return row ? toCustomApp(row) : null;
 }
 
 /** Lookup without a user filter — only for the OAuth callback, where the state
  * binding (pending_auth.integration) is what authorizes, not the id. */
-export async function getConnectorById(id: string): Promise<Connector | null> {
-  const row = await db.get<Row>("SELECT * FROM connectors WHERE id = ?", [id]);
-  return row ? toConnector(row) : null;
+export async function getCustomAppById(id: string): Promise<CustomApp | null> {
+  const row = await db.get<Row>("SELECT * FROM custom_apps WHERE id = ?", [id]);
+  return row ? toCustomApp(row) : null;
 }
 
-export async function listConnectors(userId: string): Promise<Connector[]> {
+export async function listCustomApps(userId: string): Promise<CustomApp[]> {
   const rows = await db.all<Row>(
-    "SELECT * FROM connectors WHERE user_id = ? ORDER BY created_at ASC",
+    "SELECT * FROM custom_apps WHERE user_id = ? ORDER BY created_at ASC",
     [userId]
   );
-  return rows.map(toConnector);
+  return rows.map(toCustomApp);
 }
 
-export async function deleteConnector(userId: string, id: string): Promise<void> {
-  await db.run("DELETE FROM connectors WHERE id = ? AND user_id = ?", [id, userId]);
-  // Drop the OAuth token row too — a connector's token is meaningless without it.
+export async function deleteCustomApp(userId: string, id: string): Promise<void> {
+  await db.run("DELETE FROM custom_apps WHERE id = ? AND user_id = ?", [id, userId]);
+  // Drop the OAuth token row too — a app's token is meaningless without it.
   await db.run("DELETE FROM connections WHERE user_id = ? AND integration = ?", [userId, integrationKey(id)]);
 }

@@ -17,7 +17,6 @@ import VaultSecretForm from "./pages/VaultSecretForm";
 import VaultOneTime from "./pages/VaultOneTime";
 import Activity from "./pages/Activity";
 import Settings from "./pages/Settings";
-import Connectors from "./pages/Connectors";
 
 function Boot({ label = "Loading" }: { label?: string }) {
   return (
@@ -81,7 +80,6 @@ function AppRoutes() {
         <Route path="/vault/new" element={<VaultSecretForm />} />
         <Route path="/vault/one-time" element={<VaultOneTime />} />
         <Route path="/vault/:name/replace" element={<VaultSecretForm />} />
-        <Route path="/connectors" element={<Connectors />} />
         <Route path="/activity" element={<Activity />} />
         <Route path="/settings" element={<Settings />} />
       </Route>

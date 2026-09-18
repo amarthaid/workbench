@@ -1,13 +1,13 @@
-import { listConnectors, integrationKey, type Connector } from "./store";
-import { ensureConnectorToken } from "./oauth";
+import { listCustomApps, integrationKey, type CustomApp } from "./store";
+import { ensureCustomAppToken } from "./oauth";
 import { discoverTools } from "./client";
 
 export interface IndexedTool {
-  /** Namespaced name exposed to the agent: `${connectorName}__${remoteName}`. */
+  /** Namespaced name exposed to the agent: `${appName}__${remoteName}`. */
   name: string;
-  /** `connections.integration` key, e.g. `connector:<id>`. */
+  /** `connections.integration` key, e.g. `app:<id>`. */
   integration: string;
-  connectorId: string;
+  appId: string;
   baseUrl: string;
   remoteName: string;
   description: string;
@@ -15,15 +15,15 @@ export interface IndexedTool {
   inputSchema: unknown;
 }
 
-export function namespacedName(connectorName: string, remoteName: string): string {
-  return `${connectorName}__${remoteName}`;
+export function namespacedName(appName: string, remoteName: string): string {
+  return `${appName}__${remoteName}`;
 }
 
 // Per-user cache of discovered tools. Live discovery happens at connect and is
 // re-run lazily once this TTL lapses — the remote tool list is not immutable.
 const cache = new Map<string, { at: number; tools: IndexedTool[] }>();
 const TTL_MS = 60_000;
-// A hung connector must not stall search_tools/execute_tools forever.
+// A hung app must not stall search_tools/execute_tools forever.
 const DISCOVERY_TIMEOUT_MS = 10_000;
 
 // Single-flight: concurrent search_tools calls on a cold cache share one
@@ -50,19 +50,19 @@ export async function ensureIndex(userId: string): Promise<IndexedTool[]> {
 async function discover(userId: string): Promise<IndexedTool[]> {
   // Never throw — executeSingle's contract is "never throws", and a DB hiccup
   // here would otherwise propagate up through getToolForUser. Degrade to "no
-  // connector tools this cycle" instead.
-  let connectors: Connector[] = [];
+  // app tools this cycle" instead.
+  let custom_apps: CustomApp[] = [];
   try {
-    connectors = await listConnectors(userId);
+    custom_apps = await listCustomApps(userId);
   } catch {
-    connectors = [];
+    custom_apps = [];
   }
 
   const tools: IndexedTool[] = [];
-  for (const c of connectors) {
+  for (const c of custom_apps) {
     let token: string;
     try {
-      token = await ensureConnectorToken(userId, c);
+      token = await ensureCustomAppToken(userId, c);
     } catch {
       continue; // not connected / refresh failed — tools simply don't appear
     }
@@ -77,7 +77,7 @@ async function discover(userId: string): Promise<IndexedTool[]> {
         tools.push({
           name: namespacedName(c.name, t.name),
           integration: integrationKey(c.id),
-          connectorId: c.id,
+          appId: c.id,
           baseUrl: c.baseUrl,
           remoteName: t.name,
           description: t.description ?? "",
@@ -85,7 +85,7 @@ async function discover(userId: string): Promise<IndexedTool[]> {
         });
       }
     } catch {
-      // discovery failure / timeout: skip this connector for this cycle
+      // discovery failure / timeout: skip this app for this cycle
     }
   }
   cache.set(userId, { at: Date.now(), tools });

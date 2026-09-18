@@ -1,6 +1,6 @@
 import { config } from "../config";
 import { normalizeBaseUrl, assertSafeUrl, safeFetch } from "./ssrf";
-import { Connector, ConnectorMetadata, integrationKey } from "./store";
+import { CustomApp, CustomAppMetadata, integrationKey } from "./store";
 import {
   createAuthState,
   verifyAuthState,
@@ -11,8 +11,8 @@ import { storeToken, getToken } from "../auth/tokens";
 
 const TOKEN_EXPIRY_SKEW_SECONDS = 30;
 
-export function connectorCallbackUrl(connectorId: string): string {
-  return `${config.SERVER_PUBLIC_URL}/api/connectors/${connectorId}/callback`;
+export function customAppCallbackUrl(appId: string): string {
+  return `${config.SERVER_PUBLIC_URL}/api/custom-apps/${appId}/callback`;
 }
 
 async function fetchJson(url: string, init?: RequestInit): Promise<Record<string, unknown>> {
@@ -23,12 +23,12 @@ async function fetchJson(url: string, init?: RequestInit): Promise<Record<string
 
 /**
  * Discover the OAuth authorization-server and protected-resource metadata for
- * a connector base URL (MCP auth spec). Well-known paths are host-rooted, so
+ * a app base URL (MCP auth spec). Well-known paths are host-rooted, so
  * they're built from the origin, not the (possibly path-qualified) base URL.
  */
-export async function discoverMetadata(baseUrl: string): Promise<ConnectorMetadata> {
+export async function discoverMetadata(baseUrl: string): Promise<CustomAppMetadata> {
   const normalized = normalizeBaseUrl(baseUrl);
-  if (!normalized) throw new Error(`Invalid or blocked connector URL: ${baseUrl}`);
+  if (!normalized) throw new Error(`Invalid or blocked app URL: ${baseUrl}`);
   const origin = new URL(normalized).origin;
 
   // 1. Protected-resource metadata (PRM). Prefer the URL the server advertises
@@ -52,7 +52,7 @@ export async function discoverMetadata(baseUrl: string): Promise<ConnectorMetada
   const resourceMeta = await fetchJson(prmUrl).catch(() => ({} as Record<string, unknown>));
 
   // 2. Authorization-server metadata: PRM's authorization_servers list (a
-  // separate IdP), falling back to the connector's own origin.
+  // separate IdP), falling back to the app's own origin.
   const asServers = Array.isArray(resourceMeta.authorization_servers)
     ? (resourceMeta.authorization_servers as unknown[]).filter((s): s is string => typeof s === "string")
     : [];
@@ -78,7 +78,7 @@ export async function discoverMetadata(baseUrl: string): Promise<ConnectorMetada
     return from(asMeta.scopes_supported);
   })();
 
-  const metadata: ConnectorMetadata = {
+  const metadata: CustomAppMetadata = {
     authorizationEndpoint: typeof asMeta.authorization_endpoint === "string" ? asMeta.authorization_endpoint : undefined,
     tokenEndpoint: typeof asMeta.token_endpoint === "string" ? asMeta.token_endpoint : undefined,
     registrationEndpoint: typeof asMeta.registration_endpoint === "string" ? asMeta.registration_endpoint : undefined,
@@ -88,7 +88,7 @@ export async function discoverMetadata(baseUrl: string): Promise<ConnectorMetada
 
   if (!metadata.authorizationEndpoint || !metadata.tokenEndpoint) {
     throw new Error(
-      `Connector at ${baseUrl} did not advertise an OAuth authorization server (/.well-known/oauth-authorization-server)`
+      `CustomApp at ${baseUrl} did not advertise an OAuth authorization server (/.well-known/oauth-authorization-server)`
     );
   }
   // The AS metadata is attacker-influenced: every endpoint the server will
@@ -103,7 +103,7 @@ export async function discoverMetadata(baseUrl: string): Promise<ConnectorMetada
 interface Registration {
   clientId: string;
   clientSecret?: string;
-  authMethod?: ConnectorMetadata["authMethod"];
+  authMethod?: CustomAppMetadata["authMethod"];
 }
 
 /**
@@ -111,18 +111,18 @@ interface Registration {
  * `client_secret` (or none at all) is a public client — PKCE carries the flow.
  */
 export async function registerClient(
-  metadata: ConnectorMetadata,
-  connectorId: string
+  metadata: CustomAppMetadata,
+  appId: string
 ): Promise<Registration> {
   if (!metadata.registrationEndpoint) {
-    throw new Error("Connector's authorization server does not support dynamic client registration");
+    throw new Error("CustomApp's authorization server does not support dynamic client registration");
   }
   const body = {
     // Shown on the provider's consent screen — identify as the workbench app,
-    // not "workbench:<connector name>".
+    // not "workbench:<app name>".
     client_name: "Workbench",
     client_uri: config.SERVER_PUBLIC_URL,
-    redirect_uris: [connectorCallbackUrl(connectorId)],
+    redirect_uris: [customAppCallbackUrl(appId)],
     grant_types: ["authorization_code", "refresh_token"],
     response_types: ["code"],
   };
@@ -152,18 +152,18 @@ export async function registerClient(
   };
 }
 
-export async function buildConnectorAuthUrl(userId: string, connector: Connector): Promise<string> {
-  if (!connector.clientId) throw new Error("Connector has no registered OAuth client");
-  const { authorizationEndpoint, scopes, resourceUrl } = connector.metadata;
-  if (!authorizationEndpoint) throw new Error("Connector has no authorization endpoint");
+export async function buildCustomAppAuthUrl(userId: string, app: CustomApp): Promise<string> {
+  if (!app.clientId) throw new Error("CustomApp has no registered OAuth client");
+  const { authorizationEndpoint, scopes, resourceUrl } = app.metadata;
+  if (!authorizationEndpoint) throw new Error("CustomApp has no authorization endpoint");
 
   const codeVerifier = generateCodeVerifier();
-  const state = await createAuthState(userId, integrationKey(connector.id), codeVerifier);
+  const state = await createAuthState(userId, integrationKey(app.id), codeVerifier);
 
   const url = new URL(authorizationEndpoint);
   url.searchParams.set("response_type", "code");
-  url.searchParams.set("client_id", connector.clientId);
-  url.searchParams.set("redirect_uri", connectorCallbackUrl(connector.id));
+  url.searchParams.set("client_id", app.clientId);
+  url.searchParams.set("redirect_uri", customAppCallbackUrl(app.id));
   url.searchParams.set("code_challenge", codeChallengeS256(codeVerifier));
   url.searchParams.set("code_challenge_method", "S256");
   url.searchParams.set("state", state);
@@ -172,13 +172,13 @@ export async function buildConnectorAuthUrl(userId: string, connector: Connector
   return url.toString();
 }
 
-async function exchangeConnectorToken(
-  connector: Connector,
+async function exchangeCustomAppToken(
+  app: CustomApp,
   code: string,
   codeVerifier: string
 ): Promise<{ accessToken: string; refreshToken?: string; expiresAt?: number; scopes: string }> {
-  const { tokenEndpoint, resourceUrl } = connector.metadata;
-  if (!tokenEndpoint) throw new Error("Connector has no token endpoint");
+  const { tokenEndpoint, resourceUrl } = app.metadata;
+  if (!tokenEndpoint) throw new Error("CustomApp has no token endpoint");
 
   const headers: Record<string, string> = {
     "Content-Type": "application/x-www-form-urlencoded",
@@ -187,20 +187,20 @@ async function exchangeConnectorToken(
   const body = new URLSearchParams({
     grant_type: "authorization_code",
     code,
-    redirect_uri: connectorCallbackUrl(connector.id),
+    redirect_uri: customAppCallbackUrl(app.id),
     code_verifier: codeVerifier,
   });
 
-  if (connector.clientSecret && connector.metadata.authMethod === "client_secret_basic") {
+  if (app.clientSecret && app.metadata.authMethod === "client_secret_basic") {
     // Credentials live only in the Basic header — client_id must NOT also
     // appear in the body, or strict ASes (Notion) reject it as "multiple
     // authentication methods".
-    headers.Authorization = `Basic ${Buffer.from(`${connector.clientId}:${connector.clientSecret}`).toString("base64")}`;
+    headers.Authorization = `Basic ${Buffer.from(`${app.clientId}:${app.clientSecret}`).toString("base64")}`;
   } else {
     // client_secret_post or public client (none): client_id in the body; the
     // secret joins it only for the post method.
-    body.set("client_id", connector.clientId!);
-    if (connector.clientSecret) body.set("client_secret", connector.clientSecret);
+    body.set("client_id", app.clientId!);
+    if (app.clientSecret) body.set("client_secret", app.clientSecret);
   }
   if (resourceUrl) body.set("resource", resourceUrl);
 
@@ -220,23 +220,23 @@ async function exchangeConnectorToken(
     accessToken: tokens.access_token,
     refreshToken: tokens.refresh_token,
     expiresAt: tokens.expires_in ? Math.floor(Date.now() / 1000) + tokens.expires_in : undefined,
-    scopes: tokens.scope ?? (connector.metadata.scopes ?? []).join(" "),
+    scopes: tokens.scope ?? (app.metadata.scopes ?? []).join(" "),
   };
 }
 
-export async function handleConnectorCallback(
-  connector: Connector,
+export async function handleCustomAppCallback(
+  app: CustomApp,
   code: string,
   state: string
 ): Promise<{ userId: string }> {
   const authState = await verifyAuthState(state);
-  if (!authState || authState.integration !== integrationKey(connector.id)) {
+  if (!authState || authState.integration !== integrationKey(app.id)) {
     throw new Error("Invalid state");
   }
   if (!authState.codeVerifier) throw new Error("Missing code verifier");
 
-  const tokens = await exchangeConnectorToken(connector, code, authState.codeVerifier);
-  await storeToken(authState.userId, integrationKey(connector.id), {
+  const tokens = await exchangeCustomAppToken(app, code, authState.codeVerifier);
+  await storeToken(authState.userId, integrationKey(app.id), {
     accessToken: tokens.accessToken,
     refreshToken: tokens.refreshToken,
     expiresAt: tokens.expiresAt,
@@ -246,7 +246,7 @@ export async function handleConnectorCallback(
 }
 
 /**
- * Return a valid access token for a connector, refreshing (and re-storing)
+ * Return a valid access token for a app, refreshing (and re-storing)
  * when the stored one is within the expiry skew. Throws NOT_CONNECTED when the
  * user has no stored token.
  */
@@ -255,16 +255,16 @@ export async function handleConnectorCallback(
 // extras / revokes the family). One refresh, everyone awaits it.
 const refreshLocks = new Map<string, Promise<string>>();
 
-export async function ensureConnectorToken(userId: string, connector: Connector): Promise<string> {
-  const data = await getToken(userId, integrationKey(connector.id));
+export async function ensureCustomAppToken(userId: string, app: CustomApp): Promise<string> {
+  const data = await getToken(userId, integrationKey(app.id));
   if (!data) throw new Error("NOT_CONNECTED");
   const now = Math.floor(Date.now() / 1000);
   if (data.expiresAt && data.expiresAt - TOKEN_EXPIRY_SKEW_SECONDS <= now) {
     if (!data.refreshToken) throw new Error("Token expired and no refresh_token stored");
-    const key = `${userId}:${connector.id}`;
+    const key = `${userId}:${app.id}`;
     let refresh = refreshLocks.get(key);
     if (!refresh) {
-      refresh = doRefresh(userId, connector, data.refreshToken, data.scopes, data.config);
+      refresh = doRefresh(userId, app, data.refreshToken, data.scopes, data.config);
       refreshLocks.set(key, refresh);
       void refresh.finally(() => refreshLocks.delete(key));
     }
@@ -275,13 +275,13 @@ export async function ensureConnectorToken(userId: string, connector: Connector)
 
 async function doRefresh(
   userId: string,
-  connector: Connector,
+  app: CustomApp,
   refreshToken: string,
   scopes: string,
   config: string | undefined
 ): Promise<string> {
-  const refreshed = await refreshConnectorToken(connector, refreshToken);
-  await storeToken(userId, integrationKey(connector.id), {
+  const refreshed = await refreshCustomAppToken(app, refreshToken);
+  await storeToken(userId, integrationKey(app.id), {
     accessToken: refreshed.accessToken,
     // Many ASes omit refresh_token on refresh (rotation windows, opaque
     // tokens) — falling back to the stored one keeps the connection alive
@@ -294,14 +294,14 @@ async function doRefresh(
   return refreshed.accessToken;
 }
 
-/** Refresh a connector's access token (called from the tool context). */
-export async function refreshConnectorToken(
-  connector: Connector,
+/** Refresh a app's access token (called from the tool context). */
+export async function refreshCustomAppToken(
+  app: CustomApp,
   refreshToken: string
 ): Promise<{ accessToken: string; refreshToken?: string; expiresAt?: number }> {
-  const { tokenEndpoint, resourceUrl } = connector.metadata;
-  if (!tokenEndpoint) throw new Error("Connector has no token endpoint");
-  if (!connector.clientId) throw new Error("Connector has no registered OAuth client");
+  const { tokenEndpoint, resourceUrl } = app.metadata;
+  if (!tokenEndpoint) throw new Error("CustomApp has no token endpoint");
+  if (!app.clientId) throw new Error("CustomApp has no registered OAuth client");
 
   const headers: Record<string, string> = {
     "Content-Type": "application/x-www-form-urlencoded",
@@ -311,11 +311,11 @@ export async function refreshConnectorToken(
     grant_type: "refresh_token",
     refresh_token: refreshToken,
   });
-  if (connector.clientSecret && connector.metadata.authMethod === "client_secret_basic") {
-    headers.Authorization = `Basic ${Buffer.from(`${connector.clientId}:${connector.clientSecret}`).toString("base64")}`;
+  if (app.clientSecret && app.metadata.authMethod === "client_secret_basic") {
+    headers.Authorization = `Basic ${Buffer.from(`${app.clientId}:${app.clientSecret}`).toString("base64")}`;
   } else {
-    body.set("client_id", connector.clientId);
-    if (connector.clientSecret) body.set("client_secret", connector.clientSecret);
+    body.set("client_id", app.clientId);
+    if (app.clientSecret) body.set("client_secret", app.clientSecret);
   }
   if (resourceUrl) body.set("resource", resourceUrl);
 

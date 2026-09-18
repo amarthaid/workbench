@@ -4,10 +4,10 @@ import { registry } from "../plugins/registry";
 import { createContext } from "../plugins/context";
 import { auditLogger } from "../audit/logger";
 import { getToken } from "../auth/tokens";
-import { getToolForUser, searchForUser, type IndexedTool } from "../connectors/index";
-import { getConnector, listConnectors, integrationKey } from "../connectors/store";
-import { ensureConnectorToken } from "../connectors/oauth";
-import { callRemoteTool } from "../connectors/client";
+import { getToolForUser, searchForUser, type IndexedTool } from "../custom-apps/index";
+import { getCustomApp, listCustomApps, integrationKey } from "../custom-apps/store";
+import { ensureCustomAppToken } from "../custom-apps/oauth";
+import { callRemoteTool } from "../custom-apps/client";
 import { getUserById } from "../auth/users";
 import { hasValidCookies } from "../auth/cookie";
 import { withSpan } from "../telemetry/tracing";
@@ -84,8 +84,8 @@ export async function executeSingle(
 ): Promise<ExecResult> {
   const targetTool = registry.getTool(toolName);
   if (!targetTool) {
-    const connectorTool = await getToolForUser(userId, toolName);
-    if (connectorTool) return executeConnectorSingle(userId, connectorTool, rawArgs);
+    const appTool = await getToolForUser(userId, toolName);
+    if (appTool) return executeCustomAppSingle(userId, appTool, rawArgs);
   }
   return withSpan(
     "execute_single",
@@ -340,31 +340,31 @@ export async function executeSingle(
   );
 }
 
-// Connector execution: an external MCP server registered per-user. Args pass
+// CustomApp execution: an external MCP server registered per-user. Args pass
 // through unvalidated (JSON Schema, no zod) — the remote server rejects bad
 // args. Vault refs still interpolate and the result is still scrub-checked.
 // ponytail: does not wire the recent-substitution ring (scrub covers this
 // call's substitutions only) and does not render image blocks (data dropped
-// to a marker). Add both if connectors start round-tripping vault values or
+// to a marker). Add both if custom apps start round-tripping vault values or
 // returning images.
-export async function executeConnectorSingle(
+export async function executeCustomAppSingle(
   userId: string,
   tool: IndexedTool,
   rawArgs: Record<string, unknown>
 ): Promise<ExecResult> {
   return withSpan(
-    "execute_connector",
+    "execute_custom_app",
     async () => {
       const start = Date.now();
 
-      const connector = await getConnector(userId, tool.connectorId);
-      if (!connector) {
-        return { error: "Connector not found" };
+      const app = await getCustomApp(userId, tool.appId);
+      if (!app) {
+        return { error: "CustomApp not found" };
       }
 
       let accessToken: string;
       try {
-        accessToken = await ensureConnectorToken(userId, connector);
+        accessToken = await ensureCustomAppToken(userId, app);
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         await auditLogger.log({
@@ -405,7 +405,7 @@ export async function executeConnectorSingle(
 
       try {
         const result = scrubVaultValues(
-          await callRemoteTool(connector.baseUrl, accessToken, tool.remoteName, effectiveArgs),
+          await callRemoteTool(app.baseUrl, accessToken, tool.remoteName, effectiveArgs),
           scrubEntries,
           substringOk
         ) as { content?: Array<{ type?: string; text?: string }>; isError?: boolean };
@@ -508,12 +508,12 @@ export const metaTools = [
         description: t.description,
         integration: t.integration,
       }));
-      const connectors = (await searchForUser(ctx.userId, args.query)).map((t) => ({
+      const customApps = (await searchForUser(ctx.userId, args.query)).map((t) => ({
         name: t.name,
         description: t.description,
         integration: t.integration,
       }));
-      return { tools: [...builtin, ...connectors] };
+      return { tools: [...builtin, ...customApps] };
     },
   },
   {
@@ -578,15 +578,15 @@ export const metaTools = [
                 : !!(await getToken(ctx.userId, i.name)),
         }))
       );
-      const connectors = await listConnectors(ctx.userId);
-      const connectorItems = await Promise.all(
-        connectors.map(async (c) => ({
+      const customApps = await listCustomApps(ctx.userId);
+      const customAppItems = await Promise.all(
+        customApps.map(async (c) => ({
           name: c.name,
-          version: "connector",
+          version: "custom",
           connected: !!(await getToken(ctx.userId, integrationKey(c.id))),
         }))
       );
-      return { integrations: [...items, ...connectorItems] };
+      return { integrations: [...items, ...customAppItems] };
     },
   },
   {

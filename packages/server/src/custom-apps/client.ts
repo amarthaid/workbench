@@ -9,7 +9,7 @@ export interface RemoteTool {
 }
 
 // ponytail: fresh Client+transport per operation (re-initializes each call).
-// Add a per-(user,connector) session cache if round-trips or server session
+// Add a per-(user,app) session cache if round-trips or server session
 // churn ever matter.
 async function withClient<T>(
   baseUrl: string,

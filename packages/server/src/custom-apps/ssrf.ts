@@ -2,7 +2,7 @@ import { isPrivateHost } from "../auth/plugin-oauth";
 import { config } from "../config";
 
 /**
- * Connector base URLs AND every endpoint the remote metadata advertises are
+ * CustomApp base URLs AND every endpoint the remote metadata advertises are
  * user/attacker-influenced and fetched server-side (metadata discovery, client
  * registration, token exchange, tool calls) — the SSRF surface. Everything
  * private (RFC1918, link-local incl. cloud metadata, unique/local IPv6) is
@@ -24,7 +24,7 @@ export function isBlockedHost(hostname: string): boolean {
   return isPrivateHost(h);
 }
 
-/** Validate a connector base URL: http(s) only, no creds, host not blocked. */
+/** Validate a app base URL: http(s) only, no creds, host not blocked. */
 export function normalizeBaseUrl(raw: string): string | null {
   let u: URL;
   try {
