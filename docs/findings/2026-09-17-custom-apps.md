@@ -50,8 +50,11 @@ The AS/resource metadata endpoints (registration, token, authorization) and each
 redirect hop are validated with `assertSafeUrl`/`safeFetch` — http(s) only, no
 embedded creds, non-private host. `safeFetch` uses `redirect: "manual"` and
 rejects a 3xx rather than following it to an internal host. `isPrivateHost`
-handles IPv4-mapped IPv6 (`[::ffff:a9fe:a9fe]` = 169.254.169.254), and loopback
-is allowed only outside production.
+handles IPv4-mapped IPv6 (`[::ffff:a9fe:a9fe]` = 169.254.169.254). DNS names are
+resolved and rejected if any IP is private (blocks `169.254.169.254.nip.io` and
+internal names), and plain-HTTP fetches are pinned to the resolved IP so a
+second lookup can't rebind. Loopback is allowed only when NODE_ENV is explicitly
+`development`.
 
 ## encryption.ts load-time side effect broke config-mocked tests
 
@@ -76,5 +79,7 @@ fresh loads 404'd all along), and `/authorize` swallowed the portal's
 - Smoke-tested the full loop against a mock MCP+OAuth server
   (discovery → registration → PKCE → token → tools/list → tools/call), green;
   a real provider (Notion) connected and ran tools.
-- SSRF guard is literal-only (DNS-resolved private hosts pass), same ceiling as
-  the plugin instance allowlist.
+- HTTPS rebinding is not pinned (cert/SNI are bound to the hostname, so the
+  fetch keeps the name); resolve+check still blocks the common nip.io case.
+- No-auth MCP servers and non-DCR (manual client id/secret) are unsupported —
+  OAuth + dynamic client registration only.
