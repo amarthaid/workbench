@@ -15,7 +15,9 @@ export interface AppLabel {
 export function integrationLookup(integrations: IntegrationSummary[]): (name: string) => AppLabel {
   const map = new Map<string, AppLabel>();
   integrations.forEach((i) => map.set(i.name, { label: i.displayName || i.name, logo: i.logo }));
-  return (name: string) => map.get(name) ?? { label: name };
+  // A custom-app key no longer in the registry is a deleted app — show that
+  // instead of leaking the raw `custom:<uuid>` key.
+  return (name: string) => map.get(name) ?? (name.startsWith("custom:") ? { label: "Deleted app" } : { label: name });
 }
 
 // Rows arrive newest-first; walk them in order and emit a group header row
