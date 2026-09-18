@@ -71,7 +71,7 @@ async function discover(userId: string): Promise<IndexedTool[]> {
     }
     try {
       const remote = await Promise.race([
-        discoverTools(c.baseUrl, token),
+        discoverTools(userId, c.baseUrl, token),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error(`discovery timed out after ${DISCOVERY_TIMEOUT_MS}ms`)), DISCOVERY_TIMEOUT_MS)
         ),

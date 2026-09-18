@@ -405,7 +405,7 @@ export async function executeCustomAppSingle(
 
       try {
         const result = scrubVaultValues(
-          await callRemoteTool(app.baseUrl, accessToken, tool.remoteName, effectiveArgs),
+          await callRemoteTool(userId, app.baseUrl, accessToken, tool.remoteName, effectiveArgs),
           scrubEntries,
           substringOk
         ) as { content?: Array<{ type?: string; text?: string }>; isError?: boolean };

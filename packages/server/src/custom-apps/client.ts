@@ -27,16 +27,16 @@ function authHeaders(token: string): { Authorization: string } {
 }
 
 // Session cache: stateful MCP servers keep state in a session (Mcp-Session-Id),
-// so a fresh Client + initialize per call would lose it. Keyed by
-// server:token (equivalent to user:server — the token is per-user); a token
-// change (refresh) drops the session, which is fine — the old token is invalid
-// for it anyway.
-const sessions = new Map<string, Client>();
+// so a fresh Client + initialize per call would lose it. Keyed by user:server;
+// a token change (refresh) closes the old session — its token is invalid for
+// the server anyway.
+const sessions = new Map<string, { client: Client; token: string }>();
 
-async function getSession(baseUrl: string, token: string): Promise<Client> {
-  const key = `${baseUrl}::${token}`;
+async function getSession(userId: string, baseUrl: string, token: string): Promise<Client> {
+  const key = `${userId}::${baseUrl}`;
   const existing = sessions.get(key);
-  if (existing) return existing;
+  if (existing && existing.token === token) return existing.client;
+  if (existing) await existing.client.close().catch(() => undefined);
 
   const client = new Client(CLIENT_INFO);
   try {
@@ -56,17 +56,17 @@ async function getSession(baseUrl: string, token: string): Promise<Client> {
           requestInit: { headers: authHeaders(token) },
         })
       );
-      sessions.set(key, sse);
+      sessions.set(key, { client: sse, token });
       return sse;
     }
     throw e;
   }
-  sessions.set(key, client);
+  sessions.set(key, { client, token });
   return client;
 }
 
-export async function discoverTools(baseUrl: string, token: string): Promise<RemoteTool[]> {
-  const client = await getSession(baseUrl, token);
+export async function discoverTools(userId: string, baseUrl: string, token: string): Promise<RemoteTool[]> {
+  const client = await getSession(userId, baseUrl, token);
   const { tools } = await client.listTools();
   return tools.map((t) => {
     const tool = t as { name: string; description?: string; title?: string; annotations?: unknown; inputSchema: unknown };
@@ -81,12 +81,13 @@ export async function discoverTools(baseUrl: string, token: string): Promise<Rem
 }
 
 export async function callRemoteTool(
+  userId: string,
   baseUrl: string,
   token: string,
   remoteName: string,
   args: Record<string, unknown>
 ): Promise<unknown> {
-  const client = await getSession(baseUrl, token);
+  const client = await getSession(userId, baseUrl, token);
   const result = (await client.callTool(
     { name: remoteName, arguments: args },
     undefined,
