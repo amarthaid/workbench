@@ -133,10 +133,12 @@ export default function AppDetail() {
             <span className="wb-detail-key">Auth</span>
             <span className="wb-detail-val">{data.authType}</span>
           </BoxRow>
-          <BoxRow>
-            <span className="wb-detail-key">Version</span>
-            <span className="wb-detail-val">v{data.version}</span>
-          </BoxRow>
+          {!data.custom && (
+            <BoxRow>
+              <span className="wb-detail-key">Version</span>
+              <span className="wb-detail-val">v{data.version}</span>
+            </BoxRow>
+          )}
           {data.categories && data.categories.length > 0 && (
             <BoxRow>
               <span className="wb-detail-key">Categories</span>

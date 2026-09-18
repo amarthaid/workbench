@@ -283,8 +283,10 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     }
 
     // Custom apps (per-user external MCP servers) sit beside native apps in
-    // the same list — distinguished by `custom: true`.
+    // the same list — distinguished by `custom: true`. Their tool count comes
+    // from the cached per-user index (live discovery, single-flighted).
     const customApps = await listCustomApps(user.userId);
+    const customIndex = await ensureIndex(user.userId);
     return {
       integrations: [
         ...registry.listIntegrations().map((i) => ({
@@ -302,12 +304,12 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
         })),
         ...customApps.map((c) => ({
           name: integrationKey(c.id),
-          version: "custom",
+          version: "MCP",
           displayName: c.name,
           description: `Custom MCP server at ${c.baseUrl}`,
           authType: "oauth2" as const,
           custom: true,
-          toolCount: 0,
+          toolCount: customIndex.filter((t) => t.appId === c.id).length,
           configured: true,
         })),
       ],
@@ -330,7 +332,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
         const tools = (await ensureIndex(user.userId)).filter((t) => t.appId === customId);
         return {
           name: integrationKey(app.id),
-          version: "custom",
+          version: "MCP",
           displayName: app.name,
           description: `Custom MCP server at ${app.baseUrl}`,
           authType: "oauth2",

@@ -214,7 +214,9 @@ function AppCell({
       <IntegrationLogo name={i.name} displayName={i.displayName} logo={i.logo} size={24} />
       <span className="wb-app-cell-text">
         <span className="wb-app-cell-name">{label}</span>
-        <span className="wb-app-cell-meta">v{i.version} · {i.toolCount} tools</span>
+        <span className="wb-app-cell-meta">
+          {i.custom ? `${i.toolCount} tools · MCP server` : `v${i.version} · ${i.toolCount} tools`}
+        </span>
       </span>
     </>
   );
