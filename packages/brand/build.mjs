@@ -45,7 +45,7 @@ if (sync) {
 
 if (process.env.BRAND_SKIP_PNG) { console.log("brand: skipped PNGs (BRAND_SKIP_PNG)"); process.exit(0); }
 
-const PNGS = ["favicon-32.png", "apple-touch-180.png", "og-1200x630.png"];
+const PNGS = ["favicon-32.png", "apple-touch-180.png", "og-1200x630.png", "og-otl-1200x630.png"];
 const { chromium } = await import("playwright");
 const browser = await chromium.launch();
 async function png(name, { width, height, html }) {
@@ -61,6 +61,17 @@ await png("og-1200x630.png", {
   html: `<div style="width:1200px;height:630px;background:${tokens.accent};display:flex;align-items:center;justify-content:center;gap:40px;font-family:Inter,-apple-system,system-ui,sans-serif">` +
         markSvg({ color: "#ffffff", surface: tokens.accent, size: 220 }) +
         `<span style="color:#fff;font-size:120px;font-weight:800;letter-spacing:-.03em">workbench</span></div>`,
+});
+// The unfurl card for a one-time vault link (GET /api/vault/otl/:token) —
+// what Slack, Teams and friends show when the link is pasted into a chat.
+await png("og-otl-1200x630.png", {
+  width: 1200, height: 630,
+  html: `<div style="width:1200px;height:630px;box-sizing:border-box;padding:0 96px;background:${tokens.accent};display:flex;flex-direction:column;justify-content:center;gap:36px;font-family:Inter,-apple-system,system-ui,sans-serif;color:#fff">` +
+        `<div style="display:flex;align-items:center;gap:24px">` +
+        markSvg({ color: "#ffffff", surface: tokens.accent, size: 96 }) +
+        `<span style="font-size:56px;font-weight:800;letter-spacing:-.03em">workbench</span></div>` +
+        `<div style="font-size:96px;font-weight:800;letter-spacing:-.03em;line-height:1">One-time secret</div>` +
+        `<div style="font-size:36px;font-weight:500;color:${tokens.accentLine}">Opens once. Link previews don\u2019t spend it.</div></div>`,
 });
 await browser.close();
 if (sync) for (const f of PNGS) copyFileSync(join(dist, f), join(staticDir, f));

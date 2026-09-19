@@ -132,7 +132,7 @@ export default function VaultOneTime() {
             </label>
             <p className="ui-stat-note">
               Not saved to your vault. You get a URL that returns this value once; the value is destroyed on the
-              first fetch, or when the link expires.
+              first download, or when the link expires. Safe to paste into Slack — link previews do not spend it.
             </p>
             {formError && <div className="ui-form-error">{formError}</div>}
             <div className="wb-form-actions">

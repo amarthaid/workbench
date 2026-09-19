@@ -136,7 +136,7 @@ describe("vault routes", () => {
     const m = await mintOtl("u1", "pw");
     expect((await app.inject({ method: "DELETE", url: "/api/vault/pw", headers: P1 })).statusCode).toBe(204);
     expect((await app.inject({ method: "DELETE", url: "/api/vault/pw", headers: P1 })).statusCode).toBe(404);
-    expect((await app.inject({ method: "GET", url: `/api/vault/otl/${m.token}` })).statusCode).toBe(404);
+    expect((await app.inject({ method: "POST", url: `/api/vault/otl/${m.token}` })).statusCode).toBe(404);
   });
 
   it("a user cannot delete another user's secret", async () => {
@@ -148,16 +148,60 @@ describe("vault routes", () => {
   it("OTL redeems once as text/plain with no-store, then 404s", async () => {
     await putSecret("u1", "pw", "hunter2");
     const m = await mintOtl("u1", "pw");
-    const r = await app.inject({ method: "GET", url: `/api/vault/otl/${m.token}` });
+    const r = await app.inject({ method: "POST", url: `/api/vault/otl/${m.token}` });
     expect(r.statusCode).toBe(200);
     expect(r.body).toBe("hunter2");
     expect(r.headers["content-type"]).toMatch(/^text\/plain/);
     expect(r.headers["cache-control"]).toBe("no-store");
     expect(r.headers["x-content-type-options"]).toBe("nosniff");
     expect(r.headers["content-disposition"]).toContain("attachment");
-    const again = await app.inject({ method: "GET", url: `/api/vault/otl/${m.token}` });
+    const again = await app.inject({ method: "POST", url: `/api/vault/otl/${m.token}` });
     expect(again.statusCode).toBe(404);
     expect(again.body).toBe("");
+  });
+
+  it("OTL survives a link-unfurler GET; only POST spends it", async () => {
+    await putSecret("u1", "pw", "hunter2");
+    const m = await mintOtl("u1", "pw");
+    const url = `/api/vault/otl/${m.token}`;
+    // Slackbot and friends fetch every pasted link, as a browser would.
+    const preview = await app.inject({
+      method: "GET",
+      url,
+      headers: { accept: "text/html,*/*;q=0.8", "user-agent": "Slackbot-LinkExpanding 1.0" },
+    });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.headers["content-type"]).toMatch(/^text\/html/);
+    expect(preview.headers["cache-control"]).toBe("no-store");
+    expect(preview.headers["content-security-policy"]).toContain("default-src 'none'");
+    expect(preview.body).toContain('method="post"');
+    // Branded unfurl card: title, description and a large image.
+    expect(preview.body).toContain('<meta property="og:title" content="One-time secret">');
+    expect(preview.body).toMatch(/<meta property="og:image" content="https?:\/\/[^"]+\/og-otl-1200x630\.png">/);
+    expect(preview.body).toContain('<meta name="twitter:card" content="summary_large_image">');
+    expect(preview.body).not.toContain("hunter2");
+    expect(preview.body).not.toContain(m.token);
+    // A non-browser GET (the old `curl "$URL"`) fails loudly, spends nothing.
+    const script = await app.inject({ method: "GET", url, headers: { accept: "*/*" } });
+    expect(script.statusCode).toBe(405);
+    expect(script.headers.allow).toBe("POST");
+    expect(script.body).toContain("-X POST");
+    expect(script.body).not.toContain("hunter2");
+    await app.inject({ method: "HEAD", url });
+    // Still live: the POST redeems.
+    const r = await app.inject({ method: "POST", url });
+    expect(r.statusCode).toBe(200);
+    expect(r.body).toBe("hunter2");
+    // A browser form POST (text/plain, empty body) is accepted too.
+    const m2 = await mintOtl("u1", "pw");
+    const form = await app.inject({
+      method: "POST",
+      url: `/api/vault/otl/${m2.token}`,
+      headers: { "content-type": "text/plain" },
+      payload: "",
+    });
+    expect(form.statusCode).toBe(200);
+    expect(form.body).toBe("hunter2");
   });
 
   it("OTL 404s empty for junk, expired, and unknown alike", async () => {
@@ -167,7 +211,7 @@ describe("vault routes", () => {
     const m = await mintOtl("u1", "pw", 30);
     _setNowForTest(() => t0 + 31_000);
     for (const url of [`/api/vault/otl/${m.token}`, "/api/vault/otl/zz", `/api/vault/otl/${"0".repeat(32)}`]) {
-      const r = await app.inject({ method: "GET", url });
+      const r = await app.inject({ method: "POST", url });
       expect(r.statusCode).toBe(404);
       expect(r.body).toBe("");
     }
@@ -176,7 +220,7 @@ describe("vault routes", () => {
   it("OTL route never reaches the request log", async () => {
     await putSecret("u1", "pw", "hunter2");
     const m = await mintOtl("u1", "pw");
-    await app.inject({ method: "GET", url: `/api/vault/otl/${m.token}` });
+    await app.inject({ method: "POST", url: `/api/vault/otl/${m.token}` });
     await app.inject({ method: "GET", url: "/api/vault", headers: U1 });
     const joined = logged.join("\n");
     expect(joined).not.toContain(m.token);
@@ -186,7 +230,7 @@ describe("vault routes", () => {
   it("OTL redeem stamps last_used_at", async () => {
     await putSecret("u1", "pw", "hunter2");
     const m = await mintOtl("u1", "pw");
-    await app.inject({ method: "GET", url: `/api/vault/otl/${m.token}` });
+    await app.inject({ method: "POST", url: `/api/vault/otl/${m.token}` });
     const l = await app.inject({ method: "GET", url: "/api/vault", headers: U1 });
     expect(l.json().secrets[0].last_used_at).not.toBeNull();
   });
@@ -221,12 +265,12 @@ describe("vault routes", () => {
       await putSecret("u1", "pw", "hunter2");
 
       const path = new URL(url).pathname;
-      const first = await app.inject({ method: "GET", url: path });
+      const first = await app.inject({ method: "POST", url: path });
       expect(first.statusCode).toBe(200);
       expect(first.body).toBe("ZZ-ONE-SHOT-7c2a");
       expect(first.headers["cache-control"]).toBe("no-store");
       expect(first.headers["content-disposition"]).toContain("attachment");
-      const second = await app.inject({ method: "GET", url: path });
+      const second = await app.inject({ method: "POST", url: path });
       expect(second.statusCode).toBe(404);
       expect(second.body).toBe("");
       expect(logged.join("\n")).not.toContain("ZZ-ONE-SHOT");
@@ -257,7 +301,7 @@ describe("vault routes", () => {
       const short = await app.inject({ method: "POST", url: "/api/vault/otl", headers: P1, payload: { value: "v", ttl_seconds: 60 } });
       expect(short.json().expires_at).toBe(Math.ceil((t0 + 60_000) / 1000));
       _setNowForTest(() => t0 + 61_000);
-      expect((await app.inject({ method: "GET", url: new URL(short.json().url).pathname })).statusCode).toBe(404);
+      expect((await app.inject({ method: "POST", url: new URL(short.json().url).pathname })).statusCode).toBe(404);
     });
   });
 });

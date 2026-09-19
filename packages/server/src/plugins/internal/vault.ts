@@ -40,7 +40,7 @@ const tools: PluginTool[] = [
   },
   {
     name: "vault_presign",
-    description: `Mint a one-time URL for a secret's value, for when the value is needed OUTSIDE workbench — a local script, an .env file, a CI job. Fetch it from where the value is needed and write it straight to a file or a variable, never to your output: curl -fsS "$URL" -o ./secret.txt   or   TOKEN=$(curl -fsS "$URL"). The URL works exactly once and expires after ttl_seconds (default ${OTL_DEFAULT_TTL_SECONDS}, max ${OTL_MAX_TTL_SECONDS}); if the fetch fails, mint another. Do not fetch it yourself and do not print what it returns. For use inside another workbench tool, do not presign — write {{vault:NAME}} in that tool's arguments instead.`,
+    description: `Mint a one-time URL for a secret's value, for when the value is needed OUTSIDE workbench — a local script, an .env file, a CI job. Fetch it from where the value is needed and write it straight to a file or a variable, never to your output: curl -fsS -X POST "$URL" -o ./secret.txt   or   TOKEN=$(curl -fsS -X POST "$URL"). Redeem with POST — a GET never returns the value (it is a 405 for scripts, a download page for browsers), so link previews in chat apps cannot spend it. The URL works exactly once and expires after ttl_seconds (default ${OTL_DEFAULT_TTL_SECONDS}, max ${OTL_MAX_TTL_SECONDS}); if the fetch fails, mint another. Do not fetch it yourself and do not print what it returns. For use inside another workbench tool, do not presign — write {{vault:NAME}} in that tool's arguments instead.`,
     integration: VAULT_INTEGRATION_NAME,
     inputSchema: z.object({
       name: z.string(),
