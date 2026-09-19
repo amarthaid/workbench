@@ -9,10 +9,10 @@
   },
   "dependencies": {
     "@a-workbench/brand": "*",
-    "@tanstack/react-query": "^5.102.8",
+    "@tanstack/react-query": "^5.103.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
-    "react-router-dom": "^7.0"
+    "react-router-dom": "^7.18"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^7.0.1",
