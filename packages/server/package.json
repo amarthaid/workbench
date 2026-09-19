@@ -25,7 +25,7 @@
     "@opentelemetry/sdk-trace-node": "^2.11.0",
     "@opentelemetry/semantic-conventions": "^1.43.0",
     "@types/ws": "^8.18.1",
-    "bcryptjs": "^2.4",
+    "bcryptjs": "^3.0",
     "better-sqlite3": "^13.0.3",
     "fastify": "^5.12.4",
     "jose": "^6.2.10",
@@ -38,7 +38,7 @@
     "zod-to-json-schema": "^3.25.2"
   },
   "devDependencies": {
-    "@types/bcryptjs": "^2.4",
+    "@types/bcryptjs": "^3.0",
     "@types/node": "^20",
     "@types/pg": "^8.23.1",
     "@types/tar-stream": "^3.1.4",
