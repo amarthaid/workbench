@@ -1091,3 +1091,7 @@ body {
 
 .connect-pair-link.is-connected .connect-pair-dash,
 .connect-pair-link.is-connected .connect-pair-node { background: var(--ok); }
+
+/* Muted label for a deleted custom app — still shows in audit history, but
+   clearly not a live app. */
+.wb-app-deleted { color: var(--text-4); font-style: italic; }

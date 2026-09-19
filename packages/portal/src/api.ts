@@ -102,6 +102,8 @@ export interface IntegrationSummary {
   toolCount: number;
   configured?: boolean;
   authType?: string;
+  // True for a per-user custom app (external MCP server).
+  custom?: boolean;
   // Present when the integration supports a self-hosted instance URL prompt.
   instance?: InstanceConfig;
   // Present for apikey integrations: the connect-time form field spec.
@@ -143,6 +145,28 @@ export async function fetchKeycloakAuthUrl(ticket?: string): Promise<{ url: stri
   const qs = ticket ? `?ticket=${encodeURIComponent(ticket)}` : "";
   const res = await fetch(`${API_URL}/api/auth/keycloak${qs}`);
   if (!res.ok) throw new Error("Keycloak SSO not configured");
+  return res.json();
+}
+
+export async function createCustomApp(name: string, baseUrl: string): Promise<{ app: { id: string; name: string; baseUrl: string } }> {
+  const res = await fetch(`${API_URL}/api/custom-apps`, {
+    method: "POST",
+    headers: getHeaders(),
+    body: JSON.stringify({ name, baseUrl }),
+  });
+  if (!res.ok) {
+    const detail = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(detail.error || "Failed to register custom app");
+  }
+  return res.json();
+}
+
+export async function removeCustomApp(id: string): Promise<{ success: boolean }> {
+  const res = await fetch(`${API_URL}/api/custom-apps/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to delete custom app");
   return res.json();
 }
 

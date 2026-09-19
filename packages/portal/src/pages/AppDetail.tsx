@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   fetchIntegration,
@@ -8,6 +8,7 @@ import {
   importSession,
   openBrowserLiveUrl,
   resetBrowserSession,
+  removeCustomApp,
 } from "../api";
 import { PageHeader } from "../components/ui/PageHeader";
 import { Box, BoxRow } from "../components/ui/Box";
@@ -29,6 +30,25 @@ export default function AppDetail() {
   });
   const { data: connectionsData } = useQuery({ queryKey: ["connections"], queryFn: fetchConnections });
   const flow = useConnectFlow();
+  const navigate = useNavigate();
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  async function onDeleteApp() {
+    if (!data) return;
+    setConfirmDelete(false);
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      await removeCustomApp(data.name.replace(/^custom:/, ""));
+      navigate("/apps");
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : "Delete failed");
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
 
   const connected = useMemo(() => {
     const rows: { name: string; connected: boolean }[] = connectionsData?.connections ?? [];
@@ -79,6 +99,11 @@ export default function AppDetail() {
                   Disconnect
                 </Button>
               )}
+              {data.custom && (
+                <Button variant="danger" disabled={deleteBusy} onClick={() => setConfirmDelete(true)}>
+                  Delete app
+                </Button>
+              )}
             </>
           )
         }
@@ -108,10 +133,12 @@ export default function AppDetail() {
             <span className="wb-detail-key">Auth</span>
             <span className="wb-detail-val">{data.authType}</span>
           </BoxRow>
-          <BoxRow>
-            <span className="wb-detail-key">Version</span>
-            <span className="wb-detail-val">v{data.version}</span>
-          </BoxRow>
+          {!data.custom && (
+            <BoxRow>
+              <span className="wb-detail-key">Version</span>
+              <span className="wb-detail-val">v{data.version}</span>
+            </BoxRow>
+          )}
           {data.categories && data.categories.length > 0 && (
             <BoxRow>
               <span className="wb-detail-key">Categories</span>
@@ -156,6 +183,17 @@ export default function AppDetail() {
       </div>
 
       {flow.dialogs}
+
+      <ConfirmDialog
+        open={confirmDelete}
+        title={`Delete ${label}?`}
+        body="This removes the custom app and its stored credentials. Agents will lose its tools."
+        confirmLabel="Delete"
+        destructive
+        onCancel={() => setConfirmDelete(false)}
+        onConfirm={onDeleteApp}
+      />
+      {deleteError && <div className="ui-form-error">{deleteError}</div>}
     </>
   );
 }

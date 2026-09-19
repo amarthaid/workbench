@@ -58,20 +58,31 @@ export function getPluginCallbackUrl(integration: string): string {
  * isInstanceAllowed — but rejecting these outright stops the dumbest mistakes
  * even for an allowlisted-but-misconfigured deployment.
  */
-function isPrivateHost(host: string): boolean {
+function isPrivateIpv4(a: number, b: number): boolean {
+  if (a === 0 || a === 127 || a === 10) return true; // this-host, loopback, RFC1918
+  if (a === 169 && b === 254) return true; // link-local (incl. cloud metadata 169.254.169.254)
+  if (a === 172 && b >= 16 && b <= 31) return true; // RFC1918
+  if (a === 192 && b === 168) return true; // RFC1918
+  return false;
+}
+
+export function isPrivateHost(host: string): boolean {
   const h = host.toLowerCase();
   if (h === "localhost" || h.endsWith(".localhost")) return true;
   if (h === "[::1]" || h === "::1") return true;
   // IPv6 loopback / unique-local (fc00::/7) / link-local (fe80::/10).
   if (h.startsWith("[::1") || h.startsWith("[fc") || h.startsWith("[fd") || h.startsWith("[fe8") || h.startsWith("[fe9") || h.startsWith("[fea") || h.startsWith("[feb")) return true;
-  const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (m) {
-    const a = Number(m[1]);
-    const b = Number(m[2]);
-    if (a === 0 || a === 127 || a === 10) return true; // this-host, loopback, RFC1918
-    if (a === 169 && b === 254) return true; // link-local (incl. cloud metadata 169.254.169.254)
-    if (a === 172 && b >= 16 && b <= 31) return true; // RFC1918
-    if (a === 192 && b === 168) return true; // RFC1918
+  const ipv4 = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (ipv4) return isPrivateIpv4(Number(ipv4[1]), Number(ipv4[2]));
+  // IPv4-mapped IPv6: [::ffff:a.b.c.d] (dotted) or [::ffff:aaaa:bbbb] (hex) —
+  // e.g. [::ffff:a9fe:a9fe] is 169.254.169.254 and must not slip through.
+  const mapped = h.match(/^\[::ffff:(?:(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})|([0-9a-f]{1,4}):([0-9a-f]{1,4}))\]$/);
+  if (mapped) {
+    if (mapped[1] !== undefined) return isPrivateIpv4(Number(mapped[1]), Number(mapped[2]));
+    // Hex form: each 4-digit group is two octets (::ffff:xxyy:zzww → a.b.c.d
+    // = xx.yy.zz.ww). Only the first two octets matter for the private check.
+    const hi = parseInt(mapped[5], 16);
+    return isPrivateIpv4(hi >> 8, hi & 0xff);
   }
   return false;
 }

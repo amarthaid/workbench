@@ -22,6 +22,25 @@ import {
 } from "../auth/cookie";
 import { verifyConnectToken } from "../auth/connect-token";
 import { signConnectToken } from "../auth/connect-token";
+import {
+  createCustomApp,
+  getCustomApp,
+  getCustomAppById,
+  getCustomAppByName,
+  listCustomApps,
+  deleteCustomApp,
+  integrationKey,
+  idFromIntegrationKey,
+} from "../custom-apps/store";
+import {
+  discoverMetadata,
+  registerClient,
+  buildCustomAppAuthUrl,
+  handleCustomAppCallback,
+} from "../custom-apps/oauth";
+import { normalizeBaseUrl } from "../custom-apps/ssrf";
+import { invalidateIndex, ensureIndex } from "../custom-apps/index";
+import { evictSession } from "../custom-apps/client";
 import { markConnected, startReaper, redeemPending, getPending, createPending } from "../auth/connections";
 import { resumeAuthorize } from "../auth/oauth-server/resume";
 import { listAgents, revokeAgent } from "../auth/oauth-server/agents";
@@ -264,20 +283,37 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(401).send({ error: "Unauthorized" });
     }
 
+    // Custom apps (per-user external MCP servers) sit beside native apps in
+    // the same list — distinguished by `custom: true`. Their tool count comes
+    // from the cached per-user index (live discovery, single-flighted).
+    const customApps = await listCustomApps(user.userId);
+    const customIndex = await ensureIndex(user.userId);
     return {
-      integrations: registry.listIntegrations().map((i) => ({
-        name: i.name,
-        version: i.version,
-        displayName: i.displayName,
-        description: i.description,
-        categories: i.categories,
-        logo: resolveLogo(i),
-        authType: i.auth.type,
-        instance: i.auth.type === "oauth2" ? i.auth.instance : undefined,
-        apikeyFields: i.auth.type === "apikey" ? i.auth.fields : undefined,
-        toolCount: registry.listToolsByIntegration(i.name).length,
-        configured: isConfigured(i),
-      })),
+      integrations: [
+        ...registry.listIntegrations().map((i) => ({
+          name: i.name,
+          version: i.version,
+          displayName: i.displayName,
+          description: i.description,
+          categories: i.categories,
+          logo: resolveLogo(i),
+          authType: i.auth.type,
+          instance: i.auth.type === "oauth2" ? i.auth.instance : undefined,
+          apikeyFields: i.auth.type === "apikey" ? i.auth.fields : undefined,
+          toolCount: registry.listToolsByIntegration(i.name).length,
+          configured: isConfigured(i),
+        })),
+        ...customApps.map((c) => ({
+          name: integrationKey(c.id),
+          version: "MCP",
+          displayName: c.name,
+          description: `Custom MCP server at ${c.baseUrl}`,
+          authType: "oauth2" as const,
+          custom: true,
+          toolCount: customIndex.filter((t) => t.appId === c.id).length,
+          configured: true,
+        })),
+      ],
     };
   });
 
@@ -290,6 +326,21 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
         return reply.status(401).send({ error: "Unauthorized" });
       }
       const integration = request.params.integration;
+      const customId = idFromIntegrationKey(integration);
+      if (customId) {
+        const app = await getCustomApp(user.userId, customId);
+        if (!app) return reply.status(404).send({ error: "Integration not found" });
+        const tools = (await ensureIndex(user.userId)).filter((t) => t.appId === customId);
+        return {
+          name: integrationKey(app.id),
+          version: "MCP",
+          displayName: app.name,
+          description: `Custom MCP server at ${app.baseUrl}`,
+          authType: "oauth2",
+          custom: true,
+          tools: tools.map((t) => ({ name: t.name, description: t.description })),
+        };
+      }
       const integ = registry.getIntegration(integration);
       if (!integ) {
         return reply.status(404).send({ error: "Integration not found" });
@@ -340,6 +391,22 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(401).send({ error: "Unauthorized" });
     }
     const { integration } = request.params as { integration: string };
+
+    // Custom apps connect through the same /api/auth/:integration endpoint as
+    // native apps — the integration name is the `custom:<id>` key.
+    const customId = idFromIntegrationKey(integration);
+    if (customId) {
+      const app = await getCustomApp(user.userId, customId);
+      if (!app) return reply.status(404).send({ error: "Integration not found" });
+      try {
+        const url = await buildCustomAppAuthUrl(user.userId, app);
+        return { type: "oauth2", url };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return reply.status(503).send({ error: message });
+      }
+    }
+
     const integ = registry.getIntegration(integration);
     if (!integ) {
       return reply.status(404).send({ error: "Integration not found" });
@@ -758,7 +825,14 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
               : !!(await getToken(user.userId, i.name)),
       }))
     );
-    return { connections };
+    const customApps = await listCustomApps(user.userId);
+    const customConnections = await Promise.all(
+      customApps.map(async (c) => ({
+        name: integrationKey(c.id),
+        connected: !!(await getToken(user.userId, integrationKey(c.id))),
+      }))
+    );
+    return { connections: [...connections, ...customConnections] };
   });
 
   // Disconnect: drop stored creds (OAuth tokens or cookies) for one integration.
@@ -770,6 +844,16 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
         return reply.status(401).send({ error: "Unauthorized" });
       }
       const { integration } = request.params;
+      // Custom apps disconnect by dropping their stored OAuth token.
+      const customId = idFromIntegrationKey(integration);
+      if (customId) {
+        const app = await getCustomApp(user.userId, customId);
+        if (!app) return reply.status(404).send({ error: "Integration not found" });
+        evictSession(user.userId, app.baseUrl);
+        await deleteToken(user.userId, integration);
+        invalidateIndex(user.userId);
+        return { success: true };
+      }
       const integ = registry.getIntegration(integration);
       if (!integ) {
         return reply.status(404).send({ error: "Integration not found" });
@@ -786,6 +870,89 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       return { success: true };
     }
   );
+
+  // --- Custom apps (per-user external MCP servers, exposed as apps) ---
+
+  app.post<{ Body: { name?: string; baseUrl?: string } }>("/api/custom-apps", async (request, reply) => {
+    const user = await authenticate(request);
+    if (!user) return reply.status(401).send({ error: "Unauthorized" });
+
+    const name = (request.body?.name ?? "").trim();
+    const baseUrl = (request.body?.baseUrl ?? "").trim();
+    if (!name || !baseUrl) return reply.status(400).send({ error: "name and baseUrl are required" });
+    if (name.length > 64) return reply.status(400).send({ error: "name too long" });
+
+    // Name is unique per user (it becomes the tool namespace); the UNIQUE
+    // constraint backs this, but a friendly message beats a raw SQL error.
+    if (await getCustomAppByName(user.userId, name)) {
+      return reply.status(409).send({ error: `An app named "${name}" already exists` });
+    }
+
+    try {
+      const normalized = normalizeBaseUrl(baseUrl);
+      if (!normalized) return reply.status(400).send({ error: `Invalid or blocked URL: ${baseUrl}` });
+
+      const id = crypto.randomUUID();
+      const metadata = await discoverMetadata(normalized);
+      const reg = await registerClient(metadata, id);
+      const app = await createCustomApp({
+        id,
+        userId: user.userId,
+        name,
+        baseUrl: normalized,
+        metadata: { ...metadata, authMethod: reg.authMethod },
+        clientId: reg.clientId,
+        clientSecret: reg.clientSecret,
+      });
+      return { app: { id: app.id, name: app.name, baseUrl: app.baseUrl } };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      request.log.warn({ name, err: message }, "custom app register failed");
+      return reply.status(400).send({ error: message });
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/custom-apps/:id", async (request, reply) => {
+    const user = await authenticate(request);
+    if (!user) return reply.status(401).send({ error: "Unauthorized" });
+    const app = await getCustomApp(user.userId, request.params.id);
+    if (!app) return reply.status(404).send({ error: "Custom app not found" });
+    evictSession(user.userId, app.baseUrl);
+    await deleteCustomApp(user.userId, request.params.id);
+    invalidateIndex(user.userId);
+    return { success: true };
+  });
+
+  // Provider redirects here after the user authorizes. Lands on the same
+  // /connected/:integration handshake page every other app uses.
+  app.get<{ Params: { id: string } }>("/api/custom-apps/:id/callback", async (request, reply) => {
+    const { id } = request.params;
+    const { code, state, error } = request.query as Record<string, string>;
+
+    const result = (status: "ok" | "denied" | "expired" | "failed") => {
+      const url = new URL(config.PORTAL_URL);
+      url.pathname = `/connected/${encodeURIComponent(integrationKey(id))}`;
+      url.searchParams.set("status", status);
+      return reply.redirect(url.toString());
+    };
+
+    if (error) return result(error === "access_denied" ? "denied" : "failed");
+    if (!code || !state) return result("failed");
+
+    const app = await getCustomAppById(id);
+    if (!app) return result("failed");
+
+    try {
+      const { userId } = await handleCustomAppCallback(app, code, state);
+      markConnected(userId, integrationKey(id));
+      invalidateIndex(userId);
+      return result("ok");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      request.log.warn({ id, err: message }, "custom app oauth callback failed");
+      return result(message === "Invalid state" ? "expired" : "failed");
+    }
+  });
 
   // Connected agents: MCP/OAuth clients the user has authorized to reach their
   // workbench. Distinct from /api/connections (workbench → SaaS). One row per

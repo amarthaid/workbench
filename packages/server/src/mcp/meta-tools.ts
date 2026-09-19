@@ -4,6 +4,10 @@ import { registry } from "../plugins/registry";
 import { createContext } from "../plugins/context";
 import { auditLogger } from "../audit/logger";
 import { getToken } from "../auth/tokens";
+import { getToolForUser, searchForUser, type IndexedTool } from "../custom-apps/index";
+import { getCustomApp, listCustomApps, integrationKey } from "../custom-apps/store";
+import { ensureCustomAppToken } from "../custom-apps/oauth";
+import { callRemoteTool } from "../custom-apps/client";
 import { getUserById } from "../auth/users";
 import { hasValidCookies } from "../auth/cookie";
 import { withSpan } from "../telemetry/tracing";
@@ -79,6 +83,10 @@ export async function executeSingle(
   rawArgs: Record<string, unknown>
 ): Promise<ExecResult> {
   const targetTool = registry.getTool(toolName);
+  if (!targetTool) {
+    const appTool = await getToolForUser(userId, toolName);
+    if (appTool) return executeCustomAppSingle(userId, appTool, rawArgs);
+  }
   return withSpan(
     "execute_single",
     async () => {
@@ -332,6 +340,134 @@ export async function executeSingle(
   );
 }
 
+// CustomApp execution: an external MCP server registered per-user. Args pass
+// through unvalidated (JSON Schema, no zod) — the remote server rejects bad
+// args. Vault refs still interpolate and the result is still scrub-checked.
+// ponytail: does not wire the recent-substitution ring (scrub covers this
+// call's substitutions only) and does not render image blocks (data dropped
+// to a marker). Add both if custom apps start round-tripping vault values or
+// returning images.
+export async function executeCustomAppSingle(
+  userId: string,
+  tool: IndexedTool,
+  rawArgs: Record<string, unknown>
+): Promise<ExecResult> {
+  return withSpan(
+    "execute_custom_app",
+    async () => {
+      const start = Date.now();
+
+      const app = await getCustomApp(userId, tool.appId);
+      if (!app) {
+        return { error: "CustomApp not found" };
+      }
+
+      let accessToken: string;
+      try {
+        accessToken = await ensureCustomAppToken(userId, app);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        await auditLogger.log({
+          user_id: userId,
+          integration: tool.integration,
+          tool: tool.name,
+          action: "EXECUTE",
+          success: false,
+          error: message,
+          duration_ms: Date.now() - start,
+        });
+        return { error: message, integration: tool.integration };
+      }
+
+      let effectiveArgs: Record<string, unknown> = rawArgs ?? {};
+      let substituted = new Map<string, string>();
+      try {
+        const resolved = await resolveVaultRefs(userId, effectiveArgs);
+        effectiveArgs = resolved.args;
+        substituted = resolved.substituted;
+      } catch (e) {
+        if (e instanceof VaultRefError) {
+          return { error: e.code, message: e.message };
+        }
+        throw e;
+      }
+      if (substituted.size > 0) {
+        void touchUsed(userId, [...substituted.keys()]).catch(() => undefined);
+      }
+
+      const scrubEntries: Array<readonly [string, string]> = [];
+      const substringOk = new Set<string>();
+      for (const [name, value] of substituted) {
+        if (value === "") continue;
+        substringOk.add(value);
+        scrubEntries.push([name, value]);
+      }
+
+      try {
+        const result = scrubVaultValues(
+          await callRemoteTool(userId, app.baseUrl, accessToken, tool.remoteName, effectiveArgs),
+          scrubEntries,
+          substringOk
+        ) as { content?: Array<{ type?: string; text?: string }>; isError?: boolean };
+        const duration_ms = Date.now() - start;
+
+        if (result.isError) {
+          // The remote MCP server reported a failed tool call — audit, metrics
+          // and REST status must reflect that, not a 200 "success".
+          const errText = (result.content ?? [])
+            .filter((b) => b.type === "text")
+            .map((b) => b.text ?? "")
+            .join("\n")
+            .slice(0, 500) || "Remote tool returned isError";
+          await auditLogger.log({
+            user_id: userId,
+            integration: tool.integration,
+            tool: tool.name,
+            action: "EXECUTE",
+            success: false,
+            error: errText,
+            duration_ms,
+          });
+          const durationS = duration_ms / 1000;
+          toolExecutionsTotal.inc({ integration: tool.integration, tool: tool.name, success: "false" });
+          toolExecutionDuration.observe({ integration: tool.integration, tool: tool.name, success: "false" }, durationS);
+          return { error: errText };
+        }
+
+        await auditLogger.log({
+          user_id: userId,
+          integration: tool.integration,
+          tool: tool.name,
+          action: "EXECUTE",
+          success: true,
+          duration_ms,
+        });
+        const durationS = duration_ms / 1000;
+        toolExecutionsTotal.inc({ integration: tool.integration, tool: tool.name, success: "true" });
+        toolExecutionDuration.observe({ integration: tool.integration, tool: tool.name, success: "true" }, durationS);
+        return { result };
+      } catch (e) {
+        const err = scrubString(e instanceof Error ? e.message : String(e), scrubEntries, substringOk);
+        const duration_ms = Date.now() - start;
+        await auditLogger.log({
+          user_id: userId,
+          integration: tool.integration,
+          tool: tool.name,
+          action: "EXECUTE",
+          success: false,
+          error: err,
+          duration_ms,
+        });
+        const durationS = duration_ms / 1000;
+        toolExecutionsTotal.inc({ integration: tool.integration, tool: tool.name, success: "false" });
+        toolExecutionDuration.observe({ integration: tool.integration, tool: tool.name, success: "false" }, durationS);
+        return { error: err };
+      }
+    },
+    { tool: tool.name, integration: tool.integration }
+  );
+}
+
 // Batch execution engine, shared by the `execute_tools` meta-tool and the REST
 // endpoint so both get identical semantics: bounded concurrency, index-aligned
 // results, and one failing item never aborting the rest.
@@ -366,31 +502,38 @@ export const metaTools = [
     name: "search_tools",
     description: "Search available tools by name or description",
     inputSchema: z.object({ query: z.string() }),
-    handler: async (_ctx: unknown, args: { query: string }) => {
-      const tools = registry.searchTools(args.query);
-      return {
-        tools: tools.map((t) => ({
-          name: t.name,
-          description: t.description,
-          integration: t.integration,
-        })),
-      };
+    handler: async (ctx: { userId: string }, args: { query: string }) => {
+      const builtin = registry.searchTools(args.query).map((t) => ({
+        name: t.name,
+        description: t.description,
+        integration: t.integration,
+      }));
+      const customApps = (await searchForUser(ctx.userId, args.query)).map((t) => ({
+        name: t.name,
+        description: t.description,
+        integration: t.integration,
+      }));
+      return { tools: [...builtin, ...customApps] };
     },
   },
   {
     name: "get_tool_schema",
     description: "Get input schema for a specific tool",
     inputSchema: z.object({ tool: z.string() }),
-    handler: async (_ctx: unknown, args: { tool: string }) => {
+    handler: async (ctx: { userId: string }, args: { tool: string }) => {
       const t = registry.getTool(args.tool);
-      if (!t) return { error: "Tool not found" };
-      // Return portable JSON Schema, not raw Zod internals, so any MCP client
-      // can consume it without Zod knowledge. Non-Zod schemas pass through.
-      const schema =
-        t.inputSchema instanceof z.ZodType
-          ? zodToJsonSchema(t.inputSchema as z.ZodTypeAny)
-          : t.inputSchema;
-      return { schema };
+      if (t) {
+        // Return portable JSON Schema, not raw Zod internals, so any MCP client
+        // can consume it without Zod knowledge. Non-Zod schemas pass through.
+        const schema =
+          t.inputSchema instanceof z.ZodType
+            ? zodToJsonSchema(t.inputSchema as z.ZodTypeAny)
+            : t.inputSchema;
+        return { schema };
+      }
+      const ct = await getToolForUser(ctx.userId, args.tool);
+      if (!ct) return { error: "Tool not found" };
+      return { schema: ct.inputSchema };
     },
   },
   {
@@ -435,7 +578,17 @@ export const metaTools = [
                 : !!(await getToken(ctx.userId, i.name)),
         }))
       );
-      return { integrations: items };
+      const customApps = await listCustomApps(ctx.userId);
+      const customAppItems = await Promise.all(
+        customApps.map(async (c) => ({
+          // Same key as search_tools/execute_tools (`custom:<id>`), so agents
+          // see one consistent identifier.
+          name: integrationKey(c.id),
+          version: "MCP",
+          connected: !!(await getToken(ctx.userId, integrationKey(c.id))),
+        }))
+      );
+      return { integrations: [...items, ...customAppItems] };
     },
   },
   {

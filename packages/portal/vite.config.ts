@@ -29,10 +29,17 @@ export default defineConfig({
       "/rest": "http://localhost:3001",
       "/.well-known": "http://localhost:3001",
       "/register": "http://localhost:3001",
-      "/authorize": "http://localhost:3001",
+      // Exact matches only: /authorize and /authorize/resume are server
+      // routes, but /authorize/choose is a portal SPA route — the raw
+      // "/authorize" prefix was swallowing it and the OAuth flow 404'd.
+      "^/authorize(?:/resume)?$": "http://localhost:3001",
       "/token": "http://localhost:3001",
       "/j": "http://localhost:3001",
-      "/c": "http://localhost:3001",
+      // Trailing slash matters: the proxy matches a raw path prefix, so a
+      // bare "/c" would also swallow SPA routes like /connect/:integration.
+      // Curl-proxy paths are always /c/<integration>/..., so "/c/" is exact
+      // enough.
+      "/c/": "http://localhost:3001",
     },
   },
 });
