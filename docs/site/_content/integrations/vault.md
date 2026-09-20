@@ -66,11 +66,11 @@ When the value is needed by a script, an `.env` file, a CI job — anything that
 The agent then has the *host* fetch it, straight to where it is needed:
 
 ```bash
-curl -fsS "$URL" -o ./.env.secret     # to a file
-DB_URL=$(curl -fsS "$URL")            # to a variable
+curl -fsS -X POST "$URL" -o ./.env.secret     # to a file
+DB_URL=$(curl -fsS -X POST "$URL")            # to a variable
 ```
 
-The URL works exactly once — the first `GET` spends it; a second returns 404 — and expires after `ttl_seconds` (default 120, max 600). If a fetch fails, mint another. The token is opaque, unauthenticated by design (it *is* the authorization), and the route is excluded from the request log.
+The URL works exactly once — the first `POST` spends it; a second returns 404 — and expires after `ttl_seconds` (default 120, max 600). If a fetch fails, mint another. The token is opaque, unauthenticated by design (it *is* the authorization), and the route is excluded from the request log.
 
 The tool's description tells the agent not to fetch the URL itself and not to print the response. That is a behavioural guard rail, not a technical one: an agent that `curl`s the URL and echoes the output has put the value in its context. Pipe to a file.
 
@@ -85,7 +85,14 @@ variable, never to its output.
 
 Two limits, whichever comes first, and neither is an access window:
 
-- the first `GET` returns the value and destroys it; a second `GET` is a 404
+- the first `POST` returns the value and destroys it; a second is a 404
+
+Only a `POST` redeems. Chat apps fetch every link pasted into them to build a
+preview — Slack, Teams, Discord, iMessage — and when a `GET` redeemed, that
+preview fetch spent the link before anyone it was meant for could use it. Now
+a browser `GET` gets a page with a **Download secret** button (the button is
+the `POST`), and any other `GET` is a `405` that names the `POST`, so a script
+still running a bare `curl "$URL"` fails instead of saving an HTML page.
 - unused, the link expires after the time you picked (1, 5 or 10 minutes;
   5 by default); the ciphertext is swept within the minute after that
 
@@ -110,7 +117,8 @@ through a link it then fetches.
 | `PUT` | `/api/vault/:name` | `{ value, description? }` → 201 created / 200 replaced (portal session) |
 | `DELETE` | `/api/vault/:name` | 204; revokes outstanding one-time URLs (portal session) |
 | `POST` | `/api/vault/otl` | `{ value, ttl_seconds? }` → 201 `{ url, expires_at }`; a one-time URL for a value that is never stored (portal session; default 300 s, max 600) |
-| `GET` | `/api/vault/otl/:token` | redeem once → `text/plain` body; 404 otherwise. No auth. Serves both kinds of link. |
+| `POST` | `/api/vault/otl/:token` | redeem once → `text/plain` body; 404 otherwise. No auth. Serves both kinds of link. |
+| `GET` | `/api/vault/otl/:token` | never redeems: a download page for a browser (`Accept: text/html`), `405` otherwise. Safe for link unfurlers. |
 
 Listing is readable with any bearer, including the agent's own API key or OAuth
 token. Writing and deleting are not: they need the portal-session token a

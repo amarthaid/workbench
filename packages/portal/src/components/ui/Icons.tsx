@@ -63,3 +63,20 @@ export function CheckIcon() {
     </svg>
   );
 }
+
+export function ChevronDownIcon() {
+  return (
+    <svg {...svgProps}>
+      <path d="M4 6l4 4 4-4" />
+    </svg>
+  );
+}
+
+export function RefreshIcon() {
+  return (
+    <svg {...svgProps}>
+      <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" />
+      <path d="M13.5 2.5v3h-3" />
+    </svg>
+  );
+}

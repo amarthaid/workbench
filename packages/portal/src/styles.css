@@ -348,9 +348,70 @@ body {
 /* A page whose whole content is one form (vault add/replace): back link,
    title and box share one centred column. */
 .wb-form-column { max-width: 640px; margin: 0 auto; }
+/* A form box clips nothing (no edge-to-edge rows to round off), and must not:
+   a PopoverSelect's list hangs below the box's bottom edge. */
+.ui-box.wb-form-page { overflow: visible; }
 .wb-form { display: grid; gap: var(--s-16); padding: var(--s-16); }
 .wb-form .ui-input { font-size: 15px; padding: var(--s-12); }
 .wb-form-actions { display: flex; gap: var(--s-8); padding-top: var(--s-4); }
+/* An input with a button beside it, outside its box (the one-time link and
+   its Copy button). */
+.wb-input-row { display: flex; gap: var(--s-8); align-items: stretch; }
+.wb-input-row .ui-input { flex: 1; min-width: 0; font-family: var(--mono); font-size: 13px; }
+/* Options on the left, the primary action on the right, one line. */
+.wb-form-bar { display: flex; align-items: center; justify-content: space-between; gap: var(--s-8); flex-wrap: wrap; }
+
+/* ui/PopoverSelect — a ghost trigger with a small listbox floating under it.
+   Edged by a strong border, not a shadow: shadows stay reserved for the
+   modal (styles.guard.test.ts). */
+.ui-popselect { position: relative; display: inline-block; }
+.ui-popselect-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-8);
+  font: inherit;
+  font-size: 14px;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: var(--s-8) var(--s-12);
+  cursor: pointer;
+}
+.ui-popselect-trigger:hover:not(:disabled) { background: var(--bg-sunk); color: var(--text); }
+.ui-popselect-trigger[aria-expanded="true"] { background: var(--bg-sunk); color: var(--text); border-color: var(--border); }
+.ui-popselect-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.ui-popselect-trigger:disabled { cursor: default; }
+.ui-popselect-list {
+  position: absolute;
+  top: calc(100% + var(--s-4));
+  left: 0;
+  z-index: 40;
+  min-width: 100%;
+  display: grid;
+  padding: var(--s-4);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+.ui-popselect-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-16);
+  font: inherit;
+  font-size: 14px;
+  white-space: nowrap;
+  text-align: left;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: var(--s-8) var(--s-12);
+  cursor: pointer;
+}
+.ui-popselect-option:hover, .ui-popselect-option:focus-visible { background: var(--bg-sunk); outline: none; }
+.ui-popselect-option[aria-selected="true"] { color: var(--accent); font-weight: 600; }
 
 /* ui/Modal */
 .ui-modal-backdrop {
