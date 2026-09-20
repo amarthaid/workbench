@@ -34,10 +34,14 @@ beforeEach(() => {
 });
 
 describe("VaultOneTime", () => {
-  it("mints with the default 5-minute ttl, then shows the link once and copies it", async () => {
+  it("mints with the default 5-minute ttl, then shows the link once with Copy beside it", async () => {
     renderPage();
     expect(screen.getByText("← Vault")).toBeInTheDocument();
-    expect(screen.getByRole("combobox")).toHaveValue("300");
+    // The value is the only field; expiry is a popover on the action row.
+    expect(document.querySelectorAll("input, select, textarea")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Expires if unused after: 5 minutes" })).toHaveTextContent(
+      "Expires in 5 minutes"
+    );
 
     const value = screen.getByLabelText("Value") as HTMLInputElement;
     expect(value.type).toBe("password");
@@ -50,16 +54,35 @@ describe("VaultOneTime", () => {
     const link = (await screen.findByLabelText("One-time link")) as HTMLInputElement;
     expect(link.value).toContain("/api/vault/otl/");
     expect(link.readOnly).toBe(true);
-    expect(screen.getByText(/expires in 5 minutes/)).toBeInTheDocument();
-    // The typed value is gone from the page.
+    expect(screen.getByText(/expires in 5 minutes\. Paste/)).toBeInTheDocument();
+    // The typed value is gone from the page; the expiry is fixed for this link.
     expect(screen.queryByLabelText("Value")).toBeNull();
+    expect(screen.getByRole("button", { name: /^Expires if unused after/ })).toBeDisabled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Copy link" }));
+    // Copy sits right after the link, in the same row.
+    const copyBtn = screen.getByRole("button", { name: "Copy" });
+    expect(link.nextElementSibling).toBe(copyBtn);
+    fireEvent.click(copyBtn);
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith(link.value));
     expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
+  });
 
-    fireEvent.click(screen.getByRole("button", { name: "Done" }));
-    expect(await screen.findByText("LIST PAGE")).toBeInTheDocument();
+  it("Create link again resets to an empty form, keeping the expiry", async () => {
+    renderPage();
+    fireEvent.click(screen.getByRole("button", { name: "Expires if unused after: 5 minutes" }));
+    fireEvent.click(screen.getByRole("option", { name: "10 minutes" }));
+    fireEvent.change(screen.getByLabelText("Value"), { target: { value: "first" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create link" }));
+    await screen.findByLabelText("One-time link");
+
+    fireEvent.click(screen.getByRole("button", { name: "Create link again" }));
+    expect(screen.queryByLabelText("One-time link")).toBeNull();
+    const value = screen.getByLabelText("Value") as HTMLInputElement;
+    expect(value.value).toBe("");
+    expect(value).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Expires if unused after: 10 minutes" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Create link" })).toBeInTheDocument();
+    expect(mintVaultOneTimeLink).toHaveBeenCalledTimes(1);
   });
 
   it("sends the chosen ttl and refuses an empty value without calling the API", async () => {
@@ -68,7 +91,8 @@ describe("VaultOneTime", () => {
     expect(await screen.findByText("Value cannot be empty.")).toBeInTheDocument();
     expect(mintVaultOneTimeLink).not.toHaveBeenCalled();
 
-    fireEvent.change(screen.getByRole("combobox"), { target: { value: "600" } });
+    fireEvent.click(screen.getByRole("button", { name: "Expires if unused after: 5 minutes" }));
+    fireEvent.click(screen.getByRole("option", { name: "10 minutes" }));
     fireEvent.change(screen.getByLabelText("Value"), { target: { value: "v" } });
     fireEvent.click(screen.getByRole("button", { name: "Create link" }));
     await waitFor(() => expect(mintVaultOneTimeLink).toHaveBeenCalledWith({ value: "v", ttl_seconds: 600 }));

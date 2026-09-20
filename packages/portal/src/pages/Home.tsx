@@ -6,6 +6,7 @@ import {
   fetchActivity,
   fetchIntegrations,
   fetchConnections,
+  fetchVaultSecrets,
   UNSTORED_MESSAGE,
   type IntegrationSummary,
 } from "../api";
@@ -37,6 +38,11 @@ export default function Home() {
   const { data: connectionsData, isError: connectionsIsError } = useQuery({
     queryKey: ["connections"],
     queryFn: fetchConnections,
+  });
+
+  const { data: secrets, isError: vaultIsError } = useQuery({
+    queryKey: ["vault"],
+    queryFn: fetchVaultSecrets,
   });
 
   const integrations: IntegrationSummary[] = registry?.integrations ?? [];
@@ -114,6 +120,27 @@ export default function Home() {
               )}
             </>
           )}
+        </Box>
+
+        <Box title="Vault" action={<Link to="/vault">Manage</Link>}>
+          <BoxRow>
+            <span className="wb-detail-key">Secrets</span>
+            <span className="wb-detail-val">
+              {vaultIsError
+                ? "Couldn't load vault."
+                : secrets === undefined
+                  ? "—"
+                  : secrets.length === 0
+                    ? "None yet"
+                    : `${secrets.length} stored`}
+            </span>
+            <span className="wb-app-cell-action"><Link to="/vault/new">Add secret</Link></span>
+          </BoxRow>
+          <BoxRow>
+            <span className="wb-detail-key">One-time link</span>
+            <span className="wb-app-cell-meta">Hand over a value once, without storing it</span>
+            <span className="wb-app-cell-action"><Link to="/vault/one-time">Create</Link></span>
+          </BoxRow>
         </Box>
 
         <Box title="Connect your agent" action={<Link to="/agents">Set up an agent</Link>}>

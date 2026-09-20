@@ -1,12 +1,13 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import { mintVaultOneTimeLink } from "../api";
 import { PageHeader } from "../components/ui/PageHeader";
 import { Box } from "../components/ui/Box";
 import { Button } from "../components/ui/Button";
-import { Input, Select } from "../components/ui/Input";
-import { CheckIcon, CopyIcon, EyeIcon, EyeOffIcon, LinkIcon } from "../components/ui/Icons";
+import { Input } from "../components/ui/Input";
+import { PopoverSelect } from "../components/ui/PopoverSelect";
+import { CheckIcon, ClockIcon, CopyIcon, EyeIcon, EyeOffIcon, LinkIcon, RefreshIcon } from "../components/ui/Icons";
 
 export const ONE_TIME_TTL_OPTIONS: { seconds: number; label: string }[] = [
   { seconds: 60, label: "1 minute" },
@@ -25,7 +26,6 @@ export const ONE_TIME_TTL_DEFAULT = 300;
  * of pending links and nothing to come back to, on purpose.
  */
 export default function VaultOneTime() {
-  const navigate = useNavigate();
   const [value, setValue] = useState("");
   const [showValue, setShowValue] = useState(false);
   const [ttl, setTtl] = useState(ONE_TIME_TTL_DEFAULT);
@@ -37,6 +37,7 @@ export default function VaultOneTime() {
     mutationFn: (input: { value: string; ttl_seconds: number }) => mintVaultOneTimeLink(input),
     onSuccess: (m) => {
       setValue("");
+      setShowValue(false);
       setMinted(m);
     },
     onError: (e: Error) => setFormError(e.message),
@@ -46,6 +47,15 @@ export default function VaultOneTime() {
     if (value === "") return setFormError("Value cannot be empty.");
     setFormError(null);
     mint.mutate({ value, ttl_seconds: ttl });
+  }
+
+  // Back to an empty form for the next value. The minted URL is dropped with
+  // it: the page never shows a link twice. The expiry choice is kept, and the
+  // value field remounts with autoFocus.
+  function reset() {
+    setMinted(null);
+    setCopied(false);
+    setFormError(null);
   }
 
   function copy() {
@@ -67,36 +77,32 @@ export default function VaultOneTime() {
       <PageHeader title="One-time link" />
 
       <Box className="wb-form-page">
-        {minted ? (
-          <div className="wb-form">
-            <label className="ui-field">
+        <form
+          className="wb-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (minted) reset();
+            else submit();
+          }}
+          autoComplete="off"
+        >
+          {minted ? (
+            <div className="ui-field">
               <span className="ui-field-label">Link</span>
-              <Input value={minted.url} readOnly onFocus={(e) => e.currentTarget.select()} aria-label="One-time link" />
-            </label>
-            <p className="ui-stat-note">
-              Works exactly once, then never again. Unused, it expires in {ttlLabel}. Paste it to your agent and
-              tell it to fetch the value straight into a file or a variable, not to print it.
-            </p>
-            {formError && <div className="ui-form-error">{formError}</div>}
-            <div className="wb-form-actions">
-              <Button type="button" onClick={copy}>
-                {copied ? <CheckIcon /> : <CopyIcon />}
-                {copied ? "Copied" : "Copy link"}
-              </Button>
-              <Button type="button" variant="ghost" onClick={() => navigate("/vault")}>
-                Done
-              </Button>
+              <span className="wb-input-row">
+                <Input
+                  value={minted.url}
+                  readOnly
+                  onFocus={(e) => e.currentTarget.select()}
+                  aria-label="One-time link"
+                />
+                <Button type="button" variant="secondary" onClick={copy}>
+                  {copied ? <CheckIcon /> : <CopyIcon />}
+                  {copied ? "Copied" : "Copy"}
+                </Button>
+              </span>
             </div>
-          </div>
-        ) : (
-          <form
-            className="wb-form"
-            onSubmit={(e) => {
-              e.preventDefault();
-              submit();
-            }}
-            autoComplete="off"
-          >
+          ) : (
             <label className="ui-field">
               <span className="ui-field-label">Value</span>
               <span className="ui-input-affix">
@@ -120,32 +126,32 @@ export default function VaultOneTime() {
                 </button>
               </span>
             </label>
-            <label className="ui-field">
-              <span className="ui-field-label">Expires if unused after</span>
-              <Select value={ttl} onChange={(e) => setTtl(Number(e.target.value))}>
-                {ONE_TIME_TTL_OPTIONS.map((o) => (
-                  <option key={o.seconds} value={o.seconds}>
-                    {o.label}
-                  </option>
-                ))}
-              </Select>
-            </label>
-            <p className="ui-stat-note">
-              Not saved to your vault. You get a URL that returns this value once; the value is destroyed on the
-              first download, or when the link expires. Safe to paste into Slack — link previews do not spend it.
-            </p>
-            {formError && <div className="ui-form-error">{formError}</div>}
-            <div className="wb-form-actions">
-              <Button type="submit" disabled={mint.isPending}>
-                <LinkIcon />
-                {mint.isPending ? "Creating…" : "Create link"}
-              </Button>
-              <Button type="button" variant="ghost" onClick={() => navigate("/vault")} disabled={mint.isPending}>
-                Cancel
-              </Button>
-            </div>
-          </form>
-        )}
+          )}
+
+          {formError && <div className="ui-form-error">{formError}</div>}
+
+          <div className="wb-form-bar">
+            <PopoverSelect
+              label="Expires if unused after"
+              icon={<ClockIcon />}
+              value={ttl}
+              options={ONE_TIME_TTL_OPTIONS.map((o) => ({ value: o.seconds, label: o.label }))}
+              display={(o) => `Expires in ${o.label}`}
+              onChange={setTtl}
+              disabled={minted !== null || mint.isPending}
+            />
+            <Button type="submit" disabled={mint.isPending}>
+              {minted ? <RefreshIcon /> : <LinkIcon />}
+              {minted ? "Create link again" : mint.isPending ? "Creating…" : "Create link"}
+            </Button>
+          </div>
+
+          <p className="ui-stat-note">
+            {minted
+              ? `Works exactly once, then never again. Unused, it expires in ${ttlLabel}. Paste it to your agent and tell it to fetch the value straight into a file or a variable, not to print it.`
+              : "Not saved to your vault. You get a URL that returns this value once; the value is destroyed on the first download, or when the link expires."}
+          </p>
+        </form>
       </Box>
     </div>
   );

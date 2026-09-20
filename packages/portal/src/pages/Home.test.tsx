@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import Home from "./Home";
 
@@ -9,10 +9,11 @@ vi.mock("../api", () => ({
   fetchActivity: vi.fn(),
   fetchIntegrations: vi.fn(),
   fetchConnections: vi.fn(),
+  fetchVaultSecrets: vi.fn(),
   UNSTORED_MESSAGE: "This deployment sends audit events somewhere other than its database, so there is nothing to show here. Set AUDIT_LOG_DEST=sqlite to record them.",
 }));
 
-import { fetchStats, fetchActivity, fetchIntegrations, fetchConnections } from "../api";
+import { fetchStats, fetchActivity, fetchIntegrations, fetchConnections, fetchVaultSecrets } from "../api";
 
 const NOW = Math.floor(Date.now() / 1000);
 
@@ -26,7 +27,11 @@ function renderPage() {
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter>
-        <Home />
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/vault" element={<div>VAULT PAGE</div>} />
+          <Route path="/vault/one-time" element={<div>ONE-TIME PAGE</div>} />
+        </Routes>
       </MemoryRouter>
     </QueryClientProvider>
   );
@@ -36,6 +41,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(fetchIntegrations).mockResolvedValue({ integrations: INTEGRATIONS });
   vi.mocked(fetchConnections).mockResolvedValue({ connections: [{ name: "acme", connected: true }] });
+  vi.mocked(fetchVaultSecrets).mockResolvedValue([
+    { name: "db_url", description: null, created_at: NOW, updated_at: NOW, last_used_at: null },
+    { name: "api_token", description: null, created_at: NOW, updated_at: NOW, last_used_at: null },
+  ]);
   vi.mocked(fetchStats).mockResolvedValue({
     stored: true, window_days: 30, tool_calls: 1284, success_rate: 0.97, most_used_integration: "acme",
   });
@@ -143,5 +152,24 @@ describe("Home", () => {
     await screen.findByText("12");
     expect(statValue("Success rate (30d)")).toBe("—");
     expect(statValue("Tool calls (30d)")).toBe("12");
+  });
+  it("shows a vault box with the secret count and quick links", async () => {
+    renderPage();
+    const box = (await screen.findByRole("heading", { name: "Vault" })).closest("section")!;
+    await waitFor(() => expect(box).toHaveTextContent("2 stored"));
+    expect(screen.getByRole("link", { name: "Manage" })).toHaveAttribute("href", "/vault");
+    expect(screen.getByRole("link", { name: "Add secret" })).toHaveAttribute("href", "/vault/new");
+    fireEvent.click(screen.getByRole("link", { name: "Create" }));
+    expect(await screen.findByText("ONE-TIME PAGE")).toBeInTheDocument();
+  });
+
+  it("says so when the vault is empty or fails to load", async () => {
+    vi.mocked(fetchVaultSecrets).mockResolvedValueOnce([]);
+    const first = renderPage();
+    expect(await screen.findByText("None yet")).toBeInTheDocument();
+    first.unmount();
+    vi.mocked(fetchVaultSecrets).mockRejectedValueOnce(new Error("Failed to load vault"));
+    renderPage();
+    expect(await screen.findByText("Couldn't load vault.")).toBeInTheDocument();
   });
 });
