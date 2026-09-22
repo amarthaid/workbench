@@ -3,7 +3,7 @@ title: Integrations
 description: Every integration workbench ships with, how connecting works, and the conventions every provider setup follows.
 ---
 
-An integration is a plugin: a manifest that declares how to authenticate, plus a set of tools your agent can call. A stock install loads **16 plugins from disk (194 tools)**. It adds **two internal plugins built into the server**: `browser` (9 tools) and `jots` (5 tools). That is 208 tools behind one MCP endpoint. An agent reaches them through `execute_tools` rather than a list: `tools/list` on `/mcp` returns only the 9 meta-tools.
+An integration is a plugin: a manifest that declares how to authenticate, plus a set of tools your agent can call. A stock install loads **16 plugins from disk (194 tools)**. It adds **two internal plugins built into the server**: `browser` (9 tools) and `jots` (5 tools). That is 208 tools behind one MCP endpoint. An agent reaches them through `execute_tools` rather than a list: `tools/list` on `/mcp` returns only the 10 meta-tools.
 
 Credentials are per user. As the operator, you register one OAuth app per integration. Each user then grants their own access. The server stores each user's tokens encrypted against their own account.
 

@@ -187,7 +187,7 @@ defaults.
 | Result cap | 60,000 chars, then truncated | None |
 | Errors | JSON-RPC error object, or `{error}` inside a result | HTTP status + `{ error }` |
 | Images | `_mcpImage` becomes an MCP image block | Passed through as JSON, base64 in `result` |
-| Tool surface | 9 meta-tools; plugin tools via `execute_tools` | Plugin tools directly |
+| Tool surface | 10 meta-tools; plugin tools via `execute_tools` | Plugin tools directly |
 | Connecting | `connect` / `wait_for_connection` | Not available — portal or `/mcp` |
 | Audit + metrics | Yes | Yes, identical rows and counters |
 

@@ -77,7 +77,7 @@ below without any manual configuration.
 |---|---|
 | `initialize` | Echoes the client's `params.protocolVersion`, defaulting to `2025-06-18`. Returns `capabilities: { tools: {} }` and `serverInfo: { name: "workbench", version: "0.1.0" }` |
 | `notifications/initialized` / `initialized` | No result — HTTP 202, empty body |
-| `tools/list` | The nine meta-tools, each `{ name, description, inputSchema }`. Plugin tools are never listed |
+| `tools/list` | The ten meta-tools, each `{ name, description, inputSchema }`. Plugin tools are never listed |
 | `tools/call` | Runs one meta-tool. See below |
 | `resources/list` | `{ resources: [] }` |
 | `prompts/list` | `{ prompts: [] }` |
@@ -89,7 +89,7 @@ below without any manual configuration.
 
 `tools/call` returns two protocol-level errors, both `-32602`:
 
-- `Tool not found: <name>` for a name that is not one of the nine meta-tools.
+- `Tool not found: <name>` for a name that is not one of the ten meta-tools.
 - `Invalid arguments: <message>` when the meta-tool's Zod schema rejects the
   arguments.
 

@@ -124,7 +124,7 @@ touches no integration.
 
 ## What Claude Code sees
 
-Only the nine meta-tools, prefixed by the server name — `mcp__workbench__search_tools`,
+Only the ten meta-tools, prefixed by the server name — `mcp__workbench__search_tools`,
 `mcp__workbench__execute_tools`, and so on. Plugin tools are never advertised
 individually. An agent reaches them by name through `execute_tools`. That is the point
 of the design, and it is why adding integrations does not grow the tool list.

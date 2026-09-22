@@ -8,7 +8,7 @@ built-in integrations. If the MCP endpoint listed all of them, every conversatio
 start by burning tens of thousands of tokens on schemas the agent will never call — and
 most clients degrade badly once a tool list gets long.
 
-So `tools/list` returns exactly nine tools, ever. They are the *meta-tools*: a fixed,
+So `tools/list` returns exactly ten tools, ever. They are the *meta-tools*: a fixed,
 small surface through which every plugin tool is reached. Three of them cover discovery.
 
 | Meta-tool | Answers |
@@ -177,7 +177,7 @@ sequenceDiagram
     participant A as Agent
     participant W as workbench /mcp
     A->>W: tools/list
-    W-->>A: 9 meta-tools only
+    W-->>A: 10 meta-tools only
     A->>W: list_integrations
     W-->>A: github connected, gitlab not
     A->>W: search_tools "pull request"

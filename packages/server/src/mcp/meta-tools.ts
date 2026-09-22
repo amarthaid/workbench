@@ -76,10 +76,17 @@ async function startConnect(
 // Core single-tool execution: connection check, schema validation, audit, run.
 // The per-item engine behind `execute_tools` (batch) and the REST endpoint
 // (`POST /rest/:integration`). Never throws — failures come back as { error }.
-export type ExecResult = { result: unknown } | { error: string; integration?: string; message?: string };
+export type ExecResult =
+  | { result: unknown }
+  | { error: string; integration?: string; message?: string; step?: string };
 
 const STEP_ID_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const STEP_REF_RE = /^\$([A-Za-z_][A-Za-z0-9_]*)((?:\.[A-Za-z_][A-Za-z0-9_]*)*)$/;
+// `$id`, `$id.field`, `$id.items.0.id` — segments are identifiers or array
+// indexes. `STEP_REF_PREFIX_RE` catches anything that *starts* like a ref so a
+// typo ("$a.csv.", "$a.items[0]") errors instead of reaching the tool as a
+// literal string.
+const STEP_REF_RE = /^\$([A-Za-z_][A-Za-z0-9_]*)((?:\.(?:[A-Za-z_][A-Za-z0-9_]*|\d+))*)$/;
+const STEP_REF_PREFIX_RE = /^\$[A-Za-z_]/;
 
 class ComposeRefError extends Error {
   constructor(message: string) {
@@ -100,7 +107,10 @@ function getPath(obj: unknown, path: string[]): unknown {
 function resolveStepRefs(value: unknown, results: Map<string, unknown>): unknown {
   if (typeof value === "string") {
     const m = STEP_REF_RE.exec(value);
-    if (!m) return value;
+    if (!m) {
+      if (STEP_REF_PREFIX_RE.test(value)) throw new ComposeRefError(`malformed ref '${value}'`);
+      return value;
+    }
     const id = m[1];
     if (!results.has(id)) throw new ComposeRefError(`unknown step '${id}'`);
     const path = m[2] ? m[2].slice(1).split(".") : [];
@@ -170,7 +180,7 @@ export async function composeTools(
       throw e;
     }
     const out = await executeSingle(userId, step.tool, args);
-    if ("error" in out) return out;
+    if ("error" in out) return { ...out, step: step.id };
     results.set(step.id, out.result);
   }
   return pickComposeReturn(results, returnPaths);
@@ -723,9 +733,10 @@ export const metaTools = [
     name: "compose",
     description:
       "Run tools sequentially and pass data between them. Each step may use `$id.field` " +
-      "as a whole argument value to read an earlier step's result (e.g. content: \"$export.csv\"). " +
-      "Intermediate payloads stay on the server. Only the paths in `return` are sent back — " +
-      "omit fat fields (csv, content, bytes) so they never enter the chat.",
+      "as a whole argument value to read an earlier step's result (e.g. content: \"$export.csv\", " +
+      "id: \"$list.files.0.id\"). Intermediate payloads stay on the server. Only the paths in " +
+      "`return` are sent back — omit fat fields (csv, content, bytes) so they never enter the chat. " +
+      "Stops at the first failing step; the error carries its `step` id.",
     inputSchema: z.object({
       steps: z
         .array(
@@ -848,7 +859,7 @@ export const metaToolSchemas: Record<(typeof metaTools)[number]["name"], Record<
           properties: {
             id: { type: "string", description: "Step id; referenced as $id.field" },
             tool: { type: "string", description: "Tool name returned by search_tools" },
-            args: { type: "object", description: "Arguments; string values matching $id.field are substituted", additionalProperties: true },
+            args: { type: "object", description: "Arguments; a string value of the form $id.field (array index allowed: $id.items.0.id) is replaced by that earlier result", additionalProperties: true },
           },
           required: ["id", "tool"],
         },

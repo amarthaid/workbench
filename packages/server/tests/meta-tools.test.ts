@@ -856,5 +856,61 @@ describe("meta-tools", () => {
       );
       expect(unknownStep.error).toMatch(/BAD_REF/);
     });
+
+    it("resolves numeric segments into arrays", async () => {
+      stubComposeTools();
+      src.handler.mockResolvedValue({ files: [{ id: "f-0" }, { id: "f-1" }] });
+      third.handler.mockResolvedValue({ ok: true });
+
+      const result = await findTool("compose").handler(
+        { userId: "user-1" },
+        {
+          steps: [
+            { id: "a", tool: "src_tool", args: { q: "x" } },
+            { id: "b", tool: "third_tool", args: { id: "$a.files.1.id" } },
+          ],
+          return: ["a.files.0.id", "b.ok"],
+        }
+      );
+      expect(third.handler).toHaveBeenCalledWith(expect.anything(), { id: "f-1" });
+      expect(result).toEqual({ a: { files: { "0": { id: "f-0" } } }, b: { ok: true } });
+    });
+
+    it("rejects a malformed $ref instead of passing it through as a literal", async () => {
+      stubComposeTools();
+      src.handler.mockResolvedValue({ csv: "x" });
+
+      const result = await findTool("compose").handler(
+        { userId: "user-1" },
+        {
+          steps: [
+            { id: "a", tool: "src_tool", args: { q: "x" } },
+            { id: "b", tool: "dest_tool", args: { body: "$a.csv." } },
+          ],
+          return: ["b.id"],
+        }
+      );
+      expect(result.error).toMatch(/BAD_REF/);
+      expect(dest.handler).not.toHaveBeenCalled();
+    });
+
+    it("names the failing step on a step error", async () => {
+      stubComposeTools();
+      src.handler.mockResolvedValue({ csv: "x" });
+      dest.handler.mockRejectedValue(new Error("dest failed"));
+
+      const result = await findTool("compose").handler(
+        { userId: "user-1" },
+        {
+          steps: [
+            { id: "a", tool: "src_tool", args: { q: "x" } },
+            { id: "b", tool: "dest_tool", args: { body: "$a.csv" } },
+          ],
+          return: ["b.id"],
+        }
+      );
+      expect(result.error).toMatch(/dest failed/);
+      expect(result.step).toBe("b");
+    });
   });
 });

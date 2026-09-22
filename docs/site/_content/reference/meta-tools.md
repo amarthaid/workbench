@@ -1,12 +1,12 @@
 ---
 title: MCP meta-tools
-description: Complete reference for the nine tools workbench exposes over MCP, their parameters, and their response shapes.
+description: Complete reference for the ten tools workbench exposes over MCP, their parameters, and their response shapes.
 ---
 
-`tools/list` on `/mcp` returns exactly nine tools, no matter how many plugin tools
+`tools/list` on `/mcp` returns exactly ten tools, no matter how many plugin tools
 are loaded. Everything else — all 194 plugin tools and the 12 built-in tools — is
-reached through these nine. That is the whole point of the design: your agent's
-context holds nine schemas instead of 206.
+reached through these ten. That is the whole point of the design: your agent's
+context holds ten schemas instead of 206.
 
 There is no `execute_tool` (singular). Single execution is `execute_tools` with a
 one-element `executions` array.
@@ -111,6 +111,65 @@ runs, which is what applies the schema's `.default()` values.
 > throws arrives as a successful result whose text content contains
 > `{"results":[{"error": ...}]}`. A client that inspects only the JSON-RPC `error`
 > field will read every tool failure as a success.
+
+## compose
+
+Run plugin tools in sequence, feeding one step's result into the next. Use it when
+the interesting part of a workflow is the *pointer* at the end — a file id, a row
+count, a URL — and the payload in the middle (a CSV body, file content, raw bytes)
+would only burn context or trip the 60,000-character result cap.
+
+**Description as the client sees it:** *Run tools sequentially and pass data between
+them. Each step may use `$id.field` as a whole argument value to read an earlier
+step's result (e.g. content: "$export.csv", id: "$list.files.0.id"). Intermediate
+payloads stay on the server. Only the paths in `return` are sent back — omit fat
+fields (csv, content, bytes) so they never enter the chat. Stops at the first failing
+step; the error carries its `step` id.*
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `steps` | array of objects, 2–8 | yes | — | Tools to run, in order |
+| `steps[].id` | string, JS identifier | yes | — | Name later steps use to reference this result; must be unique |
+| `steps[].tool` | string | yes | — | Tool name returned by `search_tools` |
+| `steps[].args` | object | no | `{}` | Arguments; a string value shaped like `$id.path` is replaced by that earlier result |
+| `return` | array of strings, min 1 | yes | — | Result paths to send back, e.g. `upload.id`, `export.row_count` |
+
+A reference is the *whole* argument value — `"$export.csv"` substitutes, `"Report:
+$export.csv"` does not. Path segments are identifiers or array indexes
+(`$list.files.0.id`). Refs work at any depth inside `args`, including nested objects
+and arrays. Anything that starts like a ref but doesn't parse (`"$a.csv."`,
+`"$a.items[0]"`) is rejected as `BAD_REF` rather than passed to the tool as a literal.
+
+Each step goes through the same path as `execute_tools`: connection check, vault
+reference resolution, Zod validation, audit row, result scrubbing. Custom-app tools
+work too. A step that fails ends the pipeline; later steps do not run.
+
+Returns an object shaped by `return`, one nested key per path. Errors:
+
+| Shape | Cause |
+|---|---|
+| `{ error: "Invalid step id '<id>'" }` / `{ error: "Duplicate step id '<id>'" }` | Bad `steps[].id` |
+| `{ error: "BAD_REF: unknown step '<id>'" }` | A `$ref` or `return` path names a step that doesn't exist (or hasn't run yet) |
+| `{ error: "BAD_REF: missing '<id>.<path>'" }` | The step ran but has no value at that path |
+| `{ error: "BAD_REF: malformed ref '<value>'" }` | A string starts with `$<identifier>` but isn't a valid `$id.path` |
+| `{ error, step, ... }` | A step failed; `step` is its id and the rest is that step's own `execute_tools`-style error |
+
+```json
+{
+  "name": "compose",
+  "arguments": {
+    "steps": [
+      { "id": "export", "tool": "superset_export_csv", "args": { "sql": "SELECT …" } },
+      { "id": "upload", "tool": "google_drive_upload",
+        "args": { "name": "$export.filename", "content": "$export.csv" } }
+    ],
+    "return": ["upload.id", "upload.webViewLink", "export.row_count"]
+  }
+}
+```
+
+Response: `{ "upload": { "id": "…", "webViewLink": "…" }, "export": { "row_count": 1200 } }` —
+the CSV never appears.
 
 ## whoami
 
