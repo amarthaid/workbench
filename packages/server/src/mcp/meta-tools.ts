@@ -77,6 +77,105 @@ async function startConnect(
 // The per-item engine behind `execute_tools` (batch) and the REST endpoint
 // (`POST /rest/:integration`). Never throws — failures come back as { error }.
 export type ExecResult = { result: unknown } | { error: string; integration?: string; message?: string };
+
+const STEP_ID_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const STEP_REF_RE = /^\$([A-Za-z_][A-Za-z0-9_]*)((?:\.[A-Za-z_][A-Za-z0-9_]*)*)$/;
+
+class ComposeRefError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ComposeRefError";
+  }
+}
+
+function getPath(obj: unknown, path: string[]): unknown {
+  let cur = obj;
+  for (const key of path) {
+    if (cur == null || typeof cur !== "object") return undefined;
+    cur = (cur as Record<string, unknown>)[key];
+  }
+  return cur;
+}
+
+function resolveStepRefs(value: unknown, results: Map<string, unknown>): unknown {
+  if (typeof value === "string") {
+    const m = STEP_REF_RE.exec(value);
+    if (!m) return value;
+    const id = m[1];
+    if (!results.has(id)) throw new ComposeRefError(`unknown step '${id}'`);
+    const path = m[2] ? m[2].slice(1).split(".") : [];
+    if (path.length === 0) return results.get(id);
+    const got = getPath(results.get(id), path);
+    if (got === undefined) throw new ComposeRefError(`missing '${id}.${path.join(".")}'`);
+    return got;
+  }
+  if (Array.isArray(value)) return value.map((v) => resolveStepRefs(v, results));
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = resolveStepRefs(v, results);
+    }
+    return out;
+  }
+  return value;
+}
+
+function pickComposeReturn(
+  results: Map<string, unknown>,
+  paths: string[]
+): ExecResult {
+  const data: Record<string, unknown> = {};
+  for (const raw of paths) {
+    const parts = raw.split(".");
+    const id = parts[0];
+    if (!id || !results.has(id)) return { error: `BAD_REF: unknown step '${id ?? raw}'` };
+    const val = parts.length === 1 ? results.get(id) : getPath(results.get(id), parts.slice(1));
+    if (val === undefined) return { error: `BAD_REF: missing '${raw}'` };
+    let cursor = data;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const key = parts[i];
+      const next = cursor[key];
+      if (!next || typeof next !== "object") cursor[key] = {};
+      cursor = cursor[key] as Record<string, unknown>;
+    }
+    cursor[parts[parts.length - 1]] = val;
+  }
+  return { result: data };
+}
+
+export type ComposeStep = { id: string; tool: string; args?: Record<string, unknown> };
+
+// Sequential pipe: each step may read earlier results via `$id.field` (whole
+// arg values only). Intermediate blobs stay in-process. The agent sees only
+// `return` paths, so a CSV/file body never has to enter the chat.
+export async function composeTools(
+  userId: string,
+  steps: ComposeStep[],
+  returnPaths: string[]
+): Promise<ExecResult> {
+  const seen = new Set<string>();
+  for (const step of steps) {
+    if (!STEP_ID_RE.test(step.id)) return { error: `Invalid step id '${step.id}'` };
+    if (seen.has(step.id)) return { error: `Duplicate step id '${step.id}'` };
+    seen.add(step.id);
+  }
+
+  const results = new Map<string, unknown>();
+  for (const step of steps) {
+    let args: Record<string, unknown>;
+    try {
+      args = resolveStepRefs(step.args ?? {}, results) as Record<string, unknown>;
+    } catch (e) {
+      if (e instanceof ComposeRefError) return { error: `BAD_REF: ${e.message}` };
+      throw e;
+    }
+    const out = await executeSingle(userId, step.tool, args);
+    if ("error" in out) return out;
+    results.set(step.id, out.result);
+  }
+  return pickComposeReturn(results, returnPaths);
+}
+
 export async function executeSingle(
   userId: string,
   toolName: string,
@@ -621,6 +720,35 @@ export const metaTools = [
     handler: (ctx: { userId: string }, args: { integration: string }) => startConnect(ctx.userId, args.integration),
   },
   {
+    name: "compose",
+    description:
+      "Run tools sequentially and pass data between them. Each step may use `$id.field` " +
+      "as a whole argument value to read an earlier step's result (e.g. content: \"$export.csv\"). " +
+      "Intermediate payloads stay on the server. Only the paths in `return` are sent back — " +
+      "omit fat fields (csv, content, bytes) so they never enter the chat.",
+    inputSchema: z.object({
+      steps: z
+        .array(
+          z.object({
+            id: z.string().regex(STEP_ID_RE, "step id must be a JS identifier"),
+            tool: z.string(),
+            args: z.record(z.unknown()).default({}),
+          })
+        )
+        .min(2)
+        .max(8),
+      return: z.array(z.string().min(1)).min(1),
+    }),
+    handler: async (
+      ctx: { userId: string },
+      args: { steps: ComposeStep[]; return: string[] }
+    ) => {
+      const out = await composeTools(ctx.userId, args.steps, args.return);
+      if ("error" in out) return out;
+      return out.result;
+    },
+  },
+  {
     name: "curl_session",
     description:
       "HIGH RISK — do not call without explicit user approval. Mints a short-lived (15 min) proxy token granting ARBITRARY API calls (GET/POST/PUT/PATCH/DELETE), including destructive writes, against the listed integration(s) — the proxy injects the user's real credential transparently at /c/<integration>/<path>, so anything reachable via that credential is reachable through this token. Before invoking, tell the user exactly which integration(s) and what action you intend to perform, and wait for their explicit go-ahead; do not mint speculatively or as a default first step. Only integrations that have curl proxy enabled are accepted.",
@@ -706,6 +834,32 @@ export const metaToolSchemas: Record<(typeof metaTools)[number]["name"], Record<
     type: "object",
     properties: { integration: { type: "string", description: "Integration name" } },
     required: ["integration"],
+  },
+  compose: {
+    type: "object",
+    properties: {
+      steps: {
+        type: "array",
+        description: "Tools to run in order. Later steps read earlier results via $id.field.",
+        minItems: 2,
+        maxItems: 8,
+        items: {
+          type: "object",
+          properties: {
+            id: { type: "string", description: "Step id; referenced as $id.field" },
+            tool: { type: "string", description: "Tool name returned by search_tools" },
+            args: { type: "object", description: "Arguments; string values matching $id.field are substituted", additionalProperties: true },
+          },
+          required: ["id", "tool"],
+        },
+      },
+      return: {
+        type: "array",
+        items: { type: "string" },
+        description: "Result paths to return (e.g. upload.id, export.row_count). Fat fields should be omitted.",
+      },
+    },
+    required: ["steps", "return"],
   },
   curl_session: {
     type: "object",
