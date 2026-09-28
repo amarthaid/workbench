@@ -7,6 +7,7 @@ import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { safeFetch } from "./ssrf";
+import { withVia } from "./loop-guard";
 
 export interface RemoteTool {
   name: string;
@@ -30,6 +31,10 @@ function readVersion(): string {
 }
 
 const CLIENT_INFO = { name: "workbench", version: readVersion() };
+
+// Every request to a custom app names the workbench instances it has passed
+// through, so a custom app that leads back here is refused. See loop-guard.ts.
+const viaFetch = withVia(safeFetch);
 
 // Tool calls can be long-running; without this the SDK's default ~60s timeout
 // kills them. Progress resets the per-request timer, maxTotal is a hard ceiling.
@@ -57,7 +62,7 @@ async function getSession(userId: string, baseUrl: string, token: string): Promi
     await client.connect(
       new StreamableHTTPClientTransport(new URL(baseUrl), {
         requestInit: { headers: authHeaders(token) },
-        fetch: safeFetch,
+        fetch: viaFetch,
       })
     );
   } catch (e) {
@@ -71,7 +76,7 @@ async function getSession(userId: string, baseUrl: string, token: string): Promi
       await sse.connect(
         new SSEClientTransport(new URL(baseUrl), {
           requestInit: { headers: authHeaders(token) },
-          fetch: safeFetch,
+          fetch: viaFetch,
         })
       );
       sessions.set(key, { client: sse, token });

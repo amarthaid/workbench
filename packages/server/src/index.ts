@@ -23,6 +23,7 @@ import { availableParallelism } from "node:os";
 import { db } from "./db.js";
 import "./telemetry/tracing";
 import { metricsRegistry, httpRequestsTotal, httpRequestDuration } from "./telemetry/metrics";
+import { VIA_HEADER, mcpLoopRefusal, parseVia, runWithVia } from "./custom-apps/loop-guard";
 
 async function main() {
   const app = Fastify({
@@ -86,6 +87,12 @@ async function main() {
   registerCdpBridgeRoutes(app);
 
   app.post("/mcp", async (request, reply) => {
+    // A custom app (here, or on another workbench) that leads back to this
+    // instance would loop without end. See custom-apps/loop-guard.ts.
+    const via = request.headers[VIA_HEADER];
+    const loop = mcpLoopRefusal(via, request.body);
+    if (loop) return reply.status(loop.status).send(loop.body);
+
     // /mcp accepts: x-workbench-api-key (headless), OAuth Bearer (browser flow),
     // or portal session JWT.
     const userId = await resolveMcpUser(request.headers as Record<string, string>);
@@ -119,7 +126,8 @@ async function main() {
       if (sent) return reply;
     }
 
-    const result = await handleMcpRequest(body, userId);
+    // Outbound custom-app calls made while handling this request extend its chain.
+    const result = await runWithVia(parseVia(via), () => handleMcpRequest(body, userId));
     // JSON-RPC notifications return null — no body, just 202 Accepted.
     if (result === null) {
       reply.status(202).send();
