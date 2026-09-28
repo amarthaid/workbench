@@ -205,6 +205,14 @@ export async function registerVaultRoutes(app: FastifyInstance): Promise<void> {
   // minutes of TTL. The user whose value is read comes from the row. Silent in
   // the request log because the token is the URL.
   //
+  // Link-preview fetchers, by User-Agent. They send `Accept: */*` (Slack's,
+  // captured 2026-09-28: `Slackbot-LinkExpanding 1.0`, `Accept: */*`,
+  // `Range: bytes=0-32768`), so without this they got the 405 and chat showed
+  // no card. Matching here only picks page vs 405 — no GET spends the token —
+  // so a bot missing from the list costs its card, never the secret.
+  const UNFURL_BOT =
+    /Slackbot-LinkExpanding|Slack-ImgProxy|Twitterbot|facebookexternalhit|Facebot|Discordbot|TelegramBot|WhatsApp|LinkedInBot|SkypeUriPreview|Iframely|Embedly|redditbot|Mastodon|Applebot/i;
+
   // Only POST spends the token. A GET never does: chat apps unfurl every link
   // they see (Slackbot, Teams, Discord, iMessage previews), so a link pasted
   // into Slack used to be spent by the preview fetch before the human or agent
@@ -221,7 +229,8 @@ export async function registerVaultRoutes(app: FastifyInstance): Promise<void> {
       reply.header("x-robots-tag", "noindex, nofollow");
       reply.header("referrer-policy", "no-referrer");
       const accept = String(request.headers.accept ?? "");
-      if (!accept.includes("text/html")) {
+      const unfurler = UNFURL_BOT.test(String(request.headers["user-agent"] ?? ""));
+      if (!accept.includes("text/html") && !unfurler) {
         reply.header("allow", "POST");
         return reply
           .code(405)
