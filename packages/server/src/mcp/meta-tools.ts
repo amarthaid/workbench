@@ -497,6 +497,12 @@ export async function executeMany(
 
 // `satisfies` (not an explicit annotation) keeps each element's `name` as a
 // string literal, so `metaToolSchemas` below can require exactly these keys.
+// curl_session token lifetime. There is no revoke, so a leaked token is live
+// until it expires — the cap bounds that window.
+const CURL_TTL_MIN_SECONDS = 60;
+const CURL_TTL_MAX_SECONDS = 3600;
+const CURL_TTL_DEFAULT_SECONDS = 900;
+
 export const metaTools = [
   {
     name: "search_tools",
@@ -623,12 +629,17 @@ export const metaTools = [
   {
     name: "curl_session",
     description:
-      "HIGH RISK — do not call without explicit user approval. Mints a short-lived (15 min) proxy token granting ARBITRARY API calls (GET/POST/PUT/PATCH/DELETE), including destructive writes, against the listed integration(s) — the proxy injects the user's real credential transparently at /c/<integration>/<path>, so anything reachable via that credential is reachable through this token. Before invoking, tell the user exactly which integration(s) and what action you intend to perform, and wait for their explicit go-ahead; do not mint speculatively or as a default first step. Only integrations that have curl proxy enabled are accepted.",
+      "HIGH RISK — do not call without explicit user approval. Mints a short-lived proxy token (15 min by default; set expiresInSeconds for 60s–1h, and ask for no longer than the task needs) granting ARBITRARY API calls (GET/POST/PUT/PATCH/DELETE), including destructive writes, against the listed integration(s) — the proxy injects the user's real credential transparently at /c/<integration>/<path>, so anything reachable via that credential is reachable through this token. Before invoking, tell the user exactly which integration(s) and what action you intend to perform, and wait for their explicit go-ahead; do not mint speculatively or as a default first step. Only integrations that have curl proxy enabled are accepted.",
     inputSchema: z.object({
       integrations: z.array(z.string()).min(1),
+      expiresInSeconds: z
+        .number()
+        .int()
+        .min(CURL_TTL_MIN_SECONDS)
+        .max(CURL_TTL_MAX_SECONDS)
+        .default(CURL_TTL_DEFAULT_SECONDS),
     }),
-    handler: async (ctx: { userId: string }, args: { integrations: string[] }) => {
-      const EXPIRES_SECONDS = 900;
+    handler: async (ctx: { userId: string }, args: { integrations: string[]; expiresInSeconds: number }) => {
       const errors: string[] = [];
       for (const name of args.integrations) {
         const integ = registry.getIntegration(name);
@@ -643,10 +654,10 @@ export const metaTools = [
         if (!isConnected) errors.push(`${name}: not connected`);
       }
       if (errors.length) return { error: errors.join("; ") };
-      const token = await signCurlToken(ctx.userId, args.integrations, EXPIRES_SECONDS);
+      const token = await signCurlToken(ctx.userId, args.integrations, args.expiresInSeconds);
       return {
         token,
-        expiresIn: EXPIRES_SECONDS,
+        expiresIn: args.expiresInSeconds,
         proxyBaseUrl: `${config.SERVER_PUBLIC_URL}/c`,
         usage: `Send requests to ${config.SERVER_PUBLIC_URL}/c/<integration>/<path> with Authorization: Bearer <token>`,
       };
@@ -714,6 +725,13 @@ export const metaToolSchemas: Record<(typeof metaTools)[number]["name"], Record<
         type: "array",
         items: { type: "string" },
         description: "Integration names to include in the session (e.g. [\"github\"])",
+      },
+      expiresInSeconds: {
+        type: "integer",
+        minimum: CURL_TTL_MIN_SECONDS,
+        maximum: CURL_TTL_MAX_SECONDS,
+        default: CURL_TTL_DEFAULT_SECONDS,
+        description: "Token lifetime in seconds (default 900 = 15 min, max 3600 = 1 h). Ask for no longer than the task needs — the token cannot be revoked.",
       },
     },
     required: ["integrations"],

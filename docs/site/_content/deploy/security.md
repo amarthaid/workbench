@@ -27,7 +27,7 @@ and the MCP OAuth refresh token, are random opaque strings.
 | MCP OAuth access token | `/mcp` only | The MCP OAuth 2.1 flow: `/register` → `/authorize` → `/token` | `OAUTH_ACCESS_TOKEN_TTL_SECONDS`, default 1h |
 | MCP OAuth refresh token | `/token` with `grant_type=refresh_token` | Same flow; rotated on every use | 30 days |
 | Connect token | The magic-link connect page and the CDP live view | Minted by the `connect` meta-tool for a cookie integration | `CONNECT_TTL_SECONDS`, default 600s |
-| Curl-session token | The `/c/<integration>/<path>` proxy, for the integrations named in the token | Minted by the `curl_session` meta-tool | 900s — a default parameter on the signer, and the only value any caller passes today |
+| Curl-session token | The `/c/<integration>/<path>` proxy, for the integrations named in the token | Minted by the `curl_session` meta-tool | `expiresInSeconds` on the mint, 60–3600s, default 900s |
 | Jot unlock cookie | One password-protected jot | Submitting the jot's password | `Max-Age=2592000` (30 days); carries no expiry itself, and is invalidated by a password change |
 
 Two boundaries matter operationally:
