@@ -6,6 +6,8 @@ import { PageHeader } from "../components/ui/PageHeader";
 import { Tabs } from "../components/ui/Tabs";
 import { EmptyState } from "../components/ui/EmptyState";
 import { Input, Select } from "../components/ui/Input";
+import { PlusIcon } from "../components/ui/Icons";
+import { Tooltip } from "../components/ui/Tooltip";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Modal } from "../components/ui/Modal";
@@ -102,7 +104,6 @@ export default function Apps() {
     <>
       <PageHeader
         title="Apps"
-        actions={<Button onClick={() => setShowNewApp(true)}>New custom app</Button>}
         toolbar={
           <>
             <Tabs
@@ -135,6 +136,15 @@ export default function Apps() {
                   </Select>
                 </>
               )}
+              <Tooltip label="New custom app — point workbench at an MCP server" placement="bottom">
+                <Button
+                  className="ui-button-icon"
+                  onClick={() => setShowNewApp(true)}
+                  aria-label="New custom app"
+                >
+                  <PlusIcon />
+                </Button>
+              </Tooltip>
             </div>
           </>
         }
