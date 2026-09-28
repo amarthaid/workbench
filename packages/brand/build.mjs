@@ -71,7 +71,7 @@ await png("og-otl-1200x630.png", {
         markSvg({ color: "#ffffff", surface: tokens.accent, size: 96 }) +
         `<span style="font-size:56px;font-weight:800;letter-spacing:-.03em">workbench</span></div>` +
         `<div style="font-size:96px;font-weight:800;letter-spacing:-.03em;line-height:1">One-time secret</div>` +
-        `<div style="font-size:36px;font-weight:500;color:${tokens.accentLine}">Opens once. Link previews don\u2019t spend it.</div></div>`,
+        `<div style="font-size:36px;font-weight:500;color:${tokens.accentLine}">Open once, then it burns.</div></div>`,
 });
 await browser.close();
 if (sync) for (const f of PNGS) copyFileSync(join(dist, f), join(staticDir, f));
