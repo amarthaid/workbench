@@ -148,7 +148,7 @@ export async function fetchKeycloakAuthUrl(ticket?: string): Promise<{ url: stri
   return res.json();
 }
 
-export async function createCustomApp(name: string, baseUrl: string): Promise<{ app: { id: string; name: string; baseUrl: string } }> {
+export async function createCustomApp(name: string, baseUrl: string): Promise<{ app: { id: string; name: string; baseUrl: string; integration: string } }> {
   const res = await fetch(`${API_URL}/api/custom-apps`, {
     method: "POST",
     headers: getHeaders(),

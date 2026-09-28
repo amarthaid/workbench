@@ -9,6 +9,7 @@ vi.mock("../api", () => ({
   fetchConnections: vi.fn(),
   startIntegrationAuth: vi.fn(),
   disconnectIntegration: vi.fn(),
+  createCustomApp: vi.fn(),
 }));
 
 vi.mock("../context/AuthContext", () => ({
@@ -18,7 +19,7 @@ vi.mock("../context/AuthContext", () => ({
 vi.mock("../components/CookieAuthPopup", () => ({ default: () => null }));
 vi.mock("../components/ApiKeyAuthModal", () => ({ default: () => null }));
 
-import { fetchIntegrations, fetchConnections, startIntegrationAuth } from "../api";
+import { fetchIntegrations, fetchConnections, startIntegrationAuth, createCustomApp } from "../api";
 
 const INTEGRATIONS = [
   { name: "acme", displayName: "Acme", version: "1.0.0", toolCount: 4, categories: ["issues"], configured: true, authType: "oauth2", description: "Track work" },
@@ -104,6 +105,31 @@ describe("Apps", () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "Connect Demo Repo" }));
     await waitFor(() => expect(startIntegrationAuth).toHaveBeenCalledWith("demo-repo", undefined));
+  });
+
+  it("starts the connect as soon as a custom app is created", async () => {
+    vi.mocked(createCustomApp).mockResolvedValue({
+      app: { id: "a1", name: "Tracker", baseUrl: "https://mcp.example.com/mcp", integration: "custom:a1" },
+    });
+    vi.mocked(startIntegrationAuth).mockResolvedValue({ type: "oauth2", url: "https://example.com/authorize" });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "New custom app" }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Tracker" } });
+    fireEvent.change(screen.getByLabelText("MCP server URL"), { target: { value: "https://mcp.example.com/mcp" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create and connect" }));
+    await waitFor(() => expect(startIntegrationAuth).toHaveBeenCalledWith("custom:a1", undefined));
+    expect(createCustomApp).toHaveBeenCalledWith("Tracker", "https://mcp.example.com/mcp");
+  });
+
+  it("does not start a connect when registering the custom app fails", async () => {
+    vi.mocked(createCustomApp).mockRejectedValue(new Error("Invalid or blocked URL: http://10.0.0.1"));
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "New custom app" }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Tracker" } });
+    fireEvent.change(screen.getByLabelText("MCP server URL"), { target: { value: "http://10.0.0.1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create and connect" }));
+    expect(await screen.findByText("Invalid or blocked URL: http://10.0.0.1")).toBeInTheDocument();
+    expect(startIntegrationAuth).not.toHaveBeenCalled();
   });
 
   it("explains an empty filter rather than showing a blank grid", async () => {

@@ -36,12 +36,16 @@ export default function Apps() {
     setNewError(null);
     setNewBusy(true);
     try {
-      await createCustomApp(newName.trim(), newUrl.trim());
+      const { app } = await createCustomApp(newName.trim(), newUrl.trim());
       setNewName("");
       setNewUrl("");
       setShowNewApp(false);
       qc.invalidateQueries({ queryKey: ["integrations"] });
       qc.invalidateQueries({ queryKey: ["connections"] });
+      // A custom app is useless until it is connected, so go straight into its
+      // OAuth rather than leaving the human to find it and press Connect. If
+      // that fails, the app is still registered and its cell offers Connect.
+      connect({ name: app.integration, displayName: app.name, version: "MCP", toolCount: 0, authType: "oauth2", custom: true });
     } catch (err) {
       setNewError(err instanceof Error ? err.message : "Failed to register custom app");
     } finally {
@@ -181,7 +185,7 @@ export default function Apps() {
           <>
             <Button variant="outline" onClick={() => setShowNewApp(false)}>Cancel</Button>
             <Button type="submit" form="new-custom-app-form" disabled={newBusy || !newName.trim() || !newUrl.trim()}>
-              {newBusy ? "Registering…" : "Create"}
+              {newBusy ? "Registering…" : "Create and connect"}
             </Button>
           </>
         }

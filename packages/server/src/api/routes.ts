@@ -904,7 +904,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
         clientId: reg.clientId,
         clientSecret: reg.clientSecret,
       });
-      return { app: { id: app.id, name: app.name, baseUrl: app.baseUrl } };
+      return { app: { id: app.id, name: app.name, baseUrl: app.baseUrl, integration: integrationKey(app.id) } };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       request.log.warn({ name, err: message }, "custom app register failed");
