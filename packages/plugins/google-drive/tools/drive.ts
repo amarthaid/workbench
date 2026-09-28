@@ -14,6 +14,12 @@ function slimFileRow(f: any) {
   return row;
 }
 
+// Drive ignores Shared Drive items unless every call opts in: without
+// supportsAllDrives a Shared Drive file/folder id 404s ("File not found"), and
+// files.list without includeItemsFromAllDrives silently drops Shared Drive rows.
+// No extra OAuth scope is needed.
+const ALL_DRIVES = "supportsAllDrives=true";
+
 export const listFiles = {
   name: "google_drive_list",
   description:
@@ -28,6 +34,8 @@ export const listFiles = {
     params.set("pageSize", String(args.pageSize));
     if (args.query) params.set("q", args.query);
     params.set("fields", "nextPageToken,files(id,name,mimeType,modifiedTime,size)");
+    params.set("supportsAllDrives", "true");
+    params.set("includeItemsFromAllDrives", "true");
 
     const res = await ctx.http(`https://www.googleapis.com/drive/v3/files?${params}`);
     const data = await res.json();
@@ -46,7 +54,7 @@ export const createFolder = {
     parentId: z.string().optional(),
   }),
   handler: async (ctx: any, args: any) => {
-    const res = await ctx.http("https://www.googleapis.com/drive/v3/files", {
+    const res = await ctx.http(`https://www.googleapis.com/drive/v3/files?${ALL_DRIVES}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -77,6 +85,8 @@ export const searchFiles = {
     params.set("q", `name contains '${term}' or fullText contains '${term}'`);
     params.set("pageSize", String(args.pageSize));
     params.set("fields", "nextPageToken,files(id,name,mimeType,modifiedTime,size)");
+    params.set("supportsAllDrives", "true");
+    params.set("includeItemsFromAllDrives", "true");
     const res = await ctx.http(`https://www.googleapis.com/drive/v3/files?${params.toString().replace(/\+/g, "%20")}`);
     const data = await res.json();
     const out: any = { files: (data.files ?? []).map(slimFileRow) };
@@ -114,7 +124,7 @@ export const uploadFile = {
       `--${boundary}--`,
     ].join("\r\n");
 
-    const res = await ctx.http("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart", {
+    const res = await ctx.http(`https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&${ALL_DRIVES}`, {
       method: "POST",
       headers: { "Content-Type": `multipart/related; boundary=${boundary}` },
       body,
@@ -175,7 +185,7 @@ export const uploadFromUrl = {
     body.set(footer, header.byteLength + fileBytes.byteLength);
 
     const res = await ctx.http(
-      "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
+      `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&${ALL_DRIVES}`,
       {
         method: "POST",
         headers: { "Content-Type": `multipart/related; boundary=${boundary}` },
@@ -194,7 +204,7 @@ export const downloadFile = {
     fileId: z.string(),
   }),
   handler: async (ctx: any, args: any) => {
-    const res = await ctx.http(`https://www.googleapis.com/drive/v3/files/${args.fileId}?alt=media`);
+    const res = await ctx.http(`https://www.googleapis.com/drive/v3/files/${args.fileId}?alt=media&${ALL_DRIVES}`);
     return res.text();
   },
 };
@@ -207,7 +217,7 @@ export const trashFile = {
     fileId: z.string(),
   }),
   handler: async (ctx: any, args: any) => {
-    const res = await ctx.http(`https://www.googleapis.com/drive/v3/files/${args.fileId}`, {
+    const res = await ctx.http(`https://www.googleapis.com/drive/v3/files/${args.fileId}?${ALL_DRIVES}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ trashed: true }),
@@ -226,7 +236,7 @@ export const updatePermissions = {
     role: z.enum(["reader", "commenter", "writer", "owner"]).default("reader"),
   }),
   handler: async (ctx: any, args: any) => {
-    const res = await ctx.http(`https://www.googleapis.com/drive/v3/files/${args.fileId}/permissions`, {
+    const res = await ctx.http(`https://www.googleapis.com/drive/v3/files/${args.fileId}/permissions?${ALL_DRIVES}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
