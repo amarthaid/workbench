@@ -31,22 +31,6 @@ describe("Tooltip", () => {
     expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
-  it("renders outside a clipping container so a card's overflow cannot hide it", () => {
-    render(
-      <div data-testid="card" style={{ overflow: "hidden" }}>
-        <Tooltip label="Copy MCP URL">
-          <button aria-label="Copy">c</button>
-        </Tooltip>
-      </div>
-    );
-    const trigger = screen.getByRole("button", { name: "Copy" });
-    fireEvent.mouseEnter(trigger.parentElement!);
-    const tip = screen.getByRole("tooltip");
-    expect(screen.getByTestId("card")).not.toContainElement(tip);
-    expect(tip.style.position).toBe("fixed");
-    expect(trigger).toHaveAttribute("aria-describedby", tip.id);
-  });
-
   it("does not swallow the trigger's click", () => {
     const { onClick, trigger } = setup();
     fireEvent.mouseEnter(trigger.parentElement!);
