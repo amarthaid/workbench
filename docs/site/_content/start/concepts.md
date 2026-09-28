@@ -125,7 +125,7 @@ and how an agent hands control back to you mid-task.
 
 ## Curl session
 
-A short-lived escape hatch. `curl_session(['github'])` mints a 15-minute token
+A short-lived escape hatch. `curl_session(['github'])` mints a token (15 minutes by default, up to an hour)
 scoped to the named integrations. The server forwards requests to
 `<SERVER_PUBLIC_URL>/c/<integration>/<path>` carrying that token upstream, with the
 user's real credential injected. It

@@ -5,7 +5,7 @@ description: Mint a short-lived proxy token that forwards arbitrary HTTP request
 
 The tool catalog is wide but not complete. GitHub alone has hundreds of endpoints, and the
 plugin wraps 28 of them. When the endpoint you need has no tool, `curl_session` is the
-escape hatch. It mints a 15-minute token that lets you send **any** HTTP request to that
+escape hatch. It mints a short-lived token (15 minutes unless you ask otherwise) that lets you send **any** HTTP request to that
 provider's API through the workbench, with your real credential attached server-side.
 
 You never see the credential. The proxy injects it.
@@ -53,6 +53,14 @@ tool-shaped.
 `integrations` is required and must have at least one entry. Multiple integrations in
 one session are allowed, and the token then covers all of them.
 
+`expiresInSeconds` is optional: an integer from `60` to `3600` (1 hour), default `900`.
+Anything outside that range, or a fraction, is rejected before a token is minted. The
+response's `expiresIn` is the lifetime you got. Ask for the shortest lifetime the job needs.
+
+```json
+{ "name": "curl_session", "arguments": { "integrations": ["github"], "expiresInSeconds": 300 } }
+```
+
 Validation is **all-or-nothing**. Every requested name is checked, the failures are
 collected, and if there is even one the call returns an error and mints nothing:
 
@@ -67,8 +75,8 @@ The three per-name reasons are `integration not found`, `curl proxy not enabled`
 
 - A JWT with audience `workbench-curl`, carrying the user id and the list of allowed
   integrations.
-- TTL is **900 seconds**, fixed at mint. It is not configurable, and there is no refresh
-  or revoke — you mint a new one.
+- TTL is set at mint: `expiresInSeconds`, default **900 seconds**, capped at **3600**. There
+  is no refresh or revoke — you mint a new one.
 - It is *only* accepted at `/c/:integration/*`. It does not authenticate `/mcp` or
   `/api/*`.
 
@@ -186,7 +194,7 @@ Every one of these is a JSON object with a single `error` key — e.g.
 | Status | `error` | Meaning |
 |---|---|---|
 | 401 | `Authorization: Bearer <curl-session-token> required` | No bearer header |
-| 401 | `Invalid or expired curl session token` | Bad signature, wrong audience, or past its 15 minutes |
+| 401 | `Invalid or expired curl session token` | Bad signature, wrong audience, or past its `expiresIn` |
 | 403 | `Integration "x" is not in this curl session` | Valid token, but that integration was not in `integrations` at mint |
 | 400 | `Integration "x" does not support curl proxy` | The manifest has no `proxy` block |
 | 502 | `Cannot resolve proxy base URL: <reason>` | A dynamic resolver had nothing to work with |
@@ -200,7 +208,7 @@ The proxy sits behind the same server as `/mcp` and the portal, and it inherits 
 credential store. Two things follow:
 
 - A minted token is a bearer credential for the user's full API access to the named
-  integrations, for 15 minutes, with no revocation path. It is worth treating leaked
+  integrations, until it expires (15 minutes by default, 1 hour at most), with no revocation path. It is worth treating leaked
   curl tokens the way you would treat a leaked provider token — the mitigation is the
   short TTL.
 - Proxied requests appear in the HTTP request metrics

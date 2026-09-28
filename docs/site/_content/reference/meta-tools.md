@@ -237,7 +237,8 @@ user's real credential.
 
 **Description as the client sees it** (verbatim — the risk language is part of the
 schema an agent reads): *HIGH RISK — do not call without explicit user approval.
-Mints a short-lived (15 min) proxy token granting ARBITRARY API calls
+Mints a short-lived proxy token (15 min by default; set expiresInSeconds for 60s–1h,
+and ask for no longer than the task needs) granting ARBITRARY API calls
 (GET/POST/PUT/PATCH/DELETE), including destructive writes, against the listed
 integration(s) — the proxy injects the user's real credential transparently at
 /c/&lt;integration&gt;/&lt;path&gt;, so anything reachable via that credential is
@@ -249,6 +250,7 @@ that have curl proxy enabled are accepted.*
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `integrations` | array of strings, min 1 | yes | — | Integration names to include in the session |
+| `expiresInSeconds` | integer, 60–3600 | no | `900` | Token lifetime in seconds. Out of range or fractional values fail validation |
 
 On success:
 
@@ -261,7 +263,7 @@ On success:
 }
 ```
 
-`expiresIn` is a fixed 900 seconds — it is not configurable.
+`expiresIn` echoes the lifetime of the minted token: `expiresInSeconds`, or 900 when it is omitted.
 
 Validation is all-or-nothing. Every name is checked, and if any fail the whole call
 returns `{ error }` with the failures joined by `; `:
@@ -274,7 +276,7 @@ returns `{ error }` with the failures joined by `; `:
 
 > [!DANGER] This token can do anything the user's credential can do
 > Anything the stored credential can reach — including destructive writes — is
-> reachable with this token for 15 minutes. Ask the user before minting one, name the
+> reachable with this token until it expires — up to an hour. Ask the user before minting one, name the
 > integrations and the intended action, and do not mint speculatively.
 
 ```json
