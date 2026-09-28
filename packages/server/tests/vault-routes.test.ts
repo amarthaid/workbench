@@ -204,6 +204,45 @@ describe("vault routes", () => {
     expect(form.body).toBe("hunter2");
   });
 
+  it("OTL serves the unfurl card to link-preview bots that send Accept: */*", async () => {
+    await putSecret("u1", "pw", "hunter2");
+    const m = await mintOtl("u1", "pw");
+    const url = `/api/vault/otl/${m.token}`;
+    // Headers captured from a real Slack unfurl (2026-09-28): no text/html.
+    const slack = await app.inject({
+      method: "GET",
+      url,
+      headers: {
+        accept: "*/*",
+        range: "bytes=0-32768",
+        "user-agent": "Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)",
+      },
+    });
+    expect(slack.statusCode).toBe(200);
+    expect(slack.headers["content-type"]).toMatch(/^text\/html/);
+    expect(slack.body).toContain('<meta property="og:title" content="One-time secret">');
+    expect(slack.body).not.toContain("hunter2");
+    for (const ua of [
+      "Twitterbot/1.0",
+      "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+      "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)",
+      "TelegramBot (like TwitterBot)",
+      "WhatsApp/2.23.20.0",
+      "LinkedInBot/1.0 (compatible; Mozilla/5.0; Apache-HttpClient +http://www.linkedin.com)",
+      "Mozilla/5.0 (Windows NT 6.1; WOW64) SkypeUriPreview Preview/0.5",
+    ]) {
+      const r = await app.inject({ method: "GET", url, headers: { accept: "*/*", "user-agent": ua } });
+      expect(r.statusCode, ua).toBe(200);
+    }
+    // curl's own UA with */* still gets the loud 405.
+    const curl = await app.inject({ method: "GET", url, headers: { accept: "*/*", "user-agent": "curl/8.7.1" } });
+    expect(curl.statusCode).toBe(405);
+    // None of those GETs spent it.
+    const r = await app.inject({ method: "POST", url });
+    expect(r.statusCode).toBe(200);
+    expect(r.body).toBe("hunter2");
+  });
+
   it("OTL 404s empty for junk, expired, and unknown alike", async () => {
     const t0 = Date.now();
     _setNowForTest(() => t0);

@@ -55,3 +55,38 @@ committed copy in `docs/assets/brand`). The portal's `copy-brand.mjs` copies it
 into `public/`, and it is served from the portal root at `SERVER_PUBLIC_URL`.
 Slack only fetches the image from a public origin, so a `localhost` link
 unfurls without the picture.
+
+## Follow-up (2026-09-28): the card never rendered in Slack
+
+The page served its `og:` tags only when `Accept` contained `text/html`. Slack
+does not send that. A capture through a logging proxy on a tunnelled local
+instance showed:
+
+```
+GET /api/vault/otl/<token>
+User-Agent: Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)
+Accept: */*
+Range: bytes=0-32768
+```
+
+So Slack got the plain-text 405 and showed no card. The test sent Slackbot an
+invented `Accept: text/html,*/*;q=0.8`, which is why it passed.
+
+The fix matches link-preview bots by `User-Agent` (Slackbot-LinkExpanding,
+Twitterbot, facebookexternalhit, Discordbot, TelegramBot, WhatsApp,
+LinkedInBot, SkypeUriPreview, …) and serves them the page. This does not
+contradict the rejection above. There, the `User-Agent` would have decided
+whether to *spend* the token, so one missing bot burned a secret. Here, it
+only picks the page or the 405, and no `GET` spends. A missing bot costs its
+card and nothing else. `curl "$URL"` still gets the 405.
+
+After the fix, the same capture showed Slack fetching the page (200), then
+the image as `Slackbot 1.0` and again as `Slack-ImgProxy`, then the favicon.
+
+Two testing notes:
+
+- Slack seemed to skip an URL on a host whose earlier fetch had failed:
+  a fresh token on the same tunnel host produced no request at all, and the
+  next one did. When re-testing, mint a new link and paste it on its own.
+- The route logs nothing (`logLevel: "silent"`: the token is in the path).
+  To see what an unfurler sends, put a header-logging proxy in front.
