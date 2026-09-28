@@ -364,6 +364,21 @@ body {
 /* Options on the left, the primary action on the right, one line. */
 .wb-form-bar { display: flex; align-items: center; justify-content: space-between; gap: var(--s-8); flex-wrap: wrap; }
 
+/* A small busy ring, inline before a button's label. Takes the text colour. */
+.ui-spinner {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  margin-right: var(--s-8);
+  vertical-align: -0.15em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: ui-spin .7s linear infinite;
+}
+@keyframes ui-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .ui-spinner { animation-duration: 2.4s; } }
+
 /* ui/Tooltip — a hint bubble for an icon-only control. Bordered, not
    shadowed: styles.guard.test.ts keeps shadows for the modal. Inert, so it
    never eats the click on the control it describes. */

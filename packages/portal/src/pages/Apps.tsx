@@ -28,29 +28,44 @@ export default function Apps() {
   const [showNewApp, setShowNewApp] = useState(false);
   const [newName, setNewName] = useState("");
   const [newUrl, setNewUrl] = useState("");
-  const [newBusy, setNewBusy] = useState(false);
+  // registering → the server discovers and registers the OAuth client;
+  // connecting → the OAuth start is in flight or the browser is leaving for it.
+  const [newPhase, setNewPhase] = useState<"idle" | "registering" | "connecting">("idle");
+  const newBusy = newPhase !== "idle";
   const [newError, setNewError] = useState<string | null>(null);
 
   async function submitNewApp(e: React.FormEvent) {
     e.preventDefault();
     setNewError(null);
-    setNewBusy(true);
+    setNewPhase("registering");
+    let app;
     try {
-      const { app } = await createCustomApp(newName.trim(), newUrl.trim());
-      setNewName("");
-      setNewUrl("");
-      setShowNewApp(false);
-      qc.invalidateQueries({ queryKey: ["integrations"] });
-      qc.invalidateQueries({ queryKey: ["connections"] });
-      // A custom app is useless until it is connected, so go straight into its
-      // OAuth rather than leaving the human to find it and press Connect. If
-      // that fails, the app is still registered and its cell offers Connect.
-      connect({ name: app.integration, displayName: app.name, version: "MCP", toolCount: 0, authType: "oauth2", custom: true });
+      ({ app } = await createCustomApp(newName.trim(), newUrl.trim()));
     } catch (err) {
       setNewError(err instanceof Error ? err.message : "Failed to register custom app");
-    } finally {
-      setNewBusy(false);
+      setNewPhase("idle");
+      return;
     }
+    qc.invalidateQueries({ queryKey: ["integrations"] });
+    qc.invalidateQueries({ queryKey: ["connections"] });
+    // A custom app is useless until it is connected, so go straight into its
+    // OAuth. The modal stays up, busy, while the browser leaves for it.
+    setNewPhase("connecting");
+    const handedOff = await connect({
+      name: app.integration,
+      displayName: app.name,
+      version: "MCP",
+      toolCount: 0,
+      authType: "oauth2",
+      custom: true,
+    });
+    if (handedOff) return;
+    // The app is registered but the connect could not start: close so the
+    // page's error shows beside the new app, whose cell still offers Connect.
+    setNewName("");
+    setNewUrl("");
+    setShowNewApp(false);
+    setNewPhase("idle");
   }
 
   const [filter, setFilter] = useState<Filter>("all");
@@ -178,14 +193,23 @@ export default function Apps() {
 
       <Modal
         open={showNewApp}
-        onClose={() => setShowNewApp(false)}
+        onClose={() => {
+          if (!newBusy) setShowNewApp(false);
+        }}
         title="New custom app"
         size="md"
+        dismissible={!newBusy}
         footer={
           <>
-            <Button variant="outline" onClick={() => setShowNewApp(false)}>Cancel</Button>
-            <Button type="submit" form="new-custom-app-form" disabled={newBusy || !newName.trim() || !newUrl.trim()}>
-              {newBusy ? "Registering…" : "Create and connect"}
+            <Button variant="outline" disabled={newBusy} onClick={() => setShowNewApp(false)}>Cancel</Button>
+            <Button
+              type="submit"
+              form="new-custom-app-form"
+              disabled={newBusy || !newName.trim() || !newUrl.trim()}
+              aria-busy={newBusy}
+            >
+              {newBusy && <span className="ui-spinner" aria-hidden="true" />}
+              {newPhase === "registering" ? "Registering…" : newPhase === "connecting" ? "Connecting…" : "Connect"}
             </Button>
           </>
         }
@@ -193,11 +217,11 @@ export default function Apps() {
         <form id="new-custom-app-form" className="wb-section-gap" onSubmit={submitNewApp}>
           <div className="ui-field">
             <label className="ui-field-label" htmlFor="new-app-name">Name</label>
-            <Input id="new-app-name" placeholder="My custom app" value={newName} onChange={(e) => setNewName(e.target.value)} autoFocus />
+            <Input id="new-app-name" placeholder="My custom app" value={newName} onChange={(e) => setNewName(e.target.value)} disabled={newBusy} autoFocus />
           </div>
           <div className="ui-field">
             <label className="ui-field-label" htmlFor="new-app-url">MCP server URL</label>
-            <Input id="new-app-url" placeholder="https://mcp.example.com/mcp" value={newUrl} onChange={(e) => setNewUrl(e.target.value)} />
+            <Input id="new-app-url" placeholder="https://mcp.example.com/mcp" value={newUrl} onChange={(e) => setNewUrl(e.target.value)} disabled={newBusy} />
           </div>
           {newError && <div className="ui-form-error">{newError}</div>}
         </form>

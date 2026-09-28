@@ -116,9 +116,41 @@ describe("Apps", () => {
     fireEvent.click(await screen.findByRole("button", { name: "New custom app" }));
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Tracker" } });
     fireEvent.change(screen.getByLabelText("MCP server URL"), { target: { value: "https://mcp.example.com/mcp" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create and connect" }));
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
     await waitFor(() => expect(startIntegrationAuth).toHaveBeenCalledWith("custom:a1", undefined));
     expect(createCustomApp).toHaveBeenCalledWith("Tracker", "https://mcp.example.com/mcp");
+    // The browser is leaving for the OAuth page: the modal stays up, busy,
+    // rather than flashing the grid first.
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /Connecting/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+  });
+
+  it("shows a loader while the custom app registers", async () => {
+    vi.mocked(createCustomApp).mockReturnValue(new Promise(() => {}));
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "New custom app" }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Tracker" } });
+    fireEvent.change(screen.getByLabelText("MCP server URL"), { target: { value: "https://mcp.example.com/mcp" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    const busy = await screen.findByRole("button", { name: /Registering/ });
+    expect(busy).toBeDisabled();
+    expect(busy).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByLabelText("Name")).toBeDisabled();
+  });
+
+  it("closes the modal and surfaces the error when the connect cannot start", async () => {
+    vi.mocked(createCustomApp).mockResolvedValue({
+      app: { id: "a1", name: "Tracker", baseUrl: "https://mcp.example.com/mcp", integration: "custom:a1" },
+    });
+    vi.mocked(startIntegrationAuth).mockRejectedValue(new Error("OAuth start failed"));
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "New custom app" }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Tracker" } });
+    fireEvent.change(screen.getByLabelText("MCP server URL"), { target: { value: "https://mcp.example.com/mcp" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    expect(await screen.findByText("OAuth start failed")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
   it("does not start a connect when registering the custom app fails", async () => {
@@ -127,7 +159,7 @@ describe("Apps", () => {
     fireEvent.click(await screen.findByRole("button", { name: "New custom app" }));
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Tracker" } });
     fireEvent.change(screen.getByLabelText("MCP server URL"), { target: { value: "http://10.0.0.1" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create and connect" }));
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
     expect(await screen.findByText("Invalid or blocked URL: http://10.0.0.1")).toBeInTheDocument();
     expect(startIntegrationAuth).not.toHaveBeenCalled();
   });
