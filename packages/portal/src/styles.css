@@ -255,6 +255,7 @@ body {
 /* Icon-only: square, so a lone glyph is not stranded in a wide pill. In a
    toolbar it takes the row's height, matching the inputs beside it. */
 .ui-button.ui-button-icon { padding: 10px; aspect-ratio: 1; line-height: 0; }
+.ui-button.ui-button-icon.ui-button-xs { padding: 6px; }
 .ui-button-sm { font-size: 13px; padding: var(--s-4) var(--s-16); }
 .ui-button-md { font-size: 14px; padding: var(--s-8) var(--s-20); }
 .ui-button-lg { font-size: 15px; padding: var(--s-12) var(--s-24); }

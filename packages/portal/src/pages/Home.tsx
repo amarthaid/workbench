@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -16,6 +16,9 @@ import { StatStrip } from "../components/ui/StatStrip";
 import { Box, BoxRow } from "../components/ui/Box";
 import { EmptyState } from "../components/ui/EmptyState";
 import { Badge } from "../components/ui/Badge";
+import { Button } from "../components/ui/Button";
+import { Tooltip } from "../components/ui/Tooltip";
+import { CheckIcon, CopyIcon } from "../components/ui/Icons";
 import IntegrationLogo from "../components/IntegrationLogo";
 import { ActivityTable, integrationLookup } from "../components/ActivityTable";
 
@@ -151,6 +154,7 @@ export default function Home() {
           <BoxRow>
             <span className="wb-detail-key">Endpoint</span>
             <code className="wb-mono">{MCP_URL}</code>
+            <CopyUrlButton />
           </BoxRow>
         </Box>
 
@@ -167,5 +171,26 @@ export default function Home() {
         </Box>
       </div>
     </>
+  );
+}
+
+/** Icon-only copy for the MCP endpoint; flips to a check for a moment once copied. */
+function CopyUrlButton() {
+  const [copied, setCopied] = useState(false);
+  const label = copied ? "Copied" : "Copy MCP URL";
+
+  function copy() {
+    navigator.clipboard?.writeText(MCP_URL).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }
+
+  return (
+    <Tooltip label={label}>
+      <Button variant="ghost" size="xs" className="ui-button-icon" aria-label={label} onClick={copy}>
+        {copied ? <CheckIcon /> : <CopyIcon />}
+      </Button>
+    </Tooltip>
   );
 }
