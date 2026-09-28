@@ -17,7 +17,6 @@ import { Box, BoxRow } from "../components/ui/Box";
 import { EmptyState } from "../components/ui/EmptyState";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
-import { Tooltip } from "../components/ui/Tooltip";
 import { CheckIcon, CopyIcon } from "../components/ui/Icons";
 import IntegrationLogo from "../components/IntegrationLogo";
 import { ActivityTable, integrationLookup } from "../components/ActivityTable";
@@ -187,10 +186,8 @@ function CopyUrlButton() {
   }
 
   return (
-    <Tooltip label={label}>
-      <Button variant="ghost" size="xs" className="ui-button-icon" aria-label={label} onClick={copy}>
-        {copied ? <CheckIcon /> : <CopyIcon />}
-      </Button>
-    </Tooltip>
+    <Button variant="ghost" size="xs" className="ui-button-icon" aria-label={label} onClick={copy}>
+      {copied ? <CheckIcon /> : <CopyIcon />}
+    </Button>
   );
 }
