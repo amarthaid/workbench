@@ -383,10 +383,12 @@ body {
 /* ui/Tooltip — a hint bubble for an icon-only control. Bordered, not
    shadowed: styles.guard.test.ts keeps shadows for the modal. Inert, so it
    never eats the click on the control it describes. */
-.ui-tooltip-wrap { position: relative; display: inline-flex; }
+.ui-tooltip-wrap { display: inline-flex; }
+/* Portalled to <body> and placed fixed by the component (inline top/left), so
+   no card's overflow clips it. */
 .ui-tooltip {
-  position: absolute;
-  z-index: 40;
+  position: fixed;
+  z-index: 1000;
   width: max-content;
   max-width: 220px;
   padding: var(--s-4) var(--s-8);
@@ -398,9 +400,6 @@ body {
   line-height: 1.4;
   pointer-events: none;
 }
-.ui-tooltip-bottom { top: calc(100% + var(--s-4)); right: 0; }
-.ui-tooltip-top { bottom: calc(100% + var(--s-4)); right: 0; }
-.ui-tooltip-left { top: 50%; right: calc(100% + var(--s-8)); transform: translateY(-50%); }
 
 /* ui/PopoverSelect — a ghost trigger with a small listbox floating under it.
    Edged by a strong border, not a shadow: shadows stay reserved for the
