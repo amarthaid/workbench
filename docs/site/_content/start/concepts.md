@@ -53,7 +53,7 @@ The nine tools the MCP endpoint actually advertises. They are the entire
 
 | Meta-tool | What it does |
 |---|---|
-| `search_tools` | Find tools by keyword over name and description. |
+| `search_tools` | Find tools by what you want to do, ranked best first. |
 | `get_tool_schema` | Return one tool's argument schema as JSON Schema. |
 | `execute_tools` | Run one or many tools, concurrently, results in order. |
 | `whoami` | The authenticated workbench user — id and email. |

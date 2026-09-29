@@ -4,7 +4,8 @@ import { registry } from "../plugins/registry";
 import { createContext } from "../plugins/context";
 import { auditLogger } from "../audit/logger";
 import { getToken } from "../auth/tokens";
-import { getToolForUser, searchForUser, type IndexedTool } from "../custom-apps/index";
+import { ensureIndex, getToolForUser, type IndexedTool } from "../custom-apps/index";
+import { rankTools } from "../plugins/search";
 import { getCustomApp, listCustomApps, integrationKey } from "../custom-apps/store";
 import { ensureCustomAppToken } from "../custom-apps/oauth";
 import { callRemoteTool } from "../custom-apps/client";
@@ -503,23 +504,35 @@ const CURL_TTL_MIN_SECONDS = 60;
 const CURL_TTL_MAX_SECONDS = 3600;
 const CURL_TTL_DEFAULT_SECONDS = 900;
 
+const SEARCH_LIMIT_DEFAULT = 10;
+const SEARCH_LIMIT_MAX = 50;
+const SEARCH_DESCRIPTION =
+  "Search available tools by what you want to do, e.g. \"create jira issue\" or \"send email\". Matches words in any order, tolerates typos and common synonyms, and returns the best matches first with a relevance score. Returns the top 10 by default; pass limit (max 50) for more.";
+
 export const metaTools = [
   {
     name: "search_tools",
-    description: "Search available tools by name or description",
-    inputSchema: z.object({ query: z.string() }),
-    handler: async (ctx: { userId: string }, args: { query: string }) => {
-      const builtin = registry.searchTools(args.query).map((t) => ({
-        name: t.name,
-        description: t.description,
-        integration: t.integration,
-      }));
-      const customApps = (await searchForUser(ctx.userId, args.query)).map((t) => ({
-        name: t.name,
-        description: t.description,
-        integration: t.integration,
-      }));
-      return { tools: [...builtin, ...customApps] };
+    description: SEARCH_DESCRIPTION,
+    inputSchema: z.object({
+      query: z.string(),
+      limit: z.number().int().min(1).max(SEARCH_LIMIT_MAX).default(SEARCH_LIMIT_DEFAULT),
+    }),
+    handler: async (ctx: { userId: string }, args: { query: string; limit?: number }) => {
+      // Built-in and custom-app tools are ranked as one corpus, so a word's
+      // rarity (IDF) is measured across everything the agent can call.
+      const all: Array<{ name: string; description: string; integration: string }> = [
+        ...registry.listTools(),
+        ...(await ensureIndex(ctx.userId)),
+      ];
+      const ranked = rankTools(all, args.query, args.limit ?? SEARCH_LIMIT_DEFAULT);
+      return {
+        tools: ranked.map(({ tool, score }) => ({
+          name: tool.name,
+          description: tool.description,
+          integration: tool.integration,
+          score,
+        })),
+      };
     },
   },
   {
@@ -672,7 +685,16 @@ export const metaTools = [
 export const metaToolSchemas: Record<(typeof metaTools)[number]["name"], Record<string, unknown>> = {
   search_tools: {
     type: "object",
-    properties: { query: { type: "string", description: "Search keyword" } },
+    properties: {
+      query: { type: "string", description: "What you want to do, in words (e.g. \"list github pull requests\")" },
+      limit: {
+        type: "integer",
+        minimum: 1,
+        maximum: SEARCH_LIMIT_MAX,
+        default: SEARCH_LIMIT_DEFAULT,
+        description: "Maximum number of tools to return",
+      },
+    },
     required: ["query"],
   },
   get_tool_schema: {

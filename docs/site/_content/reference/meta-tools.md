@@ -25,22 +25,23 @@ flowchart LR
 
 ## search_tools
 
-Search every registered plugin tool by name or description. This is the entry
-point — plugin tools never appear in `tools/list`, so this is how an agent learns
-that `jira_create_issue` exists.
+Search every tool the caller can run — built-in plugin tools and their own custom
+apps — and get the best matches first. This is the entry point — plugin tools never
+appear in `tools/list`, so this is how an agent learns that `jira_create_issue` exists.
 
-**Description as the client sees it:** *Search available tools by name or description*
+**Description as the client sees it:** *Search available tools by what you want to do, e.g. "create jira issue" or "send email". Matches words in any order, tolerates typos and common synonyms, and returns the best matches first with a relevance score. Returns the top 10 by default; pass limit (max 50) for more.*
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `query` | string | yes | — | Search keyword |
+| `query` | string | yes | — | What you want to do, in words |
+| `limit` | integer | no | 10 | Maximum number of tools to return (1–50) |
 
-Returns `{ tools: [{ name, description, integration }] }`. Matching is over both
-name and description. The entry's `integration` is the owning plugin. Pass it to
-`connect` if execution later reports `NOT_CONNECTED`.
+Returns `{ tools: [{ name, description, integration, score }] }`, best first. The
+entry's `integration` is the owning plugin. Pass it to `connect` if execution later
+reports `NOT_CONNECTED`. How matching and ranking work: [Discovering tools](../guides/discovering-tools.md#how-matching-works).
 
 ```json
-{ "name": "search_tools", "arguments": { "query": "pull request" } }
+{ "name": "search_tools", "arguments": { "query": "create jira issue" } }
 ```
 
 ## get_tool_schema

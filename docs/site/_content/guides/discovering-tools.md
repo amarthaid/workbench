@@ -14,7 +14,7 @@ small surface through which every plugin tool is reached. Three of them cover di
 | Meta-tool | Answers |
 |---|---|
 | `list_integrations` | Which services exist, and am I connected to them? |
-| `search_tools` | Which tools match this keyword? |
+| `search_tools` | Which tools fit this task? |
 | `get_tool_schema` | What arguments does this one tool take? |
 
 The pattern is: narrow by integration or keyword, fetch one schema, then
@@ -58,12 +58,13 @@ names, logos, categories and tool counts come from the portal API
 
 ## search_tools
 
-Takes one required `query` string and returns matching tools with their descriptions and
-owning integration.
+Takes a required `query` string and an optional `limit` (default 10, max 50). Returns the
+best-matching tools first, each with its description, owning integration and a relevance
+`score`.
 
 ```json
 {"jsonrpc":"2.0","id":2,"method":"tools/call",
- "params":{"name":"search_tools","arguments":{"query":"pull request"}}}
+ "params":{"name":"search_tools","arguments":{"query":"open a pull request"}}}
 ```
 
 ```json
@@ -72,17 +73,14 @@ owning integration.
     {
       "name": "github_create_pr",
       "description": "Open a GitHub pull request from head branch into base branch. …",
-      "integration": "github"
-    },
-    {
-      "name": "github_list_prs",
-      "description": "List pull requests in a GitHub repository as slim rows … Defaults: state=open, 10 per page. …",
-      "integration": "github"
+      "integration": "github",
+      "score": 24.5
     },
     {
       "name": "bitbucket_create_pr",
       "description": "Create a Bitbucket pull request from sourceBranch into destinationBranch …",
-      "integration": "atlassian-bitbucket"
+      "integration": "atlassian-bitbucket",
+      "score": 23.74
     }
   ]
 }
@@ -93,19 +91,27 @@ follow-up tools and traps. They are abbreviated here.
 
 ### How matching works
 
-The ranking is worth knowing, because it is simpler than most search:
+Write the query the way you would describe the task: `"create jira issue"`,
+`"send email"`, `"list github pull requests"`.
 
-- The query is lowercased once, then each tool is kept if its **name** or its
-  **description** contains that string. Plain substring `includes`, no tokenizing.
-- There is **no ranking**. Results come back in registry insertion order — roughly plugin
-  load order — not by relevance. The first result is not the best result.
-- There is no fuzzy matching, no stemming, no synonyms. `"PRs"` does not match
-  `"pull request"`. A multi-word query is matched as one literal string, so
-  `"create pull"` matches nothing while `"pull request"` matches plenty.
-- There is no limit and no pagination. A one-letter query returns nearly everything.
+- **Words, in any order.** The query and each tool's name, integration and description are
+  split into words (`jira_create_issue` → jira, create, issue), stop words dropped, plurals
+  and `-ed`/`-ing` folded. `"issue create jira"` finds the same tool.
+- **Forgiving.** A word matches exactly, by prefix (`"calend"`), or by a common synonym
+  (`"ticket"` → issue, `"email"` → gmail, `"pull request"` ↔ `pr`).
+- **Typos are corrected first.** A word no tool uses is corrected to the nearest word
+  that one does (one edit for words of 4+ letters, two for 8+; a swapped pair counts as
+  one), then matched by the rules above at a discount. `"emial"` becomes `email`, which
+  also reaches `gmail` by synonym, so `"send emial"` ranks like `"send email"`, a little
+  lower. A real word is never corrected, so `"gitlab"` stays `gitlab`.
+- **Ranked.** A word in the tool name counts more than one in the integration, and both
+  more than one in the description. Rare words count more than common ones. A tool that
+  matches every word beats one that matches a few, and an exact tool name comes first.
+- **Capped.** The top 10 come back by default; pass `limit` (up to 50) for more. To see
+  one plugin's whole surface, search its name with a higher limit (`"gitlab"`, `limit: 50`).
 
-In practice: search for a single distinctive word (`"pipeline"`, `"issue"`, `"upload"`),
-or search the integration prefix (`"gitlab_"`) to enumerate one plugin's surface.
+Built-in and custom-app tools are ranked together. The `score` only orders one result
+list; do not compare it across queries.
 
 > [!NOTE] Tool names are one flat namespace
 > The registry keys tools by name across all plugins, and a later-loaded plugin
@@ -165,8 +171,8 @@ window.
 > it — treat the notice as an instruction and reissue the call with a `limit`, a field
 > selection, or pagination.
 
-The cap applies to discovery too. A `search_tools` query broad enough to match most of
-the catalog can hit it. One exception: if a result carries an `_mcpImage` sentinel
+The cap applies to discovery too. A `search_tools` call with a high `limit` and tools
+that carry long descriptions can hit it. One exception: if a result carries an `_mcpImage` sentinel
 (a screenshot, say), the content becomes image blocks instead and the text block is
 dropped entirely.
 
@@ -180,8 +186,8 @@ sequenceDiagram
     W-->>A: 9 meta-tools only
     A->>W: list_integrations
     W-->>A: github connected, gitlab not
-    A->>W: search_tools "pull request"
-    W-->>A: github_create_pr, github_list_prs, …
+    A->>W: search_tools "open a pull request"
+    W-->>A: github_create_pr, bitbucket_create_pr, …
     A->>W: get_tool_schema github_create_pr
     W-->>A: JSON Schema
     A->>W: execute_tools [{tool, args}]

@@ -113,11 +113,3 @@ export async function getToolForUser(userId: string, name: string): Promise<Inde
   const tools = await ensureIndex(userId);
   return tools.find((t) => t.name === name);
 }
-
-export async function searchForUser(userId: string, query: string): Promise<IndexedTool[]> {
-  const tools = await ensureIndex(userId);
-  const q = query.toLowerCase();
-  return tools.filter(
-    (t) => t.name.toLowerCase().includes(q) || t.description.toLowerCase().includes(q)
-  );
-}
