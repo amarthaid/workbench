@@ -97,9 +97,13 @@ Write the query the way you would describe the task: `"create jira issue"`,
 - **Words, in any order.** The query and each tool's name, integration and description are
   split into words (`jira_create_issue` → jira, create, issue), stop words dropped, plurals
   and `-ed`/`-ing` folded. `"issue create jira"` finds the same tool.
-- **Forgiving.** A word matches exactly, by prefix (`"calend"`), by a common synonym
-  (`"ticket"` → issue, `"email"` → gmail, `"pull request"` ↔ `pr`), or with a typo
-  (`"emial"`, one edit for words of 4+ letters, two for 8+).
+- **Forgiving.** A word matches exactly, by prefix (`"calend"`), or by a common synonym
+  (`"ticket"` → issue, `"email"` → gmail, `"pull request"` ↔ `pr`).
+- **Typos are corrected first.** A word no tool uses is corrected to the nearest word
+  that one does (one edit for words of 4+ letters, two for 8+; a swapped pair counts as
+  one), then matched by the rules above at a discount. `"emial"` becomes `email`, which
+  also reaches `gmail` by synonym, so `"send emial"` ranks like `"send email"`, a little
+  lower. A real word is never corrected, so `"gitlab"` stays `gitlab`.
 - **Ranked.** A word in the tool name counts more than one in the integration, and both
   more than one in the description. Rare words count more than common ones. A tool that
   matches every word beats one that matches a few, and an exact tool name comes first.

@@ -9,8 +9,10 @@
  *
  *  - tokenise both sides (snake_case, camelCase, punctuation), drop stop
  *    words, fold plurals and -ing/-ed;
- *  - each query word matches a tool word exactly, by prefix ("calend"), by a
- *    synonym ("ticket" → issue), or within a small edit distance ("emial");
+ *  - each query word matches a tool word exactly, by prefix ("calend"), or
+ *    by a synonym ("ticket" → issue); a word the catalog does not know is
+ *    first corrected to the nearest one it does ("emial" → email), which
+ *    then matches by the same rules at a discount;
  *  - a match in the tool name counts more than one in the integration, and
  *    both more than one in the description, which is BM25-weighted (rare
  *    words count more, long descriptions count each word less);
@@ -125,16 +127,61 @@ export function editDistance(a: string, b: string, max: number): number {
 const EXACT = 1;
 const SYNONYM = 0.8;
 const PREFIX = 0.7;
-const FUZZY = 0.6;
+/** A misspelt word matches through its correction, at this fraction of the corrected match. */
+const CORRECTED = 0.7;
 
 /** How well query word `q` matches tool word `w`, 0 for no match. */
 function wordMatch(q: string, w: string): number {
   if (q === w) return EXACT;
   if (SYNONYMS.get(q)?.includes(w)) return SYNONYM;
   if (q.length >= 3 && w.startsWith(q)) return PREFIX;
-  const max = q.length >= 8 ? 2 : q.length >= 4 ? 1 : 0;
-  if (max > 0 && editDistance(q, w, max) <= max) return FUZZY;
   return 0;
+}
+
+/** Edits a word of this length may be off by and still be corrected. */
+function typoBudget(word: string): number {
+  return word.length >= 8 ? 2 : word.length >= 4 ? 1 : 0;
+}
+
+/**
+ * The known words a misspelt query word most likely meant: the vocabulary
+ * words at the smallest edit distance within budget, most frequent first,
+ * at most two. A word the vocabulary already holds, or one that prefixes a
+ * vocabulary word ("calend"), is not misspelt and gets none, so a real word
+ * is never "corrected" into a neighbour (gitlab → github).
+ */
+export function corrections(q: string, vocab: Map<string, number>): string[] {
+  if (vocab.has(q)) return [];
+  const budget = typoBudget(q);
+  if (budget === 0) return [];
+  let best = budget + 1;
+  let found: string[] = [];
+  for (const w of vocab.keys()) {
+    if (q.length >= 3 && w.startsWith(q)) return [];
+    const d = editDistance(q, w, budget);
+    if (d < best) {
+      best = d;
+      found = [w];
+    } else if (d === best) {
+      found.push(w);
+    }
+  }
+  if (best > budget) return [];
+  return found.sort((a, b) => (vocab.get(b) ?? 0) - (vocab.get(a) ?? 0)).slice(0, 2);
+}
+
+/**
+ * A matcher for one query word: the word itself, or failing that its
+ * corrections, each run through the exact/synonym/prefix rules. So "emial"
+ * corrects to "email", which then also reaches "gmail" by synonym.
+ */
+function termMatcher(q: string, vocab: Map<string, number>): (w: string) => number {
+  const fixes = corrections(q, vocab);
+  return (w) => {
+    let m = wordMatch(q, w);
+    for (const c of fixes) m = Math.max(m, CORRECTED * wordMatch(c, w));
+    return m;
+  };
 }
 
 interface Fields {
@@ -164,14 +211,18 @@ const DESCRIPTION_WEIGHT = 1;
 const K1 = 1.2;
 const B = 0.75;
 
-/** Best match quality of `q` in a field and how many words hit it. */
-function fieldMatch(q: string, words: string[], memo: Map<string, number>): { quality: number; count: number } {
+/** Best match quality of a query word in a field and how many words hit it. */
+function fieldMatch(
+  match: (w: string) => number,
+  words: string[],
+  memo: Map<string, number>
+): { quality: number; count: number } {
   let quality = 0;
   let count = 0;
   for (const w of words) {
     let m = memo.get(w);
     if (m === undefined) {
-      m = wordMatch(q, w);
+      m = match(w);
       memo.set(w, m);
     }
     if (m > 0) {
@@ -191,6 +242,13 @@ export function rankTools<T extends Searchable>(tools: T[], query: string, limit
   if (terms.length === 0 || tools.length === 0) return [];
 
   const docs = tools.map(fieldsOf);
+  // Every word the corpus (and the synonym list) knows, with how often it
+  // occurs; misspelt query words are corrected against it.
+  const vocab = new Map<string, number>(Array.from(SYNONYMS.keys(), (w) => [w, 0]));
+  for (const d of docs) {
+    for (const w of [...d.name, ...d.integration, ...d.description]) vocab.set(w, (vocab.get(w) ?? 0) + 1);
+  }
+  const matchers = new Map(terms.map((q) => [q, termMatcher(q, vocab)]));
   const avgLen = docs.reduce((n, d) => n + d.description.length, 0) / docs.length || 1;
   const normalizedQuery = query.trim().toLowerCase();
 
@@ -200,14 +258,15 @@ export function rankTools<T extends Searchable>(tools: T[], query: string, limit
   const inName = new Array<number>(tools.length).fill(0);
 
   for (const q of terms) {
+    const match = matchers.get(q)!;
     const memo = new Map<string, number>();
     const perDoc: number[] = [];
     let df = 0;
     docs.forEach((d, i) => {
-      const n = fieldMatch(q, d.name, memo);
+      const n = fieldMatch(match, d.name, memo);
       if (n.quality > 0) inName[i]++;
-      const g = fieldMatch(q, d.integration, memo);
-      const s = fieldMatch(q, d.description, memo);
+      const g = fieldMatch(match, d.integration, memo);
+      const s = fieldMatch(match, d.description, memo);
       const tf = s.count;
       const desc = tf > 0 ? (s.quality * (tf * (K1 + 1))) / (tf + K1 * (1 - B + (B * d.description.length) / avgLen)) : 0;
       const v = NAME_WEIGHT * n.quality + INTEGRATION_WEIGHT * g.quality + DESCRIPTION_WEIGHT * desc;
@@ -234,7 +293,7 @@ export function rankTools<T extends Searchable>(tools: T[], query: string, limit
     // A name with fewer unmatched words is the more specific hit:
     // "list pull requests" → github_list_prs over github_list_pr_comments.
     const name = docs[i].name;
-    const namePrecision = name.length ? name.filter((w) => terms.some((q) => wordMatch(q, w) > 0)).length / name.length : 0;
+    const namePrecision = name.length ? name.filter((w) => terms.some((q) => matchers.get(q)!(w) > 0)).length / name.length : 0;
     let score =
       scores[i] * (0.25 + 0.75 * coverage * coverage) * (1 + nameCoverage * nameCoverage) * (0.8 + 0.2 * namePrecision);
     if (tool.name.toLowerCase() === normalizedQuery) score *= 2;

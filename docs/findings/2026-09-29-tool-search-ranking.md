@@ -20,9 +20,22 @@ index and no dependency:
   stem applied to both sides (`updates`/`updated`/`update` → `updat`,
   `prs` → `pr`), and `pull request` / `merge request` folded to `pr` / `mr`,
   since tool names use the short form and descriptions the phrase.
-- A query word matches a tool word exactly (1.0), by synonym (0.8), by prefix
-  of 3+ letters (0.7), or within edit distance 1 (4+ letters) or 2 (8+)
-  (0.6). The distance is optimal-string-alignment, so `emial` → `email` is one edit.
+- A query word matches a tool word exactly (1.0), by synonym (0.8), or by
+  prefix of 3+ letters (0.7).
+- A query word the corpus does not know (not a word of any tool, not a
+  synonym, not a prefix of either) is first **corrected** to the nearest known
+  words: at most 1 edit for 4+ letters, 2 for 8+, where a swapped pair counts
+  as one edit (optimal-string-alignment). The two most frequent are kept. The
+  correction then goes through the same three rules at ×0.7.
+
+  The first version matched typos directly against each tool word instead.
+  `emial` then reached `email` in a description, but never `gmail` in a name,
+  because the synonym table is keyed by correctly spelt words. `send emial`
+  scored 9.49 against 39.6 for `send email`. It now scores 35.25 against
+  42.95. Correcting only unknown words also stops real words from
+  fuzzy-matching their neighbours (`send` ↔ `sent`, `list` ↔ `lint`), and
+  keeps an ambiguous typo honest: `gitlub` is one edit from both `gitlab` and
+  `github`, and both are kept.
 - Field weights are name 3, integration 2 and description 1. The description
   term is BM25-saturated and length-normalised. Each word is IDF-weighted
   over the corpus it is searched in.
@@ -35,8 +48,10 @@ index and no dependency:
 top 10 by default (`limit` up to 50), and adds a `score` to each row.
 Otherwise the output shape is unchanged.
 
-**Measured on the 226-tool built-in catalog.** Twelve agent phrasings now put
-the intended tool first; they are pinned in `tests/tool-search.test.ts`.
+**Measured on the 226-tool built-in catalog.** Twelve agent phrasings,
+plus five misspelt ones (`create jria issue`, `slakc send message`,
+`search confluance pages`, …), now put the intended tool first. They are
+pinned in `tests/tool-search.test.ts`.
 The old substring search found 2 of the 12, where the query was a literal
 tool name or a phrase in a description (`browser_navigate`,
 `search confluence pages`). The other 10 returned `[]`. A query takes about 1–3 ms,

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { editDistance, rankTools, stem, tokenize } from "../src/plugins/search";
+import { corrections, editDistance, rankTools, stem, tokenize } from "../src/plugins/search";
 import { loadPlugins } from "../src/plugins/loader";
 import { registry } from "../src/plugins/registry";
 
@@ -36,6 +36,43 @@ describe("editDistance", () => {
   });
 });
 
+describe("corrections", () => {
+  const vocab = new Map([
+    ["email", 5],
+    ["gmail", 9],
+    ["github", 20],
+    ["gitlab", 20],
+    ["jira", 12],
+    ["calendar", 3],
+  ]);
+
+  it("corrects an unknown word to the nearest known one", () => {
+    expect(corrections("emial", vocab)).toEqual(["email"]);
+    expect(corrections("jria", vocab)).toEqual(["jira"]);
+    expect(corrections("gihtub", vocab)).toEqual(["github"]);
+  });
+
+  it("keeps both when two known words are equally close", () => {
+    // one substitution from each: l→h (github), u→a (gitlab)
+    expect(corrections("gitlub", vocab).sort()).toEqual(["github", "gitlab"]);
+  });
+
+  it("allows two edits only for long words", () => {
+    expect(corrections("calandr", vocab)).toEqual([]);
+    expect(corrections("calandarr", vocab)).toEqual(["calendar"]);
+  });
+
+  it("leaves known words, prefixes and short words alone", () => {
+    expect(corrections("gitlab", vocab)).toEqual([]);
+    expect(corrections("calend", vocab)).toEqual([]);
+    expect(corrections("jir", vocab)).toEqual([]);
+  });
+
+  it("returns nothing past the edit budget", () => {
+    expect(corrections("kubernetes", vocab)).toEqual([]);
+  });
+});
+
 describe("rankTools", () => {
   const tools = [
     tool("jira_create_issue", "Create a Jira issue and return its key."),
@@ -55,6 +92,15 @@ describe("rankTools", () => {
 
   it("tolerates a typo", () => {
     expect(rankTools(tools, "send emial")[0].tool.name).toBe("google_gmail_send");
+    expect(rankTools(tools, "creat jria issue")[0].tool.name).toBe("jira_create_issue");
+  });
+
+  it("carries a corrected word through synonyms, a little below the right spelling", () => {
+    // emial → email → gmail, so the typo reaches the tool name too
+    const typo = rankTools(tools, "send emial")[0].score;
+    const right = rankTools(tools, "send email")[0].score;
+    expect(typo).toBeLessThan(right);
+    expect(typo).toBeGreaterThan(right * 0.5);
   });
 
   it("matches a prefix", () => {
@@ -109,6 +155,12 @@ describe("rankTools over the built-in catalog", () => {
     ["read google sheet", "google_sheets_read"],
     ["spreadsheet append row", "google_sheets_append"],
     ["browser_navigate", "browser_navigate"],
+    // typos
+    ["create jria issue", "jira_create_issue"],
+    ["slakc send message", "slack_send_message"],
+    ["search confluance pages", "confluence_search_pages"],
+    ["uplaod file to drive", "google_drive_upload"],
+    ["read gogle sheet", "google_sheets_read"],
   ])("%s → %s", (query, expected) => {
     expect(rankTools(registry.listTools(), query)[0]?.tool.name).toBe(expected);
   });
