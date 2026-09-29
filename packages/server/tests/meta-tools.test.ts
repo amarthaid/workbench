@@ -38,6 +38,11 @@ vi.mock("../src/auth/users", () => ({
   getUserById: vi.fn(),
 }));
 
+vi.mock("../src/custom-apps/index", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/custom-apps/index")>()),
+  ensureIndex: vi.fn(async () => []),
+}));
+
 vi.mock("../src/auth/cookie", () => ({
   hasValidCookies: vi.fn(() => false),
   storeCookies: vi.fn(),
@@ -99,12 +104,31 @@ describe("meta-tools", () => {
   });
 
   describe("search_tools", () => {
-    it("returns matching tools", async () => {
-      vi.spyOn(registry, "searchTools").mockReturnValue([mockTool as any]);
+    it("returns matching tools with a score", async () => {
+      vi.spyOn(registry, "listTools").mockReturnValue([mockTool as any]);
       const tool = findTool("search_tools");
       const result = await tool.handler({ userId: "user-1" }, { query: "test" });
       expect(result.tools).toHaveLength(1);
-      expect(result.tools[0].name).toBe("test_tool");
+      expect(result.tools[0]).toMatchObject({ name: "test_tool", integration: "test-integ" });
+      expect(result.tools[0].score).toBeGreaterThan(0);
+    });
+
+    it("ranks built-in and custom-app tools together, and applies limit", async () => {
+      const { ensureIndex } = await import("../src/custom-apps/index");
+      vi.mocked(ensureIndex).mockResolvedValueOnce([
+        { name: "linear__create_issue", description: "Create a Linear issue", integration: "custom:1" } as any,
+      ]);
+      vi.spyOn(registry, "listTools").mockReturnValue([
+        { ...mockTool, name: "jira_create_issue", description: "Create a Jira issue" } as any,
+        { ...mockTool, name: "jira_get_issue", description: "Get a Jira issue" } as any,
+      ]);
+      const tool = findTool("search_tools");
+
+      const linear = await tool.handler({ userId: "user-1" }, { query: "create linear issue" });
+      expect(linear.tools[0].name).toBe("linear__create_issue");
+
+      const limited = await tool.handler({ userId: "user-1" }, { query: "issue", limit: 1 });
+      expect(limited.tools).toHaveLength(1);
     });
   });
 
