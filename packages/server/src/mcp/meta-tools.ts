@@ -515,7 +515,9 @@ export const metaTools = [
     description: SEARCH_DESCRIPTION,
     inputSchema: z.object({
       query: z.string(),
-      limit: z.number().int().min(1).max(SEARCH_LIMIT_MAX).default(SEARCH_LIMIT_DEFAULT),
+      // Coerced: a client that cached tools/list before `limit` existed has no
+      // type for it and sends "50" as a string.
+      limit: z.coerce.number().int().min(1).max(SEARCH_LIMIT_MAX).default(SEARCH_LIMIT_DEFAULT),
     }),
     handler: async (ctx: { userId: string }, args: { query: string; limit?: number }) => {
       // Built-in and custom-app tools are ranked as one corpus, so a word's
