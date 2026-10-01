@@ -122,3 +122,70 @@ describe("UsersTab", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("can't be disabled here");
   });
 });
+
+describe("UsersTab search", () => {
+  const MANY = [
+    user({ id: "u1", email: "alice@example.com" }),
+    user({ id: "u2", email: "Bob.Builder@example.com" }),
+    user({ id: "u3", email: "carol@corp.example.org" }),
+    user({ id: "u4", email: null }),
+  ];
+
+  beforeEach(() => {
+    api.fetchAdminUsers.mockResolvedValue({ users: MANY, total: 4 });
+  });
+
+  const search = (value: string) =>
+    fireEvent.change(screen.getByLabelText("Search users by email"), { target: { value } });
+
+  it("filters the list by email as you type, ignoring case", async () => {
+    renderWithClient(<UsersTab />);
+    await screen.findByText("alice@example.com");
+    search("BOB");
+    expect(screen.getByText("Bob.Builder@example.com")).toBeInTheDocument();
+    expect(screen.queryByText("alice@example.com")).not.toBeInTheDocument();
+    expect(screen.queryByText("carol@corp.example.org")).not.toBeInTheDocument();
+  });
+
+  it("matches anywhere in the address, and ignores surrounding spaces", async () => {
+    renderWithClient(<UsersTab />);
+    await screen.findByText("alice@example.com");
+    search("  corp.example ");
+    expect(screen.getByText("carol@corp.example.org")).toBeInTheDocument();
+    expect(screen.queryByText("alice@example.com")).not.toBeInTheDocument();
+  });
+
+  it("says how many match, and restores the full list when cleared", async () => {
+    renderWithClient(<UsersTab />);
+    await screen.findByText("alice@example.com");
+    search("example.com");
+    expect(screen.getByText("Showing 2 of 4 users.")).toBeInTheDocument();
+    search("");
+    expect(screen.queryByText(/Showing \d+ of/)).not.toBeInTheDocument();
+    expect(screen.getByText("carol@corp.example.org")).toBeInTheDocument();
+  });
+
+  it("explains when nothing matches, instead of showing an empty table", async () => {
+    renderWithClient(<UsersTab />);
+    await screen.findByText("alice@example.com");
+    search("nobody-here");
+    expect(screen.getByText('No users match "nobody-here".')).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  });
+
+  it("keeps acting on the right user while a filter is applied", async () => {
+    renderWithClient(<UsersTab />);
+    await screen.findByText("alice@example.com");
+    search("carol");
+    fireEvent.click(screen.getByRole("button", { name: "Disable carol@corp.example.org" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Disable" }));
+    await waitFor(() => expect(api.disableAdminUser).toHaveBeenCalledWith("u3"));
+  });
+
+  it("is honest when the server list was cut off, since search only covers what was loaded", async () => {
+    api.fetchAdminUsers.mockResolvedValue({ users: MANY, total: 900 });
+    renderWithClient(<UsersTab />);
+    await screen.findByText("alice@example.com");
+    expect(screen.getByText(/Loaded the first 4 of 900 users/)).toBeInTheDocument();
+  });
+});

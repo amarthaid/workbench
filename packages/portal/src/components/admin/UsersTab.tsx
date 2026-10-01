@@ -14,6 +14,7 @@ import { Box } from "../ui/Box";
 import { Button } from "../ui/Button";
 import { DataTable } from "../ui/DataTable";
 import { EmptyState } from "../ui/EmptyState";
+import { Input } from "../ui/Input";
 import { Modal } from "../ui/Modal";
 import { ADMIN_STALE_MS, CardBody } from "./CardBody";
 
@@ -45,16 +46,41 @@ export default function UsersTab() {
     },
   });
 
-  const users = data?.users ?? [];
+  const [query, setQuery] = useState("");
+
   const label = (u: AdminUser) => u.email ?? u.id;
+  const all = data?.users ?? [];
+  // Filtered in the browser over what the server sent: instant, and enough for
+  // an instance with a few hundred users. The server caps the list, so the card
+  // says so when it was cut off rather than pretending to search everyone.
+  const q = query.trim().toLowerCase();
+  const users = q ? all.filter((u) => label(u).toLowerCase().includes(q)) : all;
+  const truncated = data !== undefined && data.total > all.length;
 
   return (
     <>
       {error && <div className="ui-form-error" role="alert">{error}</div>}
       <Box title="Users">
         <CardBody isLoading={isLoading} isError={isError} label="users">
-          {users.length === 0 ? (
+          {all.length > 0 && (
+            <div className="wb-box-toolbar">
+              <div className="wb-toolbar-controls">
+                <label className="ui-sr-only" htmlFor="admin-users-search">Search users by email</label>
+                <Input
+                  id="admin-users-search"
+                  type="search"
+                  placeholder="Search by email"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+              </div>
+              {q && <span className="ui-stat-note">Showing {users.length} of {all.length} users.</span>}
+            </div>
+          )}
+          {all.length === 0 ? (
             <EmptyState message="No users yet." />
+          ) : users.length === 0 ? (
+            <EmptyState message={`No users match "${query.trim()}".`} />
           ) : (
             <DataTable
               caption="All users"
@@ -124,6 +150,11 @@ export default function UsersTab() {
                 );
               })}
             </DataTable>
+          )}
+          {truncated && data && (
+            <div className="ui-stat-note">
+              Loaded the first {all.length} of {data.total} users; search covers only these.
+            </div>
           )}
         </CardBody>
       </Box>

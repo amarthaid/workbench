@@ -30,7 +30,7 @@ reach the allowlist.
 
 ## What the Overview shows
 
-Five read-only cards, each loaded independently:
+The instance summary sits at the top. Below it, **Activity**, **Connections**, **Custom apps** and **Browser profiles** are tabs; each loads only when you open it, so nothing walks the profiles on disk until you ask. They are read-only and fail independently:
 
 - **Instance:** version, database backend, cluster mode, audit-log destination, user count and the number of allowlisted admins (a number, never the list; it counts allowlist entries, whether or not they have signed in).
 - **Activity:** every user's tool calls, newest first, with the user's email. Filter by app, errors only, or a user's email. An unrecognised `status` filter is refused with a 400 rather than ignored. Shows tool names and error text, never arguments. With `AUDIT_LOG_DEST` other than `sqlite` the events are not in the database, and the card says so.
@@ -40,7 +40,7 @@ Five read-only cards, each loaded independently:
 
 ## Managing users
 
-The **Users** tab lists every user with their connection and custom-app counts, last activity, whether they have an API key, and whether they are disabled.
+The **Users** tab lists every user with their connection and custom-app counts, last activity, whether they have an API key, and whether they are disabled. The search box filters by email as you type (case-insensitive, matching anywhere in the address). The list is capped at 500 users, and search covers only those; the tab says so when the list was cut off.
 
 - **Disable** signs the user out of the portal and stops every credential: their API key, OAuth logins and refresh tokens, and new SSO sign-ins. Their connections, vault and files are kept, so **Enable** restores the account. Disabling asks for confirmation.
 - **Revoke key** clears the user's API key; agents using it stop working until they create a new one.
