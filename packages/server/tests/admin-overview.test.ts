@@ -47,6 +47,22 @@ async function seedUser(id: string, email: string | null) {
   await db.run("INSERT INTO users (id, email) VALUES (?, ?)", [id, email]);
 }
 
+const NOW = Math.floor(Date.now() / 1000);
+
+async function seedEvent(o: {
+  userId: string;
+  integration?: string;
+  tool?: string;
+  success?: boolean;
+  createdAt?: number;
+}) {
+  await db.run(
+    `INSERT INTO audit_log (user_id, integration, tool, action, success, error, duration_ms, created_at)
+     VALUES (?, ?, ?, 'EXECUTE', ?, NULL, 100, ?)`,
+    [o.userId, o.integration ?? "acme", o.tool ?? "acme_search", o.success ?? true, o.createdAt ?? NOW]
+  );
+}
+
 beforeEach(async () => {
   for (const t of ["audit_log", "connections", "custom_apps", "users"]) {
     await db.exec(`DELETE FROM ${t}`);
@@ -57,7 +73,7 @@ beforeEach(async () => {
 });
 
 // Every overview endpoint is listed here so the gate is asserted for each.
-const OVERVIEW_URLS = ["/api/admin/overview/instance"];
+const OVERVIEW_URLS = ["/api/admin/overview/instance", "/api/admin/overview/activity"];
 
 describe.each(OVERVIEW_URLS)("%s gate", (url) => {
   it("401 without a session", async () => {
@@ -105,5 +121,83 @@ describe("GET /api/admin/overview/instance", () => {
     const res = await get("/api/admin/overview/instance");
     expect(JSON.parse(res.body).admin_count).toBe(1);
     expect(res.body).not.toContain("admin@example.com");
+  });
+});
+
+describe("GET /api/admin/overview/activity", () => {
+  it("returns every user's events, newest first, with the user's email", async () => {
+    await seedUser("user-admin", "admin@example.com");
+    await seedUser("user-dev", "dev@example.com");
+    await seedEvent({ userId: "user-admin", tool: "older", createdAt: NOW - 10 });
+    await seedEvent({ userId: "user-dev", tool: "newer", createdAt: NOW });
+    const body = JSON.parse((await get("/api/admin/overview/activity")).body);
+    expect(body.stored).toBe(true);
+    expect(body.events.map((e: { tool: string }) => e.tool)).toEqual(["newer", "older"]);
+    expect(body.events.map((e: { user_email: string }) => e.user_email)).toEqual([
+      "dev@example.com",
+      "admin@example.com",
+    ]);
+    expect(body.next_cursor).toBeNull();
+  });
+
+  it("gives a null email for an event whose user row is gone", async () => {
+    await seedEvent({ userId: "user-ghost" });
+    const body = JSON.parse((await get("/api/admin/overview/activity")).body);
+    expect(body.events).toHaveLength(1);
+    expect(body.events[0].user_id).toBe("user-ghost");
+    expect(body.events[0].user_email).toBeNull();
+  });
+
+  it("filters by user email, case-insensitively", async () => {
+    await seedUser("user-admin", "admin@example.com");
+    await seedUser("user-dev", "dev@example.com");
+    await seedEvent({ userId: "user-admin", tool: "a" });
+    await seedEvent({ userId: "user-dev", tool: "d" });
+    const body = JSON.parse((await get("/api/admin/overview/activity?email=DEV@Example.com")).body);
+    expect(body.events.map((e: { tool: string }) => e.tool)).toEqual(["d"]);
+  });
+
+  it("filters by integration and by status", async () => {
+    await seedUser("user-dev", "dev@example.com");
+    await seedEvent({ userId: "user-dev", integration: "acme", tool: "ok_tool", success: true });
+    await seedEvent({ userId: "user-dev", integration: "demo-repo", tool: "bad_tool", success: false });
+    const byInteg = JSON.parse((await get("/api/admin/overview/activity?integration=demo-repo")).body);
+    expect(byInteg.events.map((e: { tool: string }) => e.tool)).toEqual(["bad_tool"]);
+    const byStatus = JSON.parse((await get("/api/admin/overview/activity?status=error")).body);
+    expect(byStatus.events.map((e: { tool: string }) => e.tool)).toEqual(["bad_tool"]);
+  });
+
+  it("says events are not stored when the audit destination is not sqlite", async () => {
+    config.AUDIT_LOG_DEST = "stdout";
+    await seedEvent({ userId: "user-dev" });
+    const body = JSON.parse((await get("/api/admin/overview/activity")).body);
+    expect(body).toEqual({ stored: false, events: [], next_cursor: null });
+  });
+
+  it("pages across rows sharing one second without skipping or repeating any", async () => {
+    for (const tool of ["a", "b", "c"]) await seedEvent({ userId: "user-dev", tool, createdAt: NOW });
+    const first = JSON.parse((await get("/api/admin/overview/activity?limit=2")).body);
+    expect(first.events).toHaveLength(2);
+    expect(first.next_cursor).toEqual(expect.any(String));
+    const second = JSON.parse(
+      (await get(`/api/admin/overview/activity?limit=2&cursor=${first.next_cursor}`)).body
+    );
+    expect(second.events).toHaveLength(1);
+    expect(second.next_cursor).toBeNull();
+    const ids = [...first.events, ...second.events].map((e: { id: number }) => e.id);
+    expect(new Set(ids).size).toBe(3);
+  });
+
+  it("rejects a cursor it did not mint", async () => {
+    const res = await get("/api/admin/overview/activity?cursor=not-a-cursor");
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body)).toEqual({ error: "invalid_cursor" });
+  });
+
+  it("clamps the page size to at least one row", async () => {
+    await seedEvent({ userId: "user-dev", tool: "a", createdAt: NOW });
+    await seedEvent({ userId: "user-dev", tool: "b", createdAt: NOW - 1 });
+    const body = JSON.parse((await get("/api/admin/overview/activity?limit=0")).body);
+    expect(body.events).toHaveLength(1);
   });
 });
