@@ -895,6 +895,31 @@ body {
   padding-bottom: var(--s-8);
 }
 
+/* A filter bar inside a Box. .wb-page-toolbar is the page header's: it carries a
+   top margin and no side padding, which pins the tabs to the Box's left edge.
+   Here the tabs stretch to the bar's full height so the active underline lands
+   on the hairline beneath it, and the controls are padded to match. */
+.wb-box-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--s-12);
+  padding: 0 var(--s-12);
+  border-bottom: 1px solid var(--border);
+}
+
+.wb-box-toolbar .ui-tabs { align-self: stretch; align-items: stretch; }
+
+.wb-box-toolbar .wb-toolbar-controls { padding: var(--s-8) 0; flex-wrap: wrap; }
+
+/* An inline form: input and submit side by side, not stacked as block children. */
+.wb-toolbar-form {
+  display: flex;
+  align-items: center;
+  gap: var(--s-8);
+}
+
 .wb-app-grid {
   display: grid;
   grid-template-columns: 1fr;

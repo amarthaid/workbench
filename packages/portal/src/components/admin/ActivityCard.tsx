@@ -65,7 +65,7 @@ export default function ActivityCard() {
 
   return (
     <Box title="Activity">
-      <div className="wb-page-toolbar">
+      <div className="wb-box-toolbar">
         <Tabs
           label="Filter activity"
           value={status}
@@ -85,6 +85,7 @@ export default function ActivityCard() {
             ))}
           </Select>
           <form
+            className="wb-toolbar-form"
             onSubmit={(e) => {
               e.preventDefault();
               setEmail(emailDraft.trim());
