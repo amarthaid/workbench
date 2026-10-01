@@ -2,7 +2,8 @@ import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { db } from "../db";
 import { activeProfiles, profileDirName, profilesBaseDir } from "../auth/profile-chromium";
-import { adminScope } from "./admin-scope";
+import { adminScope, adminActor } from "./admin-scope";
+import { listUsers, disableUser, enableUser, revokeUserKey } from "../admin/users";
 import { getInstanceInfo } from "../admin/instance";
 import { adminActivity } from "../admin/activity";
 import { getConnectionStats } from "../admin/connections";
@@ -17,6 +18,18 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
       if (!result.ok) return reply.status(400).send({ error: result.error });
       return result.page;
     });
+    scope.get("/users", async () => listUsers());
+    for (const [path, act] of [
+      ["disable", disableUser],
+      ["enable", enableUser],
+      ["revoke-key", revokeUserKey],
+    ] as const) {
+      scope.post<{ Params: { id: string } }>(`/users/:id/${path}`, async (request, reply) => {
+        const result = await act(adminActor(request), request.params.id);
+        if (!result.ok) return reply.status(result.status).send({ error: result.error });
+        return { ok: true };
+      });
+    }
     scope.get("/overview/connections", async () => getConnectionStats());
     scope.get("/overview/custom-apps", async () => listAllCustomApps());
     scope.get("/overview/browser-profiles", async () => {
