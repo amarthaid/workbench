@@ -30,6 +30,17 @@ vi.mock("../src/auth/users", () => ({
   }),
 }));
 
+const prof = vi.hoisted(() => ({ dir: "" }));
+
+vi.mock("../src/auth/profile-chromium", () => ({
+  profilesBaseDir: () => prof.dir,
+  profileDirName: (u: string) => u.replace(/[^a-zA-Z0-9_-]/g, "_"),
+  activeProfiles: new Set<string>(),
+}));
+
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { registerAdminRoutes } from "../src/api/admin-routes";
 import { config } from "../src/config";
 import { db } from "../src/db";
@@ -85,6 +96,7 @@ async function seedApp(o: { id: string; userId: string; name: string; url: strin
 }
 
 beforeEach(async () => {
+  prof.dir = mkdtempSync(join(tmpdir(), "overview-profiles-"));
   for (const t of ["audit_log", "connections", "custom_apps", "users"]) {
     await db.exec(`DELETE FROM ${t}`);
   }
@@ -99,6 +111,7 @@ const OVERVIEW_URLS = [
   "/api/admin/overview/activity",
   "/api/admin/overview/connections",
   "/api/admin/overview/custom-apps",
+  "/api/admin/overview/browser-profiles",
 ];
 
 describe.each(OVERVIEW_URLS)("%s gate", (url) => {
@@ -275,5 +288,31 @@ describe("GET /api/admin/overview/custom-apps", () => {
     await seedApp({ id: "app-9", userId: "user-ghost", name: "orphan", url: "https://mcp.example.com/z", createdAt: NOW });
     const body = JSON.parse((await get("/api/admin/overview/custom-apps")).body);
     expect(body.apps[0].owner_email).toBeNull();
+  });
+});
+
+describe("GET /api/admin/overview/browser-profiles", () => {
+  it("lists profiles with the owner's email and size, without leaking the path", async () => {
+    await seedUser("user-dev", "dev@example.com");
+    mkdirSync(join(prof.dir, "user-dev", "Default"), { recursive: true });
+    writeFileSync(join(prof.dir, "user-dev", "Default", "Cookies"), Buffer.alloc(10));
+    const res = await get("/api/admin/overview/browser-profiles");
+    const body = JSON.parse(res.body);
+    expect(body.profiles).toHaveLength(1);
+    expect(body.profiles[0]).toMatchObject({
+      name: "user-dev",
+      email: "dev@example.com",
+      bytes: 10,
+      live: true,
+    });
+    expect(body.this_worker_only).toBe(false);
+    expect(res.body).not.toContain(prof.dir);
+  });
+
+  it("says this worker only when cluster mode is on", async () => {
+    config.CLUSTER_ENABLED = true;
+    const body = JSON.parse((await get("/api/admin/overview/browser-profiles")).body);
+    expect(body.this_worker_only).toBe(true);
+    expect(body.profiles).toEqual([]);
   });
 });

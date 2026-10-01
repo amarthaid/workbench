@@ -1,9 +1,14 @@
+import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
+import { config } from "../config";
+import { db } from "../db";
+import { activeProfiles, profileDirName, profilesBaseDir } from "../auth/profile-chromium";
 import { adminScope } from "./admin-scope";
 import { getInstanceInfo } from "../admin/instance";
 import { adminActivity } from "../admin/activity";
 import { getConnectionStats } from "../admin/connections";
 import { listAllCustomApps } from "../admin/custom-apps";
+import { listBrowserProfiles } from "../admin/profiles";
 
 export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
   await adminScope(app, (scope) => {
@@ -15,5 +20,17 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
     });
     scope.get("/overview/connections", async () => getConnectionStats());
     scope.get("/overview/custom-apps", async () => listAllCustomApps());
+    scope.get("/overview/browser-profiles", async () => {
+      const base = profilesBaseDir();
+      const users = await db.all<{ id: string; email: string | null }>("SELECT id, email FROM users");
+      const emailByDirName = new Map(users.map((u) => [profileDirName(u.id), u.email ?? null]));
+      const profiles = await listBrowserProfiles({
+        baseDir: base,
+        activeDirs: [...activeProfiles].map((userId) => join(base, profileDirName(userId))),
+        emailByDirName,
+      });
+      // Under CLUSTER_ENABLED each process sees only its own volume.
+      return { profiles, this_worker_only: !!config.CLUSTER_ENABLED };
+    });
   });
 }
