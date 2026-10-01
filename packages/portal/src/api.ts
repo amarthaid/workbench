@@ -801,6 +801,11 @@ async function adminPost(path: string): Promise<void> {
   await throwIfAdminActionFailed(res);
 }
 
+async function adminPut(path: string, body: unknown): Promise<void> {
+  const res = await fetch(`${API_URL}${path}`, { method: "PUT", headers: getHeaders(), body: JSON.stringify(body) });
+  await throwIfAdminActionFailed(res);
+}
+
 async function throwIfAdminActionFailed(res: Response): Promise<void> {
   if (res.status === 401) {
     localStorage.removeItem("awb_token");
@@ -815,3 +820,17 @@ async function throwIfAdminActionFailed(res: Response): Promise<void> {
 export const disableAdminUser = (id: string) => adminPost(`/api/admin/users/${encodeURIComponent(id)}/disable`);
 export const enableAdminUser = (id: string) => adminPost(`/api/admin/users/${encodeURIComponent(id)}/enable`);
 export const revokeAdminUserKey = (id: string) => adminPost(`/api/admin/users/${encodeURIComponent(id)}/revoke-key`);
+
+// ─── Admin config ────────────────────────────────────────────────────────
+export interface AdminConfig {
+  integrations: { name: string; display_name: string; enabled: boolean }[];
+  custom_apps_policy: { mode: "all" | "none" | "allowlist"; user_ids: string[] };
+}
+
+export const fetchAdminConfig = () => adminGet<AdminConfig>("/api/admin/config", "config");
+
+export const setAdminIntegrationEnabled = (name: string, enabled: boolean) =>
+  adminPut(`/api/admin/config/integrations/${encodeURIComponent(name)}`, { enabled });
+
+export const setAdminCustomAppsPolicy = (policy: AdminConfig["custom_apps_policy"]) =>
+  adminPut("/api/admin/config/custom-apps", policy);

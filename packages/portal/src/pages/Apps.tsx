@@ -13,10 +13,15 @@ import { Button } from "../components/ui/Button";
 import { Modal } from "../components/ui/Modal";
 import IntegrationLogo from "../components/IntegrationLogo";
 import { useConnectFlow } from "../hooks/useConnectFlow";
+import { useAuth } from "../context/AuthContext";
 
 type Filter = "all" | "connected" | "available";
 
 export default function Apps() {
+  // An admin's custom-app policy can exclude this user; undefined (an older
+  // server) means no restriction.
+  const { user } = useAuth();
+  const canCreateCustomApp = user?.canCreateCustomApps !== false;
   const { data, isLoading, isError } = useQuery({ queryKey: ["integrations"], queryFn: fetchIntegrations });
   const { data: connectionsData, isError: connectionsIsError } = useQuery({
     queryKey: ["connections"],
@@ -155,15 +160,17 @@ export default function Apps() {
                   </Select>
                 </>
               )}
-              <Tooltip label="New custom app — point workbench at an MCP server" placement="bottom">
-                <Button
-                  className="ui-button-icon"
-                  onClick={() => setShowNewApp(true)}
-                  aria-label="New custom app"
-                >
-                  <PlusIcon />
-                </Button>
-              </Tooltip>
+              {canCreateCustomApp && (
+                <Tooltip label="New custom app — point workbench at an MCP server" placement="bottom">
+                  <Button
+                    className="ui-button-icon"
+                    onClick={() => setShowNewApp(true)}
+                    aria-label="New custom app"
+                  >
+                    <PlusIcon />
+                  </Button>
+                </Tooltip>
+              )}
             </div>
           </>
         }
