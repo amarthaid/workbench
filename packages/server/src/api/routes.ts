@@ -10,6 +10,7 @@ import { verifyApiKey, getUserById, setApiKey, clearApiKey, hasApiKey, getApiKey
 import { buildAuthUrl, handleCallback } from "../auth/google";
 import { buildAuthUrl as buildKeycloakAuthUrl, handleCallback as handleKeycloakCallback, isKeycloakConfigured } from "../auth/keycloak";
 import { signSession, verifySession } from "../auth/session";
+import { isAdminEmail } from "../auth/admin";
 import { config } from "../config";
 import { getToken, deleteToken, storeToken } from "../auth/tokens";
 import {
@@ -226,7 +227,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     if (!profile) {
       return reply.status(404).send({ error: "User not found" });
     }
-    return { id: profile.id, email: profile.email };
+    return { id: profile.id, email: profile.email, isAdmin: isAdminEmail(profile.email) };
   });
 
   app.post("/api/auth/logout", async (_request, reply) => {

@@ -127,3 +127,62 @@ export async function summarizeAudit(userId: string, windowDays: number): Promis
     mostUsedIntegration: top?.integration ?? null,
   };
 }
+
+export interface AdminAuditEventRow extends AuditEventRow {
+  user_id: string;
+  user_email: string | null;
+}
+
+export interface ListAllAuditOptions {
+  limit: number;
+  cursor?: { createdAt: number; id: number };
+  integration?: string;
+  status?: "success" | "error";
+  /** Exact match on the user's email, case-insensitive. */
+  email?: string;
+}
+
+/**
+ * Every user's events, newest first, each with its owner's email. LEFT JOIN so
+ * an event whose user row is gone still appears, with a null email. Keyset
+ * paging uses the same longhand predicate as listAuditEvents: the two backends
+ * do not agree on a row-value comparison.
+ */
+export async function listAllAuditEvents(o: ListAllAuditOptions): Promise<AdminAuditEventRow[]> {
+  const where: string[] = [];
+  const params: SqlParam[] = [];
+
+  if (o.integration) {
+    where.push("a.integration = ?");
+    params.push(o.integration);
+  }
+  if (o.status) {
+    where.push("a.success = ?");
+    params.push(o.status === "success");
+  }
+  if (o.email) {
+    where.push("LOWER(u.email) = ?");
+    params.push(o.email.trim().toLowerCase());
+  }
+  if (o.cursor) {
+    where.push("(a.created_at < ? OR (a.created_at = ? AND a.id < ?))");
+    params.push(o.cursor.createdAt, o.cursor.createdAt, o.cursor.id);
+  }
+  params.push(o.limit);
+
+  const rows = await db.all<Record<string, unknown>>(
+    `SELECT a.id, a.user_id, u.email AS user_email, a.integration, a.tool, a.action,
+            a.success, a.error, a.duration_ms, a.created_at
+       FROM audit_log a
+       LEFT JOIN users u ON u.id = a.user_id
+      ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+      ORDER BY a.created_at DESC, a.id DESC
+      LIMIT ?`,
+    params
+  );
+  return rows.map((r) => ({
+    ...normalize(r),
+    user_id: String(r.user_id),
+    user_email: (r.user_email as string | null) ?? null,
+  }));
+}

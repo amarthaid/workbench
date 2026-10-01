@@ -30,6 +30,9 @@ WORKDIR /app
 ENV NODE_ENV=production \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 COPY --from=builder /app/packages/server/dist ./server
+# The version shown on the admin Overview, and sent to custom MCP servers, is
+# read from the root package.json. Nothing else in the image carries it.
+COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/node_modules ./node_modules
 # Copying only the root tree assumed npm always hoists. It does not: a version
 # that cannot hoist stays under the workspace, and v0.26.0 shipped without

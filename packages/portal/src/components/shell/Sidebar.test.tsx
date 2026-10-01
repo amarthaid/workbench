@@ -3,8 +3,15 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 
+const auth = vi.hoisted(() => ({
+  user: { id: "u1", email: "dev@example.com", isAdmin: false } as {
+    id: string;
+    email: string;
+    isAdmin?: boolean;
+  },
+}));
 vi.mock("../../context/AuthContext", () => ({
-  useAuth: () => ({ user: { id: "u1", email: "dev@example.com" }, token: "t", isLoading: false, login: vi.fn(), logout: vi.fn() }),
+  useAuth: () => ({ user: auth.user, token: "t", isLoading: false, login: vi.fn(), logout: vi.fn() }),
 }));
 
 function renderAt(path: string) {
@@ -53,6 +60,19 @@ describe("Sidebar", () => {
   it("shows the signed-in email", () => {
     renderAt("/");
     expect(screen.getByText("dev@example.com")).toBeInTheDocument();
+  });
+
+  it("hides the Admin link from non-admins", () => {
+    auth.user = { id: "u1", email: "dev@example.com", isAdmin: false };
+    renderAt("/");
+    expect(screen.queryByRole("link", { name: "Admin" })).not.toBeInTheDocument();
+  });
+
+  it("shows the Admin link to admins, pointing at /admin", () => {
+    auth.user = { id: "u2", email: "admin@example.com", isAdmin: true };
+    renderAt("/");
+    expect(screen.getByRole("link", { name: "Admin" })).toHaveAttribute("href", "/admin");
+    auth.user = { id: "u1", email: "dev@example.com", isAdmin: false };
   });
 
   it("keeps Help out of the sidebar — it lives on Settings", () => {

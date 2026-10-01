@@ -673,3 +673,95 @@ export async function deleteVaultSecret(name: string): Promise<void> {
   });
   if (!res.ok) throw new Error("Delete failed");
 }
+
+// ─── Admin overview ──────────────────────────────────────────────────────
+// Read-only cards on the Admin page. Each has its own endpoint so one failing
+// card does not take the page down.
+async function adminGet<T>(path: string, what: string): Promise<T> {
+  const res = await fetch(`${API_URL}${path}`, { headers: getHeaders() });
+  if (res.status === 401) {
+    localStorage.removeItem("awb_token");
+    window.location.href = "/login";
+    throw new Error("Unauthorized");
+  }
+  if (!res.ok) throw new Error(`Failed to fetch ${what}`);
+  return res.json();
+}
+
+export interface AdminInstance {
+  version: string;
+  db_backend: "sqlite" | "postgres";
+  cluster_enabled: boolean;
+  audit_log_dest: string;
+  audit_stored: boolean;
+  user_count: number;
+  admin_count: number;
+}
+
+export interface AdminActivityEvent extends ActivityEvent {
+  user_id: string;
+  user_email: string | null;
+}
+
+export interface AdminActivityPage {
+  /** False when audit events are routed somewhere other than the database. */
+  stored: boolean;
+  events: AdminActivityEvent[];
+  next_cursor: string | null;
+}
+
+export interface AdminConnectionRow {
+  integration: string;
+  connected: number;
+  needs_reconnect: number;
+}
+
+export interface AdminCustomApp {
+  id: string;
+  name: string;
+  base_url: string;
+  owner_email: string | null;
+  /** Unix seconds. */
+  created_at: number;
+}
+
+export interface AdminProfile {
+  name: string;
+  email: string | null;
+  bytes: number;
+  /** Unix seconds, or null when unknown. */
+  last_used: number | null;
+  live: boolean;
+}
+
+export const fetchAdminInstance = () =>
+  adminGet<AdminInstance>("/api/admin/overview/instance", "instance info");
+
+export const fetchAdminConnections = () =>
+  adminGet<{ integrations: AdminConnectionRow[] }>("/api/admin/overview/connections", "connections");
+
+export const fetchAdminCustomApps = () =>
+  adminGet<{ apps: AdminCustomApp[]; total: number }>("/api/admin/overview/custom-apps", "custom apps");
+
+export const fetchAdminProfiles = () =>
+  adminGet<{ profiles: AdminProfile[] }>(
+    "/api/admin/overview/browser-profiles",
+    "browser profiles"
+  );
+
+export function fetchAdminActivity(opts: {
+  limit?: number;
+  cursor?: string;
+  integration?: string;
+  status?: "success" | "error";
+  email?: string;
+} = {}): Promise<AdminActivityPage> {
+  const qs = new URLSearchParams();
+  if (opts.limit) qs.set("limit", String(opts.limit));
+  if (opts.cursor) qs.set("cursor", opts.cursor);
+  if (opts.integration) qs.set("integration", opts.integration);
+  if (opts.status) qs.set("status", opts.status);
+  if (opts.email) qs.set("email", opts.email);
+  const suffix = qs.toString() ? `?${qs}` : "";
+  return adminGet<AdminActivityPage>(`/api/admin/overview/activity${suffix}`, "activity");
+}
