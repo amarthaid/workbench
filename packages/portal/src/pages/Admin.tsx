@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { PageHeader } from "../components/ui/PageHeader";
 import { Tabs } from "../components/ui/Tabs";
-import { EmptyState } from "../components/ui/EmptyState";
+import OverviewTab from "../components/admin/OverviewTab";
 
 // One page, one tab per admin concern. Later sub-projects append to TABS
 // (Users, Config) and render their panel below.
@@ -12,7 +12,7 @@ export default function Admin() {
   return (
     <>
       <PageHeader title="Admin" toolbar={<Tabs items={TABS} value={tab} onChange={setTab} label="Admin sections" />} />
-      {tab === "overview" && <EmptyState message="Nothing to show here yet." />}
+      {tab === "overview" && <OverviewTab />}
     </>
   );
 }
