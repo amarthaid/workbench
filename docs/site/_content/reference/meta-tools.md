@@ -1,12 +1,12 @@
 ---
 title: MCP meta-tools
-description: Complete reference for the ten tools workbench exposes over MCP, their parameters, and their response shapes.
+description: Complete reference for the nine tools workbench exposes over MCP, their parameters, and their response shapes.
 ---
 
-`tools/list` on `/mcp` returns exactly ten tools, no matter how many plugin tools
+`tools/list` on `/mcp` returns exactly nine tools, no matter how many plugin tools
 are loaded. Everything else — all 194 plugin tools and the 12 built-in tools — is
-reached through these ten. That is the whole point of the design: your agent's
-context holds ten schemas instead of 206.
+reached through these nine. That is the whole point of the design: your agent's
+context holds nine schemas instead of 206.
 
 There is no `execute_tool` (singular). Single execution is `execute_tools` with a
 one-element `executions` array.
@@ -70,13 +70,16 @@ Run one or more plugin tools. This is the only execution path.
 Runs them concurrently (bounded) and returns a `results` array in the same order as
 `executions`. A single tool failing does not abort the others — its entry carries an
 `error` instead of a `result`. For a single tool, pass a one-element `executions`
-array.*
+array.* The description goes on to explain `compose: true` (below).
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `executions` | array of objects, min 1 | yes | — | Tools to run; results are returned in this same order |
+| `executions[].id` | string, JS identifier | with `compose` | — | Name later steps use to read this result; unique |
 | `executions[].tool` | string | yes | — | Tool name returned by `search_tools` |
 | `executions[].args` | object | no | `{}` | Arguments for the tool |
+| `compose` | boolean | no | `false` | Run in order and pass results between steps — see [compose mode](#compose-mode) |
+| `return` | any JSON | with `compose` | — | Template of what to send back; rejected without `compose: true` |
 
 Returns `{ results: [...] }`, index-aligned with `executions`. Each entry is either
 `{ result }` on success or an error object. A batch runs through a bounded worker
@@ -112,64 +115,78 @@ runs, which is what applies the schema's `.default()` values.
 > `{"results":[{"error": ...}]}`. A client that inspects only the JSON-RPC `error`
 > field will read every tool failure as a success.
 
-## compose
+### Compose mode
 
-Run plugin tools in sequence, feeding one step's result into the next. Use it when
-the interesting part of a workflow is the *pointer* at the end — a file id, a row
-count, a URL — and the payload in the middle (a CSV body, file content, raw bytes)
-would only burn context or trip the 60,000-character result cap.
+With `compose: true`, `executions` run **in order** and each step can read earlier
+results. Use it when the interesting part of a workflow is the *pointer* at the end
+— a file id, a row count, a URL — and the payload in the middle (a CSV body, file
+content, raw bytes) would only burn context or trip the 60,000-character result cap.
 
-**Description as the client sees it:** *Run tools sequentially and pass data between
-them. Each step may use `$id.field` as a whole argument value to read an earlier
-step's result (e.g. content: "$export.csv", id: "$list.files.0.id"). Intermediate
-payloads stay on the server. Only the paths in `return` are sent back — omit fat
-fields (csv, content, bytes) so they never enter the chat. Stops at the first failing
-step; the error carries its `step` id.*
+A reference is `{{step:<id>.<path>}}`, the same `{{namespace:…}}` shape as
+[`{{vault:NAME}}`](../integrations/vault.md). Path segments are keys or array indexes
+(`{{step:list.files.0.id}}`); refs work at any depth inside `args`.
 
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `steps` | array of objects, 2–8 | yes | — | Tools to run, in order |
-| `steps[].id` | string, JS identifier | yes | — | Name later steps use to reference this result; must be unique |
-| `steps[].tool` | string | yes | — | Tool name returned by `search_tools` |
-| `steps[].args` | object | no | `{}` | Arguments; a string value shaped like `$id.path` is replaced by that earlier result |
-| `return` | array of strings, min 1 | yes | — | Result paths to send back, e.g. `upload.id`, `export.row_count` |
+- **Whole value** — `"{{step:export.row_count}}"` is replaced by the value itself,
+  keeping its type (number, object, array).
+- **Embedded** — `"Review: {{step:pr.title}}"` interpolates; a non-string value is
+  inserted as JSON.
+- **Malformed** — anything that opens `{{step:` but doesn't parse (`"{{step:a.csv.}}"`)
+  is rejected as `BAD_REF`, never passed to the tool as a literal.
 
-A reference is the *whole* argument value — `"$export.csv"` substitutes, `"Report:
-$export.csv"` does not. Path segments are identifiers or array indexes
-(`$list.files.0.id`). Refs work at any depth inside `args`, including nested objects
-and arrays. Anything that starts like a ref but doesn't parse (`"$a.csv."`,
-`"$a.items[0]"`) is rejected as `BAD_REF` rather than passed to the tool as a literal.
+`return` is a template resolved the same way, and its shape is the response shape:
+a single ref returns one value, an object returns an object with your keys, an
+array returns an array.
 
-Each step goes through the same path as `execute_tools`: connection check, vault
-reference resolution, Zod validation, audit row, result scrubbing. Custom-app tools
-work too. A step that fails ends the pipeline; later steps do not run.
+Each step goes through the same path as a plain `execute_tools` item: connection
+check, Zod validation, audit row, result scrubbing. A step that fails ends the run;
+later steps do not run.
 
-Returns an object shaped by `return`, one nested key per path. Errors:
+> [!IMPORTANT] Vault refs resolve against what the agent wrote, never against a step result
+> `{{vault:NAME}}` and `{{step:…}}` in a step's `args` are substituted in one pass
+> over the agent's own template. A value inserted from an earlier step is not
+> scanned again, so tool output that happens to contain the text `{{vault:x}}` (a
+> PR title, a CSV cell) reaches the next tool as that literal text, not the secret.
+> `return` never resolves vault refs at all, and neither do `vault_*` tools or
+> custom-app tools (their results are not scrubbed).
+
+Returns `{ result: <resolved return> }`. Errors:
 
 | Shape | Cause |
 |---|---|
-| `{ error: "Invalid step id '<id>'" }` / `{ error: "Duplicate step id '<id>'" }` | Bad `steps[].id` |
-| `{ error: "BAD_REF: unknown step '<id>'" }` | A `$ref` or `return` path names a step that doesn't exist (or hasn't run yet) |
-| `{ error: "BAD_REF: missing '<id>.<path>'" }` | The step ran but has no value at that path |
-| `{ error: "BAD_REF: malformed ref '<value>'" }` | A string starts with `$<identifier>` but isn't a valid `$id.path` |
-| `{ error, step, ... }` | A step failed; `step` is its id and the rest is that step's own `execute_tools`-style error |
+| `compose: true requires return` | `return` missing |
+| `return requires compose: true` | `return` sent without `compose` |
+| `{ error: "Invalid step id '<id>'" }` / `{ error: "Duplicate step id '<id>'" }` | Missing, non-identifier, or repeated `id` |
+| `{ error: "BAD_REF: unknown step '<id>'", step }` | A ref names a step that doesn't exist or hasn't run yet |
+| `{ error: "BAD_REF: missing '<id>.<path>'", step }` | The step ran but has no value at that path |
+| `{ error: "BAD_REF: malformed ref in '<value>'", step }` | Opens `{{step:` but isn't a valid ref |
+| `{ error, step, ... }` | A step failed; `step` is its id, the rest is that step's own error |
+
+`step` is absent when the bad ref is in `return`.
 
 ```json
 {
-  "name": "compose",
+  "name": "execute_tools",
   "arguments": {
-    "steps": [
+    "compose": true,
+    "executions": [
       { "id": "export", "tool": "superset_export_csv", "args": { "sql": "SELECT …" } },
       { "id": "upload", "tool": "google_drive_upload",
-        "args": { "name": "$export.filename", "content": "$export.csv" } }
+        "args": { "name": "{{step:export.filename}}", "content": "{{step:export.csv}}" } }
     ],
-    "return": ["upload.id", "upload.webViewLink", "export.row_count"]
+    "return": {
+      "file_id": "{{step:upload.id}}",
+      "link": "{{step:upload.webViewLink}}",
+      "rows": "{{step:export.row_count}}"
+    }
   }
 }
 ```
 
-Response: `{ "upload": { "id": "…", "webViewLink": "…" }, "export": { "row_count": 1200 } }` —
-the CSV never appears.
+Response: `{ "result": { "file_id": "…", "link": "…", "rows": 1200 } }` — the CSV
+never appears.
+
+Compose is MCP-only for now: the REST batch form (`POST /rest/:integration` with
+`executions`) does not accept `compose`.
 
 ## whoami
 

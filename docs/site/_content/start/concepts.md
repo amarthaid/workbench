@@ -48,15 +48,14 @@ fetch its schema by it, you execute it by it.
 
 ## Meta-tool
 
-The ten tools the MCP endpoint actually advertises. They are the entire
+The nine tools the MCP endpoint actually advertises. They are the entire
 `tools/list` response no matter how many plugin tools are loaded.
 
 | Meta-tool | What it does |
 |---|---|
 | `search_tools` | Find tools by keyword over name and description. |
 | `get_tool_schema` | Return one tool's argument schema as JSON Schema. |
-| `execute_tools` | Run one or many tools, concurrently, results in order. |
-| `compose` | Run tools in sequence, piping one result into the next; return only chosen fields. |
+| `execute_tools` | Run one or many tools, concurrently, results in order — or with `compose: true`, in sequence, piping one result into the next and returning only chosen fields. |
 | `whoami` | The authenticated workbench user — id and email. |
 | `list_integrations` | Every integration with a per-user `connected` flag. |
 | `connect` | Begin connecting an integration; returns a URL and a `connectionId`. |
@@ -68,7 +67,7 @@ There is no singular `execute_tool`. A single tool is a one-element `executions`
 array.
 
 **Why it matters:** this is the whole contract between your agent and the server.
-Everything else is reached by name through these ten.
+Everything else is reached by name through these nine.
 
 ## Registry
 
@@ -77,7 +76,7 @@ tools by name. `search_tools` reads it, `get_tool_schema` reads it, and
 `execute_tools` resolves a slug through it to find the handler, the input schema,
 and which integration's credential to inject.
 
-**Why it matters:** it is why the tool list can stay at ten while the catalog
+**Why it matters:** it is why the tool list can stay at nine while the catalog
 grows. It is also why tool names must be unique.
 
 ## Connection

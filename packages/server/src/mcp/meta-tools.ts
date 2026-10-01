@@ -81,12 +81,16 @@ export type ExecResult =
   | { error: string; integration?: string; message?: string; step?: string };
 
 const STEP_ID_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
-// `$id`, `$id.field`, `$id.items.0.id` — segments are identifiers or array
-// indexes. `STEP_REF_PREFIX_RE` catches anything that *starts* like a ref so a
-// typo ("$a.csv.", "$a.items[0]") errors instead of reaching the tool as a
-// literal string.
-const STEP_REF_RE = /^\$([A-Za-z_][A-Za-z0-9_]*)((?:\.(?:[A-Za-z_][A-Za-z0-9_]*|\d+))*)$/;
-const STEP_REF_PREFIX_RE = /^\$[A-Za-z_]/;
+// Compose templates: `{{step:id.path}}` reads an earlier step's result,
+// `{{vault:NAME}}` a secret (same name grammar as vault/interpolate.ts). Both
+// are matched in ONE pass over the agent-written string, so a value inserted
+// for one ref is never re-scanned for another. That is the point: a tool
+// output carrying the text `{{vault:x}}` (a PR title, a CSV cell) must reach
+// the next tool as that literal text, never as the secret.
+const TEMPLATE_REF_RE =
+  /\{\{vault:([a-z0-9][a-z0-9_.-]{0,63})\}\}|\{\{step:([A-Za-z_][A-Za-z0-9_]*)((?:\.[^.{}\s]+)*)\}\}/g;
+const WHOLE_STEP_REF_RE = /^\{\{step:([A-Za-z_][A-Za-z0-9_]*)((?:\.[^.{}\s]+)*)\}\}$/;
+const STEP_REF_OPEN = "{{step:";
 
 class ComposeRefError extends Error {
   constructor(message: string) {
@@ -104,92 +108,105 @@ function getPath(obj: unknown, path: string[]): unknown {
   return cur;
 }
 
-function resolveStepRefs(value: unknown, results: Map<string, unknown>): unknown {
+function lookupStep(id: string, rawPath: string, results: Map<string, unknown>): unknown {
+  if (!results.has(id)) throw new ComposeRefError(`unknown step '${id}'`);
+  const path = rawPath ? rawPath.slice(1).split(".") : [];
+  const got = getPath(results.get(id), path);
+  if (got === undefined) throw new ComposeRefError(`missing '${[id, ...path].join(".")}'`);
+  return got;
+}
+
+// `vault` null leaves `{{vault:...}}` as literal text (vault_* tools, custom
+// apps, the return template).
+function resolveTemplate(
+  value: unknown,
+  results: Map<string, unknown>,
+  vault: Map<string, string> | null
+): unknown {
   if (typeof value === "string") {
-    const m = STEP_REF_RE.exec(value);
-    if (!m) {
-      if (STEP_REF_PREFIX_RE.test(value)) throw new ComposeRefError(`malformed ref '${value}'`);
-      return value;
+    if (value.replace(TEMPLATE_REF_RE, "").includes(STEP_REF_OPEN)) {
+      throw new ComposeRefError(`malformed ref in '${value}'`);
     }
-    const id = m[1];
-    if (!results.has(id)) throw new ComposeRefError(`unknown step '${id}'`);
-    const path = m[2] ? m[2].slice(1).split(".") : [];
-    if (path.length === 0) return results.get(id);
-    const got = getPath(results.get(id), path);
-    if (got === undefined) throw new ComposeRefError(`missing '${id}.${path.join(".")}'`);
-    return got;
+    // A whole-value step ref keeps the result's own type (number, object, ...).
+    const whole = WHOLE_STEP_REF_RE.exec(value);
+    if (whole) return lookupStep(whole[1], whole[2], results);
+    return value.replace(TEMPLATE_REF_RE, (m, vaultName?: string, id?: string, path?: string) => {
+      if (vaultName !== undefined) return vault?.get(vaultName) ?? m;
+      const got = lookupStep(id!, path ?? "", results);
+      return typeof got === "string" ? got : JSON.stringify(got);
+    });
   }
-  if (Array.isArray(value)) return value.map((v) => resolveStepRefs(v, results));
+  if (Array.isArray(value)) return value.map((v) => resolveTemplate(v, results, vault));
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = resolveStepRefs(v, results);
+      out[k] = resolveTemplate(v, results, vault);
     }
     return out;
   }
   return value;
 }
 
-function pickComposeReturn(
-  results: Map<string, unknown>,
-  paths: string[]
-): ExecResult {
-  const data: Record<string, unknown> = {};
-  for (const raw of paths) {
-    const parts = raw.split(".");
-    const id = parts[0];
-    if (!id || !results.has(id)) return { error: `BAD_REF: unknown step '${id ?? raw}'` };
-    const val = parts.length === 1 ? results.get(id) : getPath(results.get(id), parts.slice(1));
-    if (val === undefined) return { error: `BAD_REF: missing '${raw}'` };
-    let cursor = data;
-    for (let i = 0; i < parts.length - 1; i++) {
-      const key = parts[i];
-      const next = cursor[key];
-      if (!next || typeof next !== "object") cursor[key] = {};
-      cursor = cursor[key] as Record<string, unknown>;
-    }
-    cursor[parts[parts.length - 1]] = val;
-  }
-  return { result: data };
-}
+export type ComposeStep = { id?: string; tool: string; args?: Record<string, unknown> };
 
-export type ComposeStep = { id: string; tool: string; args?: Record<string, unknown> };
-
-// Sequential pipe: each step may read earlier results via `$id.field` (whole
-// arg values only). Intermediate blobs stay in-process. The agent sees only
-// `return` paths, so a CSV/file body never has to enter the chat.
+// `execute_tools` with `compose: true`: run steps in order, each reading
+// earlier results via `{{step:id.path}}`. Intermediate payloads stay
+// in-process; only the resolved `return` template goes back to the agent, so a
+// CSV/file body never has to enter the chat. Stops at the first failing step.
 export async function composeTools(
   userId: string,
   steps: ComposeStep[],
-  returnPaths: string[]
+  ret: unknown
 ): Promise<ExecResult> {
+  if (ret === undefined) return { error: "compose: true requires `return`" };
   const seen = new Set<string>();
   for (const step of steps) {
-    if (!STEP_ID_RE.test(step.id)) return { error: `Invalid step id '${step.id}'` };
+    if (!step.id || !STEP_ID_RE.test(step.id)) return { error: `Invalid step id '${step.id ?? ""}'` };
     if (seen.has(step.id)) return { error: `Duplicate step id '${step.id}'` };
     seen.add(step.id);
   }
 
   const results = new Map<string, unknown>();
   for (const step of steps) {
+    const id = step.id!;
+    const template = step.args ?? {};
+    // Vault refs resolve here, against the agent's template only, and only
+    // for plugin tools: executeSingle scrubs their results, a custom app's it
+    // does not, and vault_* tools take names literally.
+    const vaultOk = !step.tool.startsWith("vault_") && registry.getTool(step.tool) !== undefined;
+    let vault: Map<string, string> | null = null;
+    if (vaultOk) {
+      try {
+        vault = (await resolveVaultRefs(userId, template)).substituted;
+      } catch (e) {
+        if (e instanceof VaultRefError) return { error: e.code, message: e.message, step: id };
+        throw e;
+      }
+    }
     let args: Record<string, unknown>;
     try {
-      args = resolveStepRefs(step.args ?? {}, results) as Record<string, unknown>;
+      args = resolveTemplate(template, results, vault) as Record<string, unknown>;
     } catch (e) {
-      if (e instanceof ComposeRefError) return { error: `BAD_REF: ${e.message}` };
+      if (e instanceof ComposeRefError) return { error: `BAD_REF: ${e.message}`, step: id };
       throw e;
     }
-    const out = await executeSingle(userId, step.tool, args);
-    if ("error" in out) return { ...out, step: step.id };
-    results.set(step.id, out.result);
+    const out = await executeSingle(userId, step.tool, args, vault ?? undefined);
+    if ("error" in out) return { ...out, step: id };
+    results.set(id, out.result);
   }
-  return pickComposeReturn(results, returnPaths);
+  try {
+    return { result: resolveTemplate(ret, results, null) };
+  } catch (e) {
+    if (e instanceof ComposeRefError) return { error: `BAD_REF: ${e.message}` };
+    throw e;
+  }
 }
 
 export async function executeSingle(
   userId: string,
   toolName: string,
-  rawArgs: Record<string, unknown>
+  rawArgs: Record<string, unknown>,
+  preSubstituted?: Map<string, string>
 ): Promise<ExecResult> {
   const targetTool = registry.getTool(toolName);
   if (!targetTool) {
@@ -241,9 +258,17 @@ export async function executeSingle(
       // Vault references: `{{vault:name}}` → value, before validation so the
       // tool's own zod coercion still applies. The vault's own tools take names
       // as arguments, so a reference there is literal, not a lookup.
+      // `preSubstituted` means the caller (compose) already resolved them in
+      // its own single pass; scanning again here would resolve refs that
+      // arrived inside an earlier step's output.
       let effectiveArgs: Record<string, unknown> = rawArgs ?? {};
       let substituted = new Map<string, string>();
-      if (!toolName.startsWith("vault_")) {
+      if (preSubstituted) {
+        substituted = preSubstituted;
+        if (substituted.size > 0) {
+          void touchUsed(userId, [...substituted.keys()]).catch(() => undefined);
+        }
+      } else if (!toolName.startsWith("vault_")) {
         try {
           const resolved = await resolveVaultRefs(userId, effectiveArgs);
           effectiveArgs = resolved.args;
@@ -648,16 +673,29 @@ export const metaTools = [
   {
     name: "execute_tools",
     description:
-      "Execute one or more tools in a single call. Runs them concurrently (bounded) and returns a `results` array in the same order as `executions`. A single tool failing does not abort the others — its entry carries an `error` instead of a `result`. For a single tool, pass a one-element `executions` array.",
+      "Execute one or more tools in a single call. Runs them concurrently (bounded) and returns a `results` array in the same order as `executions`. A single tool failing does not abort the others — its entry carries an `error` instead of a `result`. For a single tool, pass a one-element `executions` array. " +
+      "With `compose: true` the executions instead run in order and pass data between them: give each an `id`, and write `{{step:<id>.<path>}}` anywhere in a later step's args to use an earlier result (e.g. content: \"{{step:export.csv}}\", id: \"{{step:list.files.0.id}}\"); a ref that is the whole value keeps its type. Intermediate results stay on the server — only the resolved `return` template comes back as `{ result }`, so leave fat fields (csv, content, bytes) out of it. Stops at the first failing step; the error carries its `step` id.",
     inputSchema: z.object({
       executions: z
-        .array(z.object({ tool: z.string(), args: z.record(z.unknown()).default({}) }))
+        .array(
+          z.object({
+            id: z.string().optional(),
+            tool: z.string(),
+            args: z.record(z.unknown()).default({}),
+          })
+        )
         .min(1),
+      compose: z.boolean().default(false),
+      return: z.unknown().optional(),
     }),
-    handler: (
+    handler: async (
       ctx: { userId: string },
-      args: { executions: { tool: string; args: Record<string, unknown> }[] }
-    ) => executeMany(ctx.userId, args.executions),
+      args: { executions: ComposeStep[]; compose?: boolean; return?: unknown }
+    ): Promise<{ results: ExecResult[] } | ExecResult> => {
+      if (args.compose) return composeTools(ctx.userId, args.executions, args.return);
+      if (args.return !== undefined) return { error: "`return` requires compose: true" };
+      return executeMany(ctx.userId, args.executions);
+    },
   },
   {
     name: "whoami",
@@ -730,36 +768,6 @@ export const metaTools = [
     handler: (ctx: { userId: string }, args: { integration: string }) => startConnect(ctx.userId, args.integration),
   },
   {
-    name: "compose",
-    description:
-      "Run tools sequentially and pass data between them. Each step may use `$id.field` " +
-      "as a whole argument value to read an earlier step's result (e.g. content: \"$export.csv\", " +
-      "id: \"$list.files.0.id\"). Intermediate payloads stay on the server. Only the paths in " +
-      "`return` are sent back — omit fat fields (csv, content, bytes) so they never enter the chat. " +
-      "Stops at the first failing step; the error carries its `step` id.",
-    inputSchema: z.object({
-      steps: z
-        .array(
-          z.object({
-            id: z.string().regex(STEP_ID_RE, "step id must be a JS identifier"),
-            tool: z.string(),
-            args: z.record(z.unknown()).default({}),
-          })
-        )
-        .min(2)
-        .max(8),
-      return: z.array(z.string().min(1)).min(1),
-    }),
-    handler: async (
-      ctx: { userId: string },
-      args: { steps: ComposeStep[]; return: string[] }
-    ) => {
-      const out = await composeTools(ctx.userId, args.steps, args.return);
-      if ("error" in out) return out;
-      return out.result;
-    },
-  },
-  {
     name: "curl_session",
     description:
       "HIGH RISK — do not call without explicit user approval. Mints a short-lived (15 min) proxy token granting ARBITRARY API calls (GET/POST/PUT/PATCH/DELETE), including destructive writes, against the listed integration(s) — the proxy injects the user's real credential transparently at /c/<integration>/<path>, so anything reachable via that credential is reachable through this token. Before invoking, tell the user exactly which integration(s) and what action you intend to perform, and wait for their explicit go-ahead; do not mint speculatively or as a default first step. Only integrations that have curl proxy enabled are accepted.",
@@ -817,11 +825,20 @@ export const metaToolSchemas: Record<(typeof metaTools)[number]["name"], Record<
         items: {
           type: "object",
           properties: {
+            id: { type: "string", description: "Step id, required with compose: true; referenced as {{step:<id>.<path>}}" },
             tool: { type: "string", description: "Tool name returned by search_tools" },
-            args: { type: "object", description: "Arguments for the tool", additionalProperties: true },
+            args: { type: "object", description: "Arguments for the tool. With compose: true, {{step:<id>.<path>}} (array index allowed: {{step:list.files.0.id}}) is replaced by that earlier result", additionalProperties: true },
           },
           required: ["tool"],
         },
+      },
+      compose: {
+        type: "boolean",
+        default: false,
+        description: "Run executions in order, passing results between them via {{step:<id>.<path>}}. Returns only the resolved `return`.",
+      },
+      return: {
+        description: "compose: true only. What to send back: any JSON value whose strings may hold {{step:<id>.<path>}} refs, e.g. { \"file_id\": \"{{step:upload.id}}\", \"rows\": \"{{step:export.row_count}}\" }. Leave fat fields out.",
       },
     },
     required: ["executions"],
@@ -845,32 +862,6 @@ export const metaToolSchemas: Record<(typeof metaTools)[number]["name"], Record<
     type: "object",
     properties: { integration: { type: "string", description: "Integration name" } },
     required: ["integration"],
-  },
-  compose: {
-    type: "object",
-    properties: {
-      steps: {
-        type: "array",
-        description: "Tools to run in order. Later steps read earlier results via $id.field.",
-        minItems: 2,
-        maxItems: 8,
-        items: {
-          type: "object",
-          properties: {
-            id: { type: "string", description: "Step id; referenced as $id.field" },
-            tool: { type: "string", description: "Tool name returned by search_tools" },
-            args: { type: "object", description: "Arguments; a string value of the form $id.field (array index allowed: $id.items.0.id) is replaced by that earlier result", additionalProperties: true },
-          },
-          required: ["id", "tool"],
-        },
-      },
-      return: {
-        type: "array",
-        items: { type: "string" },
-        description: "Result paths to return (e.g. upload.id, export.row_count). Fat fields should be omitted.",
-      },
-    },
-    required: ["steps", "return"],
   },
   curl_session: {
     type: "object",

@@ -28,7 +28,7 @@ Supported JSON-RPC methods:
 |---|---|
 | `initialize` | Echoes your `protocolVersion` (default `2025-06-18`), `capabilities: {tools:{}}`, `serverInfo` |
 | `notifications/initialized` | 202, no body |
-| `tools/list` | The ten meta-tools with their JSON Schemas |
+| `tools/list` | The nine meta-tools with their JSON Schemas |
 | `tools/call` | The meta-tool result as one text content block |
 | `resources/list` | `{resources: []}` |
 | `prompts/list` | `{prompts: []}` |

@@ -5,7 +5,7 @@ description: Connect GitHub and run a tool, entirely from the agent side, with t
 
 This is the loop an agent runs the first time it needs a service it has never used:
 see what exists, connect it, wait, find the tool, call it. Every call below is a
-`tools/call` against one of the ten meta-tools, with the exact argument shapes the
+`tools/call` against one of the nine meta-tools, with the exact argument shapes the
 schemas declare.
 
 GitHub is the example because it is `oauth2` — the mode the agent can drive on its

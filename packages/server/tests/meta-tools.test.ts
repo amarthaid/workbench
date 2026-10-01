@@ -718,7 +718,7 @@ describe("meta-tools", () => {
     });
   });
 
-  describe("compose", () => {
+  describe("execute_tools compose", () => {
     const src = {
       name: "src_tool",
       integration: "test-integ",
@@ -752,6 +752,12 @@ describe("meta-tools", () => {
       vi.spyOn(registry, "getIntegration").mockReturnValue(mockOauthInteg as any);
     }
 
+    const compose = (executions: unknown[], ret: unknown): Promise<any> =>
+      findTool("execute_tools").handler(
+        { userId: "user-1" },
+        { compose: true, executions, return: ret } as any
+      );
+
     beforeEach(async () => {
       const { getToken } = await import("../src/auth/tokens");
       vi.mocked(getToken).mockResolvedValue({ accessToken: "tok", scopes: "" });
@@ -760,101 +766,64 @@ describe("meta-tools", () => {
       third.handler.mockReset();
     });
 
-    it("pipes $step.field into the next tool and returns only picked paths", async () => {
+    it("pipes {{step:id.field}} into the next tool and returns only the return template", async () => {
       stubComposeTools();
       src.handler.mockResolvedValue({ csv: "a,b\n1,2", filename: "out.csv", row_count: 1 });
       dest.handler.mockResolvedValue({ id: "file-1", name: "out.csv" });
 
-      const result = await findTool("compose").handler(
-        { userId: "user-1" },
-        {
-          steps: [
-            { id: "a", tool: "src_tool", args: { q: "x" } },
-            { id: "b", tool: "dest_tool", args: { body: "$a.csv", title: "$a.filename" } },
-          ],
-          return: ["b.id", "a.row_count"],
-        }
+      const result = await compose(
+        [
+          { id: "a", tool: "src_tool", args: { q: "x" } },
+          { id: "b", tool: "dest_tool", args: { body: "{{step:a.csv}}", title: "{{step:a.filename}}" } },
+        ],
+        { file_id: "{{step:b.id}}", rows: "{{step:a.row_count}}" }
       );
       expect(dest.handler).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({ body: "a,b\n1,2", title: "out.csv" })
       );
-      expect(result).toEqual({ b: { id: "file-1" }, a: { row_count: 1 } });
+      expect(result).toEqual({ result: { file_id: "file-1", rows: 1 } });
       expect(JSON.stringify(result)).not.toContain("a,b");
     });
 
-    it("resolves refs inside nested args and chains three steps", async () => {
+    it("keeps the original type for a whole-value ref and chains three steps", async () => {
       stubComposeTools();
       src.handler.mockResolvedValue({ n: 7 });
       dest.handler.mockResolvedValue({ id: "mid-1" });
       third.handler.mockResolvedValue({ ok: true });
 
-      const result = await findTool("compose").handler(
-        { userId: "user-1" },
-        {
-          steps: [
-            { id: "a", tool: "src_tool", args: { q: "x" } },
-            { id: "b", tool: "dest_tool", args: { body: "n", nested: { n: "$a.n" } } },
-            { id: "c", tool: "third_tool", args: { id: "$b.id" } },
-          ],
-          return: ["c.ok"],
-        }
+      const result = await compose(
+        [
+          { id: "a", tool: "src_tool", args: { q: "x" } },
+          { id: "b", tool: "dest_tool", args: { body: "n", nested: { n: "{{step:a.n}}" } } },
+          { id: "c", tool: "third_tool", args: { id: "{{step:b.id}}" } },
+        ],
+        "{{step:c.ok}}"
       );
       expect(dest.handler).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({ nested: { n: 7 } })
       );
       expect(third.handler).toHaveBeenCalledWith(expect.anything(), { id: "mid-1" });
-      expect(result).toEqual({ c: { ok: true } });
+      expect(result).toEqual({ result: true });
     });
 
-    it("stops on the first step error and does not run later steps", async () => {
+    it("interpolates refs embedded in a larger string", async () => {
       stubComposeTools();
-      src.handler.mockRejectedValue(new Error("src failed"));
-      dest.handler.mockResolvedValue({ id: "nope" });
+      src.handler.mockResolvedValue({ title: "Fix bug", count: 3 });
+      dest.handler.mockResolvedValue({ id: "m-1" });
 
-      const result = await findTool("compose").handler(
-        { userId: "user-1" },
-        {
-          steps: [
-            { id: "a", tool: "src_tool", args: { q: "x" } },
-            { id: "b", tool: "dest_tool", args: { body: "$a.csv" } },
-          ],
-          return: ["b.id"],
-        }
+      await compose(
+        [
+          { id: "pr", tool: "src_tool", args: { q: "x" } },
+          { id: "msg", tool: "dest_tool", args: { body: "Review: {{step:pr.title}} ({{step:pr.count}} files)" } },
+        ],
+        "{{step:msg.id}}"
       );
-      expect(result.error).toMatch(/src failed/);
-      expect(dest.handler).not.toHaveBeenCalled();
-    });
-
-    it("returns BAD_REF for an unknown step or missing field", async () => {
-      stubComposeTools();
-      src.handler.mockResolvedValue({ csv: "x" });
-
-      const missingField = await findTool("compose").handler(
-        { userId: "user-1" },
-        {
-          steps: [
-            { id: "a", tool: "src_tool", args: { q: "x" } },
-            { id: "b", tool: "dest_tool", args: { body: "$a.nope" } },
-          ],
-          return: ["b.id"],
-        }
+      expect(dest.handler).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ body: "Review: Fix bug (3 files)" })
       );
-      expect(missingField.error).toMatch(/BAD_REF/);
-      expect(dest.handler).not.toHaveBeenCalled();
-
-      const unknownStep = await findTool("compose").handler(
-        { userId: "user-1" },
-        {
-          steps: [
-            { id: "a", tool: "src_tool", args: { q: "x" } },
-            { id: "b", tool: "dest_tool", args: { body: "$z.csv" } },
-          ],
-          return: ["b.id"],
-        }
-      );
-      expect(unknownStep.error).toMatch(/BAD_REF/);
     });
 
     it("resolves numeric segments into arrays", async () => {
@@ -862,55 +831,151 @@ describe("meta-tools", () => {
       src.handler.mockResolvedValue({ files: [{ id: "f-0" }, { id: "f-1" }] });
       third.handler.mockResolvedValue({ ok: true });
 
-      const result = await findTool("compose").handler(
-        { userId: "user-1" },
-        {
-          steps: [
-            { id: "a", tool: "src_tool", args: { q: "x" } },
-            { id: "b", tool: "third_tool", args: { id: "$a.files.1.id" } },
-          ],
-          return: ["a.files.0.id", "b.ok"],
-        }
+      const result = await compose(
+        [
+          { id: "a", tool: "src_tool", args: { q: "x" } },
+          { id: "b", tool: "third_tool", args: { id: "{{step:a.files.1.id}}" } },
+        ],
+        ["{{step:a.files.0.id}}", "{{step:b.ok}}"]
       );
       expect(third.handler).toHaveBeenCalledWith(expect.anything(), { id: "f-1" });
-      expect(result).toEqual({ a: { files: { "0": { id: "f-0" } } }, b: { ok: true } });
+      expect(result).toEqual({ result: ["f-0", true] });
     });
 
-    it("rejects a malformed $ref instead of passing it through as a literal", async () => {
+    it("stops on the first step error, names the step, and runs nothing after it", async () => {
+      stubComposeTools();
+      src.handler.mockRejectedValue(new Error("src failed"));
+
+      const result = await compose(
+        [
+          { id: "a", tool: "src_tool", args: { q: "x" } },
+          { id: "b", tool: "dest_tool", args: { body: "{{step:a.csv}}" } },
+        ],
+        "{{step:b.id}}"
+      );
+      expect(result.error).toMatch(/src failed/);
+      expect(result.step).toBe("a");
+      expect(dest.handler).not.toHaveBeenCalled();
+    });
+
+    it("returns BAD_REF for an unknown step or a missing field", async () => {
       stubComposeTools();
       src.handler.mockResolvedValue({ csv: "x" });
 
-      const result = await findTool("compose").handler(
-        { userId: "user-1" },
-        {
-          steps: [
-            { id: "a", tool: "src_tool", args: { q: "x" } },
-            { id: "b", tool: "dest_tool", args: { body: "$a.csv." } },
-          ],
-          return: ["b.id"],
-        }
+      const missingField = await compose(
+        [
+          { id: "a", tool: "src_tool", args: { q: "x" } },
+          { id: "b", tool: "dest_tool", args: { body: "{{step:a.nope}}" } },
+        ],
+        "{{step:b.id}}"
+      );
+      expect(missingField.error).toMatch(/BAD_REF/);
+      expect(missingField.step).toBe("b");
+      expect(dest.handler).not.toHaveBeenCalled();
+
+      const unknownStep = await compose(
+        [
+          { id: "a", tool: "src_tool", args: { q: "x" } },
+          { id: "b", tool: "dest_tool", args: { body: "{{step:z.csv}}" } },
+        ],
+        "{{step:b.id}}"
+      );
+      expect(unknownStep.error).toMatch(/BAD_REF/);
+    });
+
+    it("rejects a malformed {{step:...}} instead of passing it through as a literal", async () => {
+      stubComposeTools();
+      src.handler.mockResolvedValue({ csv: "x" });
+
+      const result = await compose(
+        [
+          { id: "a", tool: "src_tool", args: { q: "x" } },
+          { id: "b", tool: "dest_tool", args: { body: "{{step:a.csv.}}" } },
+        ],
+        "{{step:b.id}}"
       );
       expect(result.error).toMatch(/BAD_REF/);
       expect(dest.handler).not.toHaveBeenCalled();
     });
 
-    it("names the failing step on a step error", async () => {
+    it("returns BAD_REF when the return template points at a missing field", async () => {
       stubComposeTools();
       src.handler.mockResolvedValue({ csv: "x" });
-      dest.handler.mockRejectedValue(new Error("dest failed"));
 
-      const result = await findTool("compose").handler(
-        { userId: "user-1" },
-        {
-          steps: [
-            { id: "a", tool: "src_tool", args: { q: "x" } },
-            { id: "b", tool: "dest_tool", args: { body: "$a.csv" } },
-          ],
-          return: ["b.id"],
-        }
+      const result = await compose([{ id: "a", tool: "src_tool", args: { q: "x" } }], "{{step:a.nope}}");
+      expect(result.error).toMatch(/BAD_REF/);
+    });
+
+    it("rejects duplicate step ids before running anything", async () => {
+      stubComposeTools();
+      const result = await compose(
+        [
+          { id: "a", tool: "src_tool", args: { q: "x" } },
+          { id: "a", tool: "src_tool", args: { q: "y" } },
+        ],
+        "{{step:a.csv}}"
       );
-      expect(result.error).toMatch(/dest failed/);
-      expect(result.step).toBe("b");
+      expect(result.error).toMatch(/Duplicate step id/);
+      expect(src.handler).not.toHaveBeenCalled();
+    });
+
+    it("rejects `return` without compose: true", async () => {
+      const result: any = await findTool("execute_tools").handler(
+        { userId: "user-1" },
+        { executions: [{ tool: "src_tool", args: {} }], return: "{{step:a.csv}}" } as any
+      );
+      expect(result.error).toMatch(/compose: true/);
+    });
+
+    it("substitutes {{vault:...}} written by the agent in a compose step", async () => {
+      stubComposeTools();
+      src.handler.mockResolvedValue({ id: "a-1" });
+      dest.handler.mockResolvedValue({ id: "b-1" });
+
+      await compose(
+        [
+          { id: "a", tool: "src_tool", args: { q: "x" } },
+          { id: "b", tool: "dest_tool", args: { body: "Bearer {{vault:pw}} for {{step:a.id}}" } },
+        ],
+        "{{step:b.id}}"
+      );
+      expect(dest.handler).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ body: "Bearer hunter2 for a-1" })
+      );
+    });
+
+    it("never resolves a {{vault:...}} that arrived inside an earlier step's output", async () => {
+      stubComposeTools();
+      // Attacker-controlled upstream text (a PR title, a CSV cell) that looks
+      // like a vault reference must reach the next tool as literal text.
+      src.handler.mockResolvedValue({ title: "{{vault:pw}}" });
+      dest.handler.mockResolvedValue({ id: "b-1" });
+
+      await compose(
+        [
+          { id: "a", tool: "src_tool", args: { q: "x" } },
+          { id: "b", tool: "dest_tool", args: { body: "{{step:a.title}}", title: "t: {{step:a.title}}" } },
+        ],
+        "{{step:b.id}}"
+      );
+      expect(dest.handler).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ body: "{{vault:pw}}", title: "t: {{vault:pw}}" })
+      );
+      const { readSecretValue } = await import("../src/vault/store");
+      expect(readSecretValue).not.toHaveBeenCalled();
+    });
+
+    it("does not resolve {{vault:...}} in the return template", async () => {
+      stubComposeTools();
+      src.handler.mockResolvedValue({ id: "a-1" });
+
+      const result = await compose(
+        [{ id: "a", tool: "src_tool", args: { q: "x" } }],
+        { id: "{{step:a.id}}", leak: "{{vault:pw}}" }
+      );
+      expect(result).toEqual({ result: { id: "a-1", leak: "{{vault:pw}}" } });
     });
   });
 });

@@ -7,7 +7,7 @@ A stock install registers **206 tools**: 194 from the 16 built-in plugins, plus 
 browser tools and 3 jots tools from the two internal plugins.
 
 None of them appear in MCP `tools/list` — that returns only the
-[ten meta-tools](meta-tools.md). Find a tool here or with `search_tools`, fetch its
+[nine meta-tools](meta-tools.md). Find a tool here or with `search_tools`, fetch its
 arguments with `get_tool_schema`, and run it with `execute_tools`.
 
 | Integration | Auth | Curl proxy | Tools |

@@ -147,9 +147,9 @@ curl -s http://localhost:3001/mcp \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
-You should get exactly ten tools back: `search_tools`, `get_tool_schema`,
-`execute_tools`, `compose`, `whoami`, `list_integrations`, `connect`,
-`wait_for_connection`, `get_auth_url`, `curl_session`. An unauthenticated call returns 401 with a
+You should get exactly nine tools back: `search_tools`, `get_tool_schema`,
+`execute_tools`, `whoami`, `list_integrations`, `connect`, `wait_for_connection`,
+`get_auth_url`, `curl_session`. An unauthenticated call returns 401 with a
 `WWW-Authenticate` header pointing at the OAuth metadata.
 
 :::

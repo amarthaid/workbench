@@ -81,11 +81,12 @@ runs, so `.default()` values are filled in. A validation failure returns
 through a bounded pool and returns `results` index-aligned with `executions`. One
 failure does not abort the others.
 
-**Pipelines are sequential and dependent.** `compose` runs up to 8 steps one after
-another; a step's `args` may name an earlier result as `$id.field`, and only the
-`return` paths come back. The first failing step ends the pipeline. It is the same
-per-tool engine as `execute_tools` — the difference is that the intermediate payload
-never enters the agent's context. See [meta-tools](../reference/meta-tools.md#compose).
+**Composed batches are sequential and dependent.** With `compose: true`, the same
+`executions` run one after another; a step's `args` may read an earlier result as
+`{{step:id.path}}`, and only the resolved `return` template comes back. The first
+failing step ends the run. It is the same per-tool engine — the difference is that
+the intermediate payload never enters the agent's context. See
+[meta-tools](../reference/meta-tools.md#compose-mode).
 
 ## Where credentials live
 
