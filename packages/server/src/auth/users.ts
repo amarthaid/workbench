@@ -2,6 +2,7 @@ import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import { db } from "../db";
 import { encrypt, decrypt } from "./encryption";
+import { isUserDisabled } from "./user-status";
 
 // Indexed lookup handle for an api key. Keys are 32 random bytes minted here —
 // never user-chosen — so a plain SHA-256 is not brute-forceable and needs no
@@ -58,7 +59,7 @@ export async function hasApiKey(userId: string): Promise<boolean> {
 // Runs on every /mcp request. Was: SELECT every user, then bcrypt.compareSync
 // against each hash — O(users) of event-loop-blocking work (~2.8s at 100 users,
 // and the MCP handshake pays it twice). Now one indexed lookup.
-export async function verifyApiKey(apiKey: string): Promise<string | null> {
+async function findApiKeyOwner(apiKey: string): Promise<string | null> {
   const row = await db.get<{ id: string }>("SELECT id FROM users WHERE api_key_sha = ?", [
     apiKeySha(apiKey),
   ]);
@@ -76,6 +77,14 @@ export async function verifyApiKey(apiKey: string): Promise<string | null> {
     }
   }
   return null;
+}
+
+export async function verifyApiKey(apiKey: string): Promise<string | null> {
+  const id = await findApiKeyOwner(apiKey);
+  // A disabled account's key stops working at once. The key stays on the row,
+  // so enabling the user restores it.
+  if (id && (await isUserDisabled(id))) return null;
+  return id;
 }
 
 export async function getUserById(userId: string): Promise<{ id: string; email: string | null } | null> {

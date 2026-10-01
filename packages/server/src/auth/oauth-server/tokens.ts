@@ -1,5 +1,6 @@
 import { SignJWT, jwtVerify } from "jose";
 import { config } from "../../config";
+import { isUserDisabled } from "../user-status";
 
 const secret = new TextEncoder().encode(config.SESSION_SECRET);
 const ISSUER = config.SERVER_PUBLIC_URL;
@@ -36,5 +37,6 @@ export async function verifyAccessToken(token: string): Promise<AccessTokenClaim
   ) {
     throw new Error("Not an OAuth access token");
   }
+  if (await isUserDisabled(payload.sub)) throw new Error("User disabled");
   return { userId: payload.sub, scope: payload.scope, clientId: payload.client_id };
 }
