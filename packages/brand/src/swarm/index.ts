@@ -9,7 +9,10 @@ export interface SwarmOptions {
   markY?: number;
   markFrac?: number;
   ambient?: boolean;
+  logos?: string[];
+  logoZone?: [x0: number, x1: number] | [x0: number, x1: number, y0: number, y1: number];
   rasterize?: (svg: string, size: number) => Promise<Mask>;
+  loadImage?: (url: string) => HTMLImageElement;
   now?: () => number;
 }
 export interface SwarmTarget { tx: number; ty: number; tz: number; rim: boolean; shape: number }
@@ -18,10 +21,10 @@ interface Particle extends SwarmTarget {
   x: number; y: number; k: number; ox: number; oy: number; ax: number; ay: number; spin: number;
   age: number; life: number; color: string;
 }
-interface Ambient { x: number; y: number; sx: number; sy: number; px: number; py: number; z: number; shape: number; ci: number; size: number; dx: number; dy: number; ax: number; ay: number; spin: number; wob: number; lane: number; color: string; big: boolean }
+interface Ambient { x: number; y: number; sx: number; sy: number; px: number; py: number; z: number; shape: number; ci: number; size: number; dx: number; dy: number; ax: number; ay: number; spin: number; wob: number; lane: number; color: string; big: boolean; li?: number }
 export interface Swarm {
   destroy(): void; setGround(g: SwarmGround): void; replay(): void;
-  state(): { ready: boolean; done: boolean; poseMix: number; count: number; targets: SwarmTarget[]; particles: SwarmTarget[] };
+  state(): { ready: boolean; done: boolean; poseMix: number; count: number; targets: SwarmTarget[]; particles: SwarmTarget[]; bigCount: number; logoCount: number; logos: { x: number; y: number }[] };
 }
 
 const FADE = 70, PUSH_R = 100, PUSH_PX = 24, POSE_MS = 1200, GAP = 3.4, THICK = 0.16, CAM = 1.7;
@@ -61,13 +64,26 @@ export function createSwarm(canvas: HTMLCanvasElement, opts: SwarmOptions = {}):
   const ctx = canvas.getContext("2d")!;
   const now = opts.now ?? (() => performance.now());
   const rasterize = opts.rasterize ?? rasterizeWithImage;
+  const loadImage = opts.loadImage ?? ((url: string) => { const img = new Image(); img.src = url; return img; });
   const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
   const coarse = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
   const markX = opts.markX ?? 0.66, markY = opts.markY ?? 0.5, markFrac = opts.markFrac ?? 0.86, wantAmbient = opts.ambient ?? true;
+  const logoUrls = opts.logos ?? [];
+  const zoneOpt = opts.logoZone ?? [0, 1];
+  const logoZone: [number, number, number, number] = [zoneOpt[0], zoneOpt[1], zoneOpt[2] ?? 0, zoneOpt[3] ?? 1];
   let ground: SwarmGround = opts.ground ?? "dark";
   let W = 0, H = 0, raf = 0, born = 0, done = reduced, doneAt = 0, poseMix = reduced ? 1 : 0, ready = false, disposed = false;
-  let parts: Particle[] = [], targets: SwarmTarget[] = [], big: Ambient[] = [], tiny: Ambient[] = [];
+  let parts: Particle[] = [], targets: SwarmTarget[] = [], big: Ambient[] = [], tiny: Ambient[] = [], logoSprites: Ambient[] = [];
   let slowFrames = 0, glow = true, buildEpoch = 0, resizeRaf = 0;
+  // Preload each logo image once per swarm instance, cached by URL. A logo
+  // whose image has not finished loading (or errored) is simply skipped when
+  // drawing — no promise is awaited before the swarm becomes ready.
+  const logoImages = new Map<string, HTMLImageElement>();
+  for (const url of logoUrls) {
+    if (logoImages.has(url)) continue;
+    logoImages.set(url, loadImage(url));
+  }
+  const logoReady = (url: string) => { const img = logoImages.get(url); return !!img && img.complete; };
   const pointer = { x: -1e4, y: -1e4, nx: 0, ny: 0, down: false }, ease = { x: 0, y: 0 };
   let seed = 11; const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
 
@@ -96,7 +112,7 @@ export function createSwarm(canvas: HTMLCanvasElement, opts: SwarmOptions = {}):
     // size overruns the canvas.
     const cx = W * markX, cy = H * markY;
     const size = Math.round(Math.min(Math.min(W, H) * markFrac, 2 * Math.min(cx, W - cx) * 0.84, 2 * Math.min(cy, H - cy) * 0.84));
-    if (size <= 0) { ready = false; parts = []; big = []; tiny = []; return; }
+    if (size <= 0) { ready = false; parts = []; big = []; tiny = []; logoSprites = []; return; }
     seed = ((W * 73856093) ^ (H * 19349663)) >>> 0;
     let mask: Mask;
     try {
@@ -106,7 +122,7 @@ export function createSwarm(canvas: HTMLCanvasElement, opts: SwarmOptions = {}):
       // must never leave the engine looking "ready" over stale/no particles.
       // A later replay() or resize retries (the default rasterizer's own
       // cache is cleared on failure so that retry gets a fresh decode).
-      if (!disposed && myEpoch === buildEpoch) { ready = false; parts = []; big = []; tiny = []; }
+      if (!disposed && myEpoch === buildEpoch) { ready = false; parts = []; big = []; tiny = []; logoSprites = []; }
       return;
     }
     if (disposed || myEpoch !== buildEpoch) return;   // a newer build (or a resize) superseded this one
@@ -125,14 +141,26 @@ export function createSwarm(canvas: HTMLCanvasElement, opts: SwarmOptions = {}):
         x: 0, y: 0, k: 1, ox: 0, oy: 0, ax: rnd() * 6.28, ay: rnd() * 6.28, spin: (0.25 + rnd() * 0.6) * (rnd() < 0.5 ? -1 : 1),
         age: FADE, life: FADE + rnd() * 240 + 60, color: "" };   // age starts at FADE: fully visible at hand-off
     });
-    const mk = (isBig: boolean): Ambient => {
+    const mk = (isBig: boolean, li?: number): Ambient => {
       const ang = rnd() * 6.28, r = reach * (0.6 + rnd() * 0.5);
       return { x: rnd() * W, y: rnd() * H, sx: W / 2 + Math.cos(ang) * r, sy: H / 2 + Math.sin(ang) * r, px: 0, py: 0, z: rnd() * 2 - 1,
         shape: (rnd() * 4) | 0, ci: (rnd() * 8) | 0, size: isBig ? 22 + rnd() * rnd() * 84 : 2.5 + rnd() * 4,
         dx: (rnd() - 0.5) * 0.3, dy: -(0.06 + rnd() * 0.2), ax: rnd() * 6.28, ay: rnd() * 6.28,
-        spin: (0.1 + rnd() * 0.35) * (rnd() < 0.5 ? -1 : 1), wob: rnd() * 6.28, lane: (rnd() * LANES) | 0, color: "", big: isBig };
+        spin: (0.1 + rnd() * 0.35) * (rnd() < 0.5 ? -1 : 1), wob: rnd() * 6.28, lane: (rnd() * LANES) | 0, color: "", big: isBig, ...(li === undefined ? {} : { li }) };
     };
-    big = wantAmbient ? Array.from({ length: Math.round(W / 32) }, () => mk(true)) : [];
+    const useLogos = wantAmbient && logoUrls.length > 0;
+    if (useLogos) {
+      const count = Math.round(W / 140);
+      const bx0 = W * logoZone[0], bx1 = W * logoZone[1], by0 = H * logoZone[2], by1 = H * logoZone[3];
+      // Cycle through every logo once (in order) before any repeats, then
+      // fall back to random picks for the rest.
+      logoSprites = Array.from({ length: count }, (_, i) => mk(true, i < logoUrls.length ? i : (rnd() * logoUrls.length) | 0));
+      for (const a of logoSprites) { a.size = 40 + rnd() * 50; a.x = bx0 + rnd() * (bx1 - bx0); a.y = by0 + rnd() * (by1 - by0); }
+      big = [];
+    } else {
+      logoSprites = [];
+      big = wantAmbient ? Array.from({ length: Math.round(W / 32) }, () => mk(true)) : [];
+    }
     tiny = wantAmbient ? Array.from({ length: Math.round((W * H) / 6500) }, () => mk(false)) : [];
     recolor();
     born = 0; done = reduced; poseMix = reduced ? 1 : 0; ready = true;
@@ -176,9 +204,18 @@ export function createSwarm(canvas: HTMLCanvasElement, opts: SwarmOptions = {}):
       p.x = px + p.ox; p.y = py + p.oy; p.k = k;
       p.ax += p.spin * 0.02; p.ay += p.spin * 0.016;
     }
-    for (const a of big.concat(tiny)) {
+    const bx0 = W * logoZone[0], bx1 = W * logoZone[1], by0 = H * logoZone[2], by1 = H * logoZone[3];
+    for (const a of big.concat(tiny, logoSprites)) {
       const e = done ? 1 : lanes[a.lane].ease;
-      if (done) { a.x += a.dx; a.y += a.dy; if (a.y < -80) { a.y = H + 80; a.x = rnd() * W; } else if (a.x < -80) a.x = W + 80; else if (a.x > W + 80) a.x = -80; }
+      const isLogo = a.li !== undefined;
+      if (done) {
+        a.x += a.dx; a.y += a.dy;
+        if (isLogo) {
+          if (a.y < by0) a.y = by1; else if (a.y > by1) a.y = by0;
+          if (a.x < bx0) a.x = bx1; else if (a.x > bx1) a.x = bx0;
+        } else if (a.y < -80) { a.y = H + 80; a.x = rnd() * W; }
+        else if (a.x < -80) a.x = W + 80; else if (a.x > W + 80) a.x = -80;
+      }
       a.px = a.sx + (a.x - a.sx) * e; a.py = a.sy + (a.y - a.sy) * e;
       a.ax += a.spin * 0.01; a.ay += a.spin * 0.008;
     }
@@ -202,9 +239,21 @@ export function createSwarm(canvas: HTMLCanvasElement, opts: SwarmOptions = {}):
   function draw(t: number) {
     ctx.clearRect(0, 0, W, H);
     const ts = t / 1000;
+    const arrive = done ? 1 : Math.min(1, (t - born) / ENTER_MS), arrivalScale = 0.64 + settle(arrive) * 0.36;   // dots grow into place; no alpha ramp
     for (const a of tiny) { const par = (0.6 + a.z * 0.4) * 30; drawOne(a.px - ease.x * par + Math.sin(ts * 0.3 + a.wob) * 3, a.py - ease.y * par + Math.cos(ts * 0.25 + a.wob) * 3, a, a.size, 0.25 + (a.z + 1) * 0.2, 1, 0); }
     for (const a of big) { const par = (0.7 + a.z * 0.5) * 48; drawOne(a.px - ease.x * par + Math.sin(ts * 0.22 + a.wob) * 6, a.py - ease.y * par + Math.cos(ts * 0.18 + a.wob) * 6, a, a.size, 0.28 + (a.z + 1) * 0.22, 1.4, 14); }
-    const arrive = done ? 1 : Math.min(1, (t - born) / ENTER_MS), arrivalScale = 0.64 + settle(arrive) * 0.36;   // dots grow into place; no alpha ramp
+    for (const a of logoSprites) {
+      const url = a.li !== undefined ? logoUrls[a.li] : undefined;
+      const img = url ? logoImages.get(url) : undefined;
+      if (!url || !img || !logoReady(url)) continue;
+      const par = (0.7 + a.z * 0.5) * 48;
+      const x = a.px - ease.x * par + Math.sin(ts * 0.22 + a.wob) * 6, y = a.py - ease.y * par + Math.cos(ts * 0.18 + a.wob) * 6;
+      const s = a.size * (0.8 + (a.z + 1) * 0.25) * arrivalScale;
+      const alpha = Math.min(0.7, 0.35 + (a.z + 1) * 0.3);
+      ctx.save(); ctx.globalAlpha = alpha;
+      ctx.drawImage(img, x - s / 2, y - s / 2, s, s);
+      ctx.restore();
+    }
     const order = parts.slice().sort((a, b) => a.k - b.k);   // far to near
     // Slab depth shading: normalise this frame's k range (far..near) to 0..1
     // so the thicker slab reads as a solid object — near dots bigger/brighter.
@@ -261,6 +310,6 @@ export function createSwarm(canvas: HTMLCanvasElement, opts: SwarmOptions = {}):
     },
     setGround(g) { ground = g; recolor(); },
     replay() { void build(); },
-    state() { return { ready, done, poseMix, count: parts.length, targets: targets.slice(), particles: parts.map(({ tx, ty, tz, rim, shape }) => ({ tx, ty, tz, rim, shape })) }; },
+    state() { return { ready, done, poseMix, count: parts.length, targets: targets.slice(), particles: parts.map(({ tx, ty, tz, rim, shape }) => ({ tx, ty, tz, rim, shape })), bigCount: big.length, logoCount: logoSprites.length, logos: logoSprites.map(({ x, y }) => ({ x, y })) }; },
   };
 }
