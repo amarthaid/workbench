@@ -34,18 +34,20 @@ vi.mock("../src/auth/users", () => ({
   }),
 }));
 
-import { registerAdminRoutes } from "../src/api/admin-routes";
+import { adminScope } from "../src/api/admin-scope";
 import { config } from "../src/config";
 
 async function buildApp() {
   const app = Fastify();
-  await registerAdminRoutes(app);
+  await adminScope(app, (scope) => {
+    scope.get("/probe", async () => ({ ok: true }));
+  });
   return app;
 }
 
 const ping = (headers: Record<string, string> = {}) => ({
   method: "GET" as const,
-  url: "/api/admin/ping",
+  url: "/api/admin/probe",
   headers,
 });
 
@@ -108,7 +110,9 @@ describe("/api/admin gate", () => {
     // that replies from onRequest runs first and short-circuits it, so failed
     // admin auth would vanish from the HTTP metrics.
     const app = Fastify();
-    await registerAdminRoutes(app);
+    await adminScope(app, (scope) => {
+      scope.get("/probe", async () => ({ ok: true }));
+    });
     let rootHookRan = false;
     app.addHook("onRequest", async () => {
       rootHookRan = true;
@@ -121,9 +125,8 @@ describe("/api/admin gate", () => {
   it("gates a route added later in the same scope without it opting in", async () => {
     // Routes registered by later sub-projects live in this scope. Simulate one
     // on a fresh app (the same prefix cannot be registered twice on one app).
-    const { adminScopeForTest } = await import("../src/api/admin-routes");
     const app = Fastify();
-    await adminScopeForTest(app, async (scope) => {
+    await adminScope(app, async (scope) => {
       scope.get("/later", async () => ({ secret: true }));
     });
     const anon = await app.inject({ method: "GET", url: "/api/admin/later" });
