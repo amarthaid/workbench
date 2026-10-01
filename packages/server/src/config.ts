@@ -37,6 +37,10 @@ const configSchema = z.object({
   // Who may use /api/admin/* and the portal's Admin page. Empty (the default)
   // means nobody: admin is off unless an operator names an admin.
   ADMIN_EMAILS: z.string().default("").transform(parseAdminEmails),
+  // How often each process re-reads instance_settings, so a change an admin made
+  // through another worker or pod reaches this one. A change made through this
+  // process applies immediately.
+  INSTANCE_SETTINGS_POLL_SECONDS: z.coerce.number().int().positive().default(5),
   PORTAL_URL: z.string().url().default("http://localhost:5173"),
   PORTAL_DIST_DIR: z.string().default("./portal"),
   CONNECT_TTL_SECONDS: z.coerce.number().int().positive().default(600),
