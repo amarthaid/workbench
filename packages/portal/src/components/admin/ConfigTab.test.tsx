@@ -106,6 +106,23 @@ describe("ConfigTab custom-app policy", () => {
     expect(screen.queryByRole("checkbox", { name: "dev@example.com" })).not.toBeInTheDocument();
   });
 
+  it("keeps an unsaved allowlist selection when the config is refetched", async () => {
+    // A fresh object on every call, as a real refetch returns.
+    api.fetchAdminConfig.mockImplementation(async () => JSON.parse(JSON.stringify(CONFIG)));
+    renderWithClient(<ConfigTab />);
+    fireEvent.change(await screen.findByLabelText("Who can add custom apps"), { target: { value: "allowlist" } });
+    fireEvent.click(await screen.findByRole("checkbox", { name: "dev@example.com" }));
+
+    // Toggling an integration refetches the config.
+    fireEvent.click(screen.getByRole("button", { name: "Enable Demo Repo" }));
+    await waitFor(() => expect(api.fetchAdminConfig).toHaveBeenCalledTimes(2));
+    // Let the refetched data reach the component before asserting.
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(screen.getByLabelText("Who can add custom apps")).toHaveValue("allowlist");
+    expect(screen.getByRole("checkbox", { name: "dev@example.com" })).toBeChecked();
+  });
+
   it("shows the server's reason when the policy is refused", async () => {
     api.setAdminCustomAppsPolicy.mockRejectedValueOnce(new Error("One of the selected users no longer exists."));
     renderWithClient(<ConfigTab />);

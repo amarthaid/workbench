@@ -185,6 +185,15 @@ describe("API routes", () => {
       expect(res.headers.location).toContain("token=signed-jwt-token");
     });
 
+    it("redirects a disabled account to the login page with a reason, not a JSON error", async () => {
+      const { handleCallback } = await import("../src/auth/google");
+      vi.mocked(handleCallback).mockRejectedValueOnce(new Error("Account disabled"));
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/auth/google/callback?code=abc&state=xyz" });
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toBe("http://localhost:5173/login?error=account_disabled");
+    });
+
     it("returns 400 on provider error", async () => {
       const app = await buildApp();
       const res = await app.inject({ method: "GET", url: "/api/auth/google/callback?error=access_denied" });
@@ -263,6 +272,15 @@ describe("API routes", () => {
       const res = await app.inject({ method: "GET", url: "/api/auth/keycloak/callback?code=abc&state=xyz" });
       expect(res.statusCode).toBe(302);
       expect(res.headers.location).toContain("token=signed-jwt-token");
+    });
+
+    it("redirects a disabled account to the login page with a reason, not a JSON error", async () => {
+      const { handleCallback } = await import("../src/auth/keycloak");
+      vi.mocked(handleCallback).mockRejectedValueOnce(new Error("Account disabled"));
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/auth/keycloak/callback?code=abc&state=xyz" });
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toBe("http://localhost:5173/login?error=account_disabled");
     });
 
     it("returns 400 on provider error", async () => {

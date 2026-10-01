@@ -128,6 +128,19 @@ describe("PUT /api/admin/config/integrations/:name", () => {
     expect(getSettings().disabled_integrations).not.toContain("acme-cfg");
   });
 
+  it("builds on the stored list, not a stale in-memory copy, so another worker's change is not lost", async () => {
+    // Another worker disabled something and this process has not polled yet:
+    // write straight to the table, leaving the snapshot at its defaults.
+    await db.run("INSERT INTO instance_settings (key, value) VALUES (?, ?)", [
+      "disabled_integrations",
+      JSON.stringify(["other-integration"]),
+    ]);
+    expect(getSettings().disabled_integrations).toEqual([]); // the snapshot really is stale
+    const res = await call("PUT", "/api/admin/config/integrations/acme-cfg", { enabled: false });
+    expect(res.statusCode).toBe(200);
+    expect(getSettings().disabled_integrations).toEqual(["acme-cfg", "other-integration"]);
+  });
+
   it("404 for an integration that is not registered, and saves nothing", async () => {
     const res = await call("PUT", "/api/admin/config/integrations/does-not-exist", { enabled: false });
     expect(res.statusCode).toBe(404);

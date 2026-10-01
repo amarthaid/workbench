@@ -120,6 +120,12 @@ async function authenticate(request: {
   return null;
 }
 
+function accountDisabledUrl(): string {
+  const url = new URL("/login", config.PORTAL_URL);
+  url.searchParams.set("error", "account_disabled");
+  return url.toString();
+}
+
 export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
   startReaper();
 
@@ -178,6 +184,10 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       return reply.redirect(redirect.toString());
     } catch (err) {
       const message = err instanceof Error ? err.message : "Auth failed";
+      // A person turned away because an admin disabled their account is in a
+      // browser tab, not an API client: send them to the login page with a
+      // reason instead of a bare JSON error.
+      if (message === "Account disabled") return reply.redirect(accountDisabledUrl());
       return reply.status(400).send({ error: message });
     }
   });
@@ -215,6 +225,10 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       return reply.redirect(redirect.toString());
     } catch (err) {
       const message = err instanceof Error ? err.message : "Auth failed";
+      // A person turned away because an admin disabled their account is in a
+      // browser tab, not an API client: send them to the login page with a
+      // reason instead of a bare JSON error.
+      if (message === "Account disabled") return reply.redirect(accountDisabledUrl());
       return reply.status(400).send({ error: message });
     }
   });

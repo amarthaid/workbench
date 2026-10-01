@@ -8,7 +8,13 @@ import { useSwarm } from "../hooks/useSwarm";
 
 export default function Login() {
   const { login, token } = useAuth();
-  const [error, setError] = useState("");
+  // The server sends a person whose account an admin disabled back here with a
+  // reason, since they arrive from an SSO redirect and not from an API client.
+  const [error, setError] = useState(() =>
+    new URLSearchParams(window.location.search).get("error") === "account_disabled"
+      ? "Your account has been disabled by an administrator."
+      : ""
+  );
   const [providers, setProviders] = useState<string[]>([]);
 
   // This only fires for a human who already holds a session and lands on

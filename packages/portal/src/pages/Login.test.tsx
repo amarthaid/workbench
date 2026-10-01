@@ -24,6 +24,23 @@ beforeEach(() => {
 });
 
 describe("Login", () => {
+  it("tells a disabled user why they were turned away", async () => {
+    window.history.pushState({}, "", "/login?error=account_disabled");
+    try {
+      render(<Login />);
+      expect(await screen.findByText(/disabled by an administrator/i)).toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, "", "/");
+    }
+  });
+
+  it("shows no error on a plain visit", async () => {
+    window.history.pushState({}, "", "/login");
+    render(<Login />);
+    await screen.findByRole("button", { name: /Continue with Google/ });
+    expect(screen.queryByText(/disabled by an administrator/i)).not.toBeInTheDocument();
+  });
+
   it("offers each configured provider", async () => {
     render(<Login />);
     expect(await screen.findByRole("button", { name: /Continue with Google/ })).toBeInTheDocument();

@@ -4,6 +4,7 @@ import { registry } from "../plugins/registry";
 import {
   getSettings,
   isIntegrationDisabled,
+  loadSettings,
   saveSetting,
   type CustomAppsPolicy,
 } from "../settings/instance-settings";
@@ -45,6 +46,11 @@ export async function setIntegrationEnabled(
     return { ok: false, status: 404, error: "unknown_integration" };
   }
 
+  // This is a read-modify-write of one JSON list, and this process's snapshot can
+  // be up to a poll interval stale. Re-read first, so a change another worker just
+  // made is built on rather than overwritten. It narrows the race to milliseconds;
+  // it does not remove it.
+  await loadSettings();
   const disabled = new Set(getSettings().disabled_integrations);
   if (enabled) disabled.delete(name);
   else disabled.add(name);
