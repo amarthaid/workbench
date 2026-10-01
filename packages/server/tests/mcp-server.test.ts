@@ -109,6 +109,37 @@ describe("handleMcpRequest", () => {
     expect(res.error.message).toContain("Invalid arguments");
   });
 
+  describe("search_tools limit", () => {
+    const tools = ["alpha_one", "alpha_two", "alpha_three"].map((name) => ({
+      name,
+      description: "alpha tool",
+      integration: "test-integ",
+      inputSchema: {},
+      handler: vi.fn(),
+    }));
+    const search = async (args: Record<string, unknown>) => {
+      vi.spyOn(registry, "listTools").mockReturnValue(tools as any);
+      return handleMcpRequest({ method: "tools/call", id: 5, params: { name: "search_tools", arguments: args } }, "user-1");
+    };
+
+    it("accepts a number", async () => {
+      const res = await search({ query: "alpha", limit: 2 });
+      expect(JSON.parse(res.result.content[0].text).tools).toHaveLength(2);
+    });
+
+    // A client that cached tools/list before `limit` existed sends it untyped, as a string.
+    it("accepts a numeric string", async () => {
+      const res = await search({ query: "alpha", limit: "1" });
+      expect(JSON.parse(res.result.content[0].text).tools).toHaveLength(1);
+    });
+
+    it.each([["abc"], ["0"], ["51"], ["2.5"]])("rejects %j", async (limit) => {
+      const res = await search({ query: "alpha", limit });
+      expect(res.error.code).toBe(-32602);
+      expect(res.error.message).toContain("Invalid arguments");
+    });
+  });
+
   it("returns error for unknown method", async () => {
     const res = await handleMcpRequest({ method: "unknown", id: 5 }, "user-1");
     expect(res.jsonrpc).toBe("2.0");
