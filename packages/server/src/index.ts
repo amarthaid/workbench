@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import { config } from "./config";
 import { handleMcpRequest } from "./mcp/server";
 import { registerApiRoutes } from "./api/routes";
+import { registerAdminRoutes } from "./api/admin-routes";
 import { registerOAuthRoutes } from "./api/oauth-routes";
 import { registerOAuthRedirectRoute } from "./api/oauth-redirect";
 import { registerPortal } from "./portal";
@@ -51,6 +52,7 @@ async function main() {
   await initDb();
   await loadPlugins();
   await registerApiRoutes(app);
+  await registerAdminRoutes(app);
   await registerOAuthRoutes(app);
   await registerOAuthRedirectRoute(app);
   startBrowserReaper();
