@@ -15,6 +15,8 @@ import { startVaultReaper } from "./vault/otl";
 import { startRecentReaper } from "./vault/recent";
 import { startUploadReaper } from "./jots/pending";
 import { loadPlugins } from "./plugins/loader";
+import { registry } from "./plugins/registry";
+import { isIntegrationDisabled, loadSettings, startSettingsPoll } from "./settings/instance-settings";
 import { resolveMcpUser } from "./auth/oauth-server/resolve";
 import { startBrowserReaper } from "./auth/browser-session";
 import { registerCdpBridgeRoutes, startChannelReaper } from "./auth/cdp-bridge";
@@ -50,6 +52,11 @@ async function main() {
 
   const { initDb } = await import("./db.js");
   await initDb();
+  // Load instance settings before any request can be served, and keep them fresh
+  // against changes made through other workers or pods.
+  await loadSettings();
+  registry.setDisabledPredicate(isIntegrationDisabled);
+  startSettingsPoll();
   await loadPlugins();
   await registerApiRoutes(app);
   await registerAdminRoutes(app);
