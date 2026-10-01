@@ -1,6 +1,7 @@
 import { listCustomApps, integrationKey, type CustomApp } from "./store";
 import { ensureCustomAppToken } from "./oauth";
 import { discoverTools } from "./client";
+import { customAppsAllowedFor } from "../settings/instance-settings";
 
 export interface IndexedTool {
   /** Namespaced name exposed to the agent: `${appName}__${remoteName}`. */
@@ -45,6 +46,10 @@ export function invalidateIndex(userId: string): void {
 }
 
 export async function ensureIndex(userId: string): Promise<IndexedTool[]> {
+  // Checked before the cache, so a policy change takes effect without waiting
+  // for the cached index to expire.
+  if (!customAppsAllowedFor(userId)) return [];
+
   const cached = cache.get(userId);
   if (cached && Date.now() - cached.at < TTL_MS) return cached.tools;
 

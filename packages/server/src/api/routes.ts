@@ -11,6 +11,7 @@ import { buildAuthUrl, handleCallback } from "../auth/google";
 import { buildAuthUrl as buildKeycloakAuthUrl, handleCallback as handleKeycloakCallback, isKeycloakConfigured } from "../auth/keycloak";
 import { signSession, verifySession } from "../auth/session";
 import { isAdminEmail } from "../auth/admin";
+import { customAppsAllowedFor } from "../settings/instance-settings";
 import { config } from "../config";
 import { getToken, deleteToken, storeToken } from "../auth/tokens";
 import {
@@ -227,7 +228,12 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     if (!profile) {
       return reply.status(404).send({ error: "User not found" });
     }
-    return { id: profile.id, email: profile.email, isAdmin: isAdminEmail(profile.email) };
+    return {
+      id: profile.id,
+      email: profile.email,
+      isAdmin: isAdminEmail(profile.email),
+      canCreateCustomApps: customAppsAllowedFor(profile.id),
+    };
   });
 
   app.post("/api/auth/logout", async (_request, reply) => {
@@ -877,6 +883,9 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Body: { name?: string; baseUrl?: string } }>("/api/custom-apps", async (request, reply) => {
     const user = await authenticate(request);
     if (!user) return reply.status(401).send({ error: "Unauthorized" });
+    if (!customAppsAllowedFor(user.userId)) {
+      return reply.status(403).send({ error: "custom_apps_disabled" });
+    }
 
     const name = (request.body?.name ?? "").trim();
     const baseUrl = (request.body?.baseUrl ?? "").trim();
