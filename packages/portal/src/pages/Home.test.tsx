@@ -111,6 +111,15 @@ describe("Home", () => {
     expect(screen.getByRole("link", { name: "Set up an agent" })).toHaveAttribute("href", "/agents");
   });
 
+  it("copies the MCP endpoint from an icon button beside it", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Copy MCP URL" }));
+    expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/mcp`);
+    expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument();
+  });
+
   it("shows recent activity with a link to the full log", async () => {
     renderPage();
     expect(await screen.findByText("acme_search")).toBeInTheDocument();

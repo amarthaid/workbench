@@ -47,7 +47,7 @@ selection problem when it picks one.
 
 workbench advertises only the 9 meta-tools. Everything else is reached by name:
 
-1. `search_tools` finds candidates by keyword.
+1. `search_tools` finds candidates, best match first.
 2. `get_tool_schema` returns the JSON Schema for one tool's arguments.
 3. `execute_tools` runs one or many, concurrently, in a single call.
 

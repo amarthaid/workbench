@@ -1,5 +1,6 @@
 import { ToolDefinition, Integration } from "@a-workbench/shared";
 import { z } from "zod";
+import { rankTools } from "./search";
 
 export interface PluginTool extends ToolDefinition {
   // Narrow the base `unknown` to a real Zod schema so callers (e.g.
@@ -50,13 +51,9 @@ class Registry {
     return Array.from(this.tools.values());
   }
 
+  /** Built-in tools matching `query`, best first. See ./search. */
   searchTools(query: string): PluginTool[] {
-    const q = query.toLowerCase();
-    return this.listTools().filter(
-      (t) =>
-        t.name.toLowerCase().includes(q) ||
-        t.description.toLowerCase().includes(q)
-    );
+    return rankTools(this.listTools(), query).map((r) => r.tool);
   }
 }
 

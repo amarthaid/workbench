@@ -39,6 +39,11 @@ vi.mock("../src/auth/users", () => ({
   getUserById: vi.fn(),
 }));
 
+vi.mock("../src/custom-apps/index", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/custom-apps/index")>()),
+  ensureIndex: vi.fn(async () => []),
+}));
+
 vi.mock("../src/auth/cookie", () => ({
   hasValidCookies: vi.fn(() => false),
   storeCookies: vi.fn(),
@@ -69,6 +74,10 @@ vi.mock("../src/config", () => ({
   config: { PORTAL_URL: "http://portal.test", CONNECT_TTL_SECONDS: 600 },
 }));
 
+vi.mock("../src/auth/curl-session", () => ({
+  signCurlToken: vi.fn(async () => "curl-jwt"),
+}));
+
 vi.mock("../src/telemetry/tracing", () => ({
   withSpan: vi.fn((_name: string, fn: Function) => fn()),
 }));
@@ -96,12 +105,31 @@ describe("meta-tools", () => {
   });
 
   describe("search_tools", () => {
-    it("returns matching tools", async () => {
-      vi.spyOn(registry, "searchTools").mockReturnValue([mockTool as any]);
+    it("returns matching tools with a score", async () => {
+      vi.spyOn(registry, "listTools").mockReturnValue([mockTool as any]);
       const tool = findTool("search_tools");
       const result = await tool.handler({ userId: "user-1" }, { query: "test" });
       expect(result.tools).toHaveLength(1);
-      expect(result.tools[0].name).toBe("test_tool");
+      expect(result.tools[0]).toMatchObject({ name: "test_tool", integration: "test-integ" });
+      expect(result.tools[0].score).toBeGreaterThan(0);
+    });
+
+    it("ranks built-in and custom-app tools together, and applies limit", async () => {
+      const { ensureIndex } = await import("../src/custom-apps/index");
+      vi.mocked(ensureIndex).mockResolvedValueOnce([
+        { name: "linear__create_issue", description: "Create a Linear issue", integration: "custom:1" } as any,
+      ]);
+      vi.spyOn(registry, "listTools").mockReturnValue([
+        { ...mockTool, name: "jira_create_issue", description: "Create a Jira issue" } as any,
+        { ...mockTool, name: "jira_get_issue", description: "Get a Jira issue" } as any,
+      ]);
+      const tool = findTool("search_tools");
+
+      const linear = await tool.handler({ userId: "user-1" }, { query: "create linear issue" });
+      expect(linear.tools[0].name).toBe("linear__create_issue");
+
+      const limited = await tool.handler({ userId: "user-1" }, { query: "issue", limit: 1 });
+      expect(limited.tools).toHaveLength(1);
     });
   });
 
@@ -715,6 +743,44 @@ describe("meta-tools", () => {
       const tool = findTool("wait_for_connection");
       const result = await tool.handler({ userId: "user-1" }, { connectionId: "conn-1", timeoutSec: 1 });
       expect(result.error).toBe("Unknown connectionId");
+    });
+  });
+
+  describe("curl_session", () => {
+    const mockProxyInteg = { ...mockOauthInteg, proxy: { baseUrl: "https://api.example.com" } };
+    const schema = () => findTool("curl_session").inputSchema;
+
+    beforeEach(async () => {
+      vi.spyOn(registry, "getIntegration").mockReturnValue(mockProxyInteg as any);
+      const { getToken } = await import("../src/auth/tokens");
+      vi.mocked(getToken).mockResolvedValue({ accessToken: "tok", scopes: "" } as any);
+    });
+
+    it("defaults the token lifetime to 900 seconds", async () => {
+      const args = schema().parse({ integrations: ["test-integ"] });
+      expect(args.expiresInSeconds).toBe(900);
+      const result: any = await findTool("curl_session").handler({ userId: "user-1" }, args);
+      const { signCurlToken } = await import("../src/auth/curl-session");
+      expect(signCurlToken).toHaveBeenCalledWith("user-1", ["test-integ"], 900);
+      expect(result.expiresIn).toBe(900);
+    });
+
+    it.each([60, 300, 3600])("mints with an overridden lifetime of %i seconds", async (ttl) => {
+      const args = schema().parse({ integrations: ["test-integ"], expiresInSeconds: ttl });
+      const result: any = await findTool("curl_session").handler({ userId: "user-1" }, args);
+      const { signCurlToken } = await import("../src/auth/curl-session");
+      expect(signCurlToken).toHaveBeenCalledWith("user-1", ["test-integ"], ttl);
+      expect(result.expiresIn).toBe(ttl);
+    });
+
+    it.each([0, -1, 59, 3601, 90.5])("rejects a lifetime of %s", (ttl) => {
+      expect(schema().safeParse({ integrations: ["test-integ"], expiresInSeconds: ttl }).success).toBe(false);
+    });
+
+    it("advertises the lifetime bounds on the wire schema", async () => {
+      const { metaToolSchemas } = await import("../src/mcp/meta-tools");
+      const prop: any = (metaToolSchemas.curl_session as any).properties.expiresInSeconds;
+      expect(prop).toMatchObject({ type: "integer", minimum: 60, maximum: 3600, default: 900 });
     });
   });
 

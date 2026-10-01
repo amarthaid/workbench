@@ -79,7 +79,7 @@ export const OTL_PORTAL_DEFAULT_TTL_SECONDS = 300;
 // the portal's public/ and served at the portal root, which is
 // SERVER_PUBLIC_URL (built portal) or the dev server in front of it.
 const OTL_TITLE = "workbench \u00b7 One-time secret";
-const OTL_DESCRIPTION = "Opens once, then it is gone. Link previews don\u2019t spend it.";
+const OTL_DESCRIPTION = "Open once, then it burns.";
 const MARK_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><rect x="0" y="0" width="32" height="32" rx="7" fill="#853291"/><path d="M5 8 L10 24 L16 12 L22 24 L27 8" fill="none" stroke="#ffffff" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/><g fill="none" stroke="#ffffff" stroke-width="1.8" stroke-linejoin="round"><circle cx="5" cy="8" r="3" fill="#853291"/><rect x="24" y="5" width="6" height="6" rx="0.9" fill="#853291"/><polygon points="10,20.4 13.3,26.8 6.7,26.8" fill="#853291"/><polygon points="22,20.2 25.8,24 22,27.8 18.2,24" fill="#853291"/></g><circle cx="16" cy="12" r="3.7" fill="#ffffff"/></svg>';
 
@@ -205,6 +205,14 @@ export async function registerVaultRoutes(app: FastifyInstance): Promise<void> {
   // minutes of TTL. The user whose value is read comes from the row. Silent in
   // the request log because the token is the URL.
   //
+  // Link-preview fetchers, by User-Agent. They send `Accept: */*` (Slack's,
+  // captured 2026-09-28: `Slackbot-LinkExpanding 1.0`, `Accept: */*`,
+  // `Range: bytes=0-32768`), so without this they got the 405 and chat showed
+  // no card. Matching here only picks page vs 405 — no GET spends the token —
+  // so a bot missing from the list costs its card, never the secret.
+  const UNFURL_BOT =
+    /Slackbot-LinkExpanding|Slack-ImgProxy|Twitterbot|facebookexternalhit|Facebot|Discordbot|TelegramBot|WhatsApp|LinkedInBot|SkypeUriPreview|Iframely|Embedly|redditbot|Mastodon|Applebot/i;
+
   // Only POST spends the token. A GET never does: chat apps unfurl every link
   // they see (Slackbot, Teams, Discord, iMessage previews), so a link pasted
   // into Slack used to be spent by the preview fetch before the human or agent
@@ -221,7 +229,8 @@ export async function registerVaultRoutes(app: FastifyInstance): Promise<void> {
       reply.header("x-robots-tag", "noindex, nofollow");
       reply.header("referrer-policy", "no-referrer");
       const accept = String(request.headers.accept ?? "");
-      if (!accept.includes("text/html")) {
+      const unfurler = UNFURL_BOT.test(String(request.headers["user-agent"] ?? ""));
+      if (!accept.includes("text/html") && !unfurler) {
         reply.header("allow", "POST");
         return reply
           .code(405)

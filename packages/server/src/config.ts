@@ -1,5 +1,15 @@
 import { z } from "zod";
 
+// Comma-separated allowlist of admin emails. Trimmed and lowercased once here so
+// every comparison elsewhere is a plain `includes`. Empty entries are dropped:
+// ADMIN_EMAILS="," must not produce an entry that matches a user with no email.
+export function parseAdminEmails(raw: string): string[] {
+  return raw
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter((e) => e.length > 0);
+}
+
 const configSchema = z.object({
   PORT: z.string().default("3000"),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
@@ -24,6 +34,9 @@ const configSchema = z.object({
       ? "test-session-secret-32-chars-long!!"
       : ""
   ),
+  // Who may use /api/admin/* and the portal's Admin page. Empty (the default)
+  // means nobody: admin is off unless an operator names an admin.
+  ADMIN_EMAILS: z.string().default("").transform(parseAdminEmails),
   PORTAL_URL: z.string().url().default("http://localhost:5173"),
   PORTAL_DIST_DIR: z.string().default("./portal"),
   CONNECT_TTL_SECONDS: z.coerce.number().int().positive().default(600),

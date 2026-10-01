@@ -10,6 +10,7 @@ import { verifyApiKey, getUserById, setApiKey, clearApiKey, hasApiKey, getApiKey
 import { buildAuthUrl, handleCallback } from "../auth/google";
 import { buildAuthUrl as buildKeycloakAuthUrl, handleCallback as handleKeycloakCallback, isKeycloakConfigured } from "../auth/keycloak";
 import { signSession, verifySession } from "../auth/session";
+import { isAdminEmail } from "../auth/admin";
 import { config } from "../config";
 import { getToken, deleteToken, storeToken } from "../auth/tokens";
 import {
@@ -226,7 +227,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     if (!profile) {
       return reply.status(404).send({ error: "User not found" });
     }
-    return { id: profile.id, email: profile.email };
+    return { id: profile.id, email: profile.email, isAdmin: isAdminEmail(profile.email) };
   });
 
   app.post("/api/auth/logout", async (_request, reply) => {
@@ -904,7 +905,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
         clientId: reg.clientId,
         clientSecret: reg.clientSecret,
       });
-      return { app: { id: app.id, name: app.name, baseUrl: app.baseUrl } };
+      return { app: { id: app.id, name: app.name, baseUrl: app.baseUrl, integration: integrationKey(app.id) } };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       request.log.warn({ name, err: message }, "custom app register failed");

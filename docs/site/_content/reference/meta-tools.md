@@ -25,22 +25,23 @@ flowchart LR
 
 ## search_tools
 
-Search every registered plugin tool by name or description. This is the entry
-point — plugin tools never appear in `tools/list`, so this is how an agent learns
-that `jira_create_issue` exists.
+Search every tool the caller can run — built-in plugin tools and their own custom
+apps — and get the best matches first. This is the entry point — plugin tools never
+appear in `tools/list`, so this is how an agent learns that `jira_create_issue` exists.
 
-**Description as the client sees it:** *Search available tools by name or description*
+**Description as the client sees it:** *Search available tools by what you want to do, e.g. "create jira issue" or "send email". Matches words in any order, tolerates typos and common synonyms, and returns the best matches first with a relevance score. Returns the top 10 by default; pass limit (max 50) for more.*
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `query` | string | yes | — | Search keyword |
+| `query` | string | yes | — | What you want to do, in words |
+| `limit` | integer | no | 10 | Maximum number of tools to return (1–50) |
 
-Returns `{ tools: [{ name, description, integration }] }`. Matching is over both
-name and description. The entry's `integration` is the owning plugin. Pass it to
-`connect` if execution later reports `NOT_CONNECTED`.
+Returns `{ tools: [{ name, description, integration, score }] }`, best first. The
+entry's `integration` is the owning plugin. Pass it to `connect` if execution later
+reports `NOT_CONNECTED`. How matching and ranking work: [Discovering tools](../guides/discovering-tools.md#how-matching-works).
 
 ```json
-{ "name": "search_tools", "arguments": { "query": "pull request" } }
+{ "name": "search_tools", "arguments": { "query": "create jira issue" } }
 ```
 
 ## get_tool_schema
@@ -313,7 +314,8 @@ user's real credential.
 
 **Description as the client sees it** (verbatim — the risk language is part of the
 schema an agent reads): *HIGH RISK — do not call without explicit user approval.
-Mints a short-lived (15 min) proxy token granting ARBITRARY API calls
+Mints a short-lived proxy token (15 min by default; set expiresInSeconds for 60s–1h,
+and ask for no longer than the task needs) granting ARBITRARY API calls
 (GET/POST/PUT/PATCH/DELETE), including destructive writes, against the listed
 integration(s) — the proxy injects the user's real credential transparently at
 /c/&lt;integration&gt;/&lt;path&gt;, so anything reachable via that credential is
@@ -325,6 +327,7 @@ that have curl proxy enabled are accepted.*
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `integrations` | array of strings, min 1 | yes | — | Integration names to include in the session |
+| `expiresInSeconds` | integer, 60–3600 | no | `900` | Token lifetime in seconds. Out of range or fractional values fail validation |
 
 On success:
 
@@ -337,7 +340,7 @@ On success:
 }
 ```
 
-`expiresIn` is a fixed 900 seconds — it is not configurable.
+`expiresIn` echoes the lifetime of the minted token: `expiresInSeconds`, or 900 when it is omitted.
 
 Validation is all-or-nothing. Every name is checked, and if any fail the whole call
 returns `{ error }` with the failures joined by `; `:
@@ -350,7 +353,7 @@ returns `{ error }` with the failures joined by `; `:
 
 > [!DANGER] This token can do anything the user's credential can do
 > Anything the stored credential can reach — including destructive writes — is
-> reachable with this token for 15 minutes. Ask the user before minting one, name the
+> reachable with this token until it expires — up to an hour. Ask the user before minting one, name the
 > integrations and the intended action, and do not mint speculatively.
 
 ```json

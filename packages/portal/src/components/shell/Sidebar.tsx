@@ -59,6 +59,12 @@ const SettingsIcon = () => (
   </Icon>
 );
 
+const AdminIcon = () => (
+  <Icon>
+    <path d="M8 1.5l5.5 2v4c0 3.2-2.3 5.7-5.5 7-3.2-1.3-5.5-3.8-5.5-7v-4z" />
+  </Icon>
+);
+
 // Groups render with a separator between them. Files sits apart from the
 // rest: the others are about the agents and what they connect to, Files is
 // a transfer buffer with a 24h clock on it.
@@ -103,6 +109,12 @@ export function Sidebar() {
       </ul>
 
       <div className="wb-sidebar-foot">
+        {user?.isAdmin && (
+          <NavLink to="/admin" className={itemClass}>
+            <AdminIcon />
+            Admin
+          </NavLink>
+        )}
         <NavLink to="/settings" className={itemClass}>
           <SettingsIcon />
           Settings

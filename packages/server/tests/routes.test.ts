@@ -380,7 +380,23 @@ describe("API routes", () => {
         headers: { authorization: "Bearer valid-jwt" },
       });
       expect(res.statusCode).toBe(200);
-      expect(JSON.parse(res.body)).toEqual({ id: "user-1", email: "test@example.com" });
+      expect(JSON.parse(res.body)).toEqual({ id: "user-1", email: "test@example.com", isAdmin: false });
+    });
+
+    it("reports isAdmin true when the user's email is on the allowlist", async () => {
+      const { config } = await import("../src/config");
+      (config as { ADMIN_EMAILS?: string[] }).ADMIN_EMAILS = ["test@example.com"];
+      try {
+        const app = await buildApp();
+        const res = await app.inject({
+          method: "GET",
+          url: "/api/auth/me",
+          headers: { authorization: "Bearer valid-jwt" },
+        });
+        expect(JSON.parse(res.body).isAdmin).toBe(true);
+      } finally {
+        (config as { ADMIN_EMAILS?: string[] }).ADMIN_EMAILS = undefined;
+      }
     });
 
     it("returns user profile with valid API key (x-workbench-api-key header)", async () => {

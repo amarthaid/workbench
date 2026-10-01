@@ -53,7 +53,7 @@ The nine tools the MCP endpoint actually advertises. They are the entire
 
 | Meta-tool | What it does |
 |---|---|
-| `search_tools` | Find tools by keyword over name and description. |
+| `search_tools` | Find tools by what you want to do, ranked best first. |
 | `get_tool_schema` | Return one tool's argument schema as JSON Schema. |
 | `execute_tools` | Run one or many tools, concurrently, results in order — or with `compose: true`, in sequence, piping one result into the next and returning only chosen fields. |
 | `whoami` | The authenticated workbench user — id and email. |
@@ -125,7 +125,7 @@ and how an agent hands control back to you mid-task.
 
 ## Curl session
 
-A short-lived escape hatch. `curl_session(['github'])` mints a 15-minute token
+A short-lived escape hatch. `curl_session(['github'])` mints a token (15 minutes by default, up to an hour)
 scoped to the named integrations. The server forwards requests to
 `<SERVER_PUBLIC_URL>/c/<integration>/<path>` carrying that token upstream, with the
 user's real credential injected. It

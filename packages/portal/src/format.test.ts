@@ -1,5 +1,19 @@
 import { describe, it, expect } from "vitest";
-import { dayLabel, timeLabel, durationLabel, relativeTime } from "./format";
+import { dayLabel, timeLabel, durationLabel, relativeTime, formatBytes } from "./format";
+
+describe("formatBytes", () => {
+  it.each([
+    [0, "0 B"],
+    [1023, "1023 B"],
+    [1024, "1.0 KB"],
+    [1536, "1.5 KB"],
+    [5 * 1024 * 1024, "5.0 MB"],
+    [150 * 1024 * 1024, "150 MB"],
+    [3 * 1024 ** 3, "3.0 GB"],
+  ])("formats %i as %s", (n, expected) => {
+    expect(formatBytes(n)).toBe(expected);
+  });
+});
 
 // Fixed instants keep these deterministic regardless of when they run — but
 // they must be built in LOCAL time, because dayLabel and timeLabel both work

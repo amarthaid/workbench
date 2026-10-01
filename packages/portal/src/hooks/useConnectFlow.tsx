@@ -44,7 +44,8 @@ export function useConnectFlow() {
     qc.invalidateQueries({ queryKey: ["integrations"] });
   }
 
-  async function start(integ: IntegrationSummary, instanceUrl?: string) {
+  /** Resolves true once the flow is handed off (redirect or auth dialog), false on failure. */
+  async function start(integ: IntegrationSummary, instanceUrl?: string): Promise<boolean> {
     setError(null);
     setBusy(integ.name);
     // This connect started inside the portal, so the result page should offer a
@@ -64,31 +65,33 @@ export function useConnectFlow() {
           loginUrl: result.loginUrl,
           cdpProxyUrl: result.cdpProxyUrl,
         });
-        return;
+        return true;
       }
       if (result.type === "oauth2") {
         window.location.href = result.url;
-        return;
+        return true;
       }
       if (result.type === "apikey") {
         setApiKeyAuth({ integration: integ.name, displayName: integ.displayName, fields: result.fields });
-        return;
+        return true;
       }
       setError(`Manual auth required for ${integ.displayName || integ.name}.`);
+      return false;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Connect failed");
+      return false;
     } finally {
       setBusy(null);
     }
   }
 
-  function connect(integ: IntegrationSummary) {
+  function connect(integ: IntegrationSummary): Promise<boolean> {
     setError(null);
     if (integ.instance) {
       setPendingInstance(integ);
-      return;
+      return Promise.resolve(true);
     }
-    void start(integ);
+    return start(integ);
   }
 
   function disconnect(name: string) {

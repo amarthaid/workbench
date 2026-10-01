@@ -252,6 +252,10 @@ body {
 .ui-button:disabled { cursor: not-allowed; opacity: .6; }
 
 .ui-button-xs { font-size: 12px; padding: var(--s-4) var(--s-12); }
+/* Icon-only: square, so a lone glyph is not stranded in a wide pill. In a
+   toolbar it takes the row's height, matching the inputs beside it. */
+.ui-button.ui-button-icon { padding: 10px; aspect-ratio: 1; line-height: 0; }
+.ui-button.ui-button-icon.ui-button-xs { padding: 6px; }
 .ui-button-sm { font-size: 13px; padding: var(--s-4) var(--s-16); }
 .ui-button-md { font-size: 14px; padding: var(--s-8) var(--s-20); }
 .ui-button-lg { font-size: 15px; padding: var(--s-12) var(--s-24); }
@@ -360,6 +364,43 @@ body {
 .wb-input-row .ui-input { flex: 1; min-width: 0; font-family: var(--mono); font-size: 13px; }
 /* Options on the left, the primary action on the right, one line. */
 .wb-form-bar { display: flex; align-items: center; justify-content: space-between; gap: var(--s-8); flex-wrap: wrap; }
+
+/* A small busy ring, inline before a button's label. Takes the text colour. */
+.ui-spinner {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  margin-right: var(--s-8);
+  vertical-align: -0.15em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: ui-spin .7s linear infinite;
+}
+@keyframes ui-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .ui-spinner { animation-duration: 2.4s; } }
+
+/* ui/Tooltip — a hint bubble for an icon-only control. Bordered, not
+   shadowed: styles.guard.test.ts keeps shadows for the modal. Inert, so it
+   never eats the click on the control it describes. */
+.ui-tooltip-wrap { position: relative; display: inline-flex; }
+.ui-tooltip {
+  position: absolute;
+  z-index: 40;
+  width: max-content;
+  max-width: 220px;
+  padding: var(--s-4) var(--s-8);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.4;
+  pointer-events: none;
+}
+.ui-tooltip-bottom { top: calc(100% + var(--s-4)); right: 0; }
+.ui-tooltip-top { bottom: calc(100% + var(--s-4)); right: 0; }
+.ui-tooltip-left { top: 50%; right: calc(100% + var(--s-8)); transform: translateY(-50%); }
 
 /* ui/PopoverSelect — a ghost trigger with a small listbox floating under it.
    Edged by a strong border, not a shadow: shadows stay reserved for the
@@ -852,6 +893,31 @@ body {
   align-items: center;
   gap: var(--s-8);
   padding-bottom: var(--s-8);
+}
+
+/* A filter bar inside a Box. .wb-page-toolbar is the page header's: it carries a
+   top margin and no side padding, which pins the tabs to the Box's left edge.
+   Here the tabs stretch to the bar's full height so the active underline lands
+   on the hairline beneath it, and the controls are padded to match. */
+.wb-box-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--s-12);
+  padding: 0 var(--s-12);
+  border-bottom: 1px solid var(--border);
+}
+
+.wb-box-toolbar .ui-tabs { align-self: stretch; align-items: stretch; }
+
+.wb-box-toolbar .wb-toolbar-controls { padding: var(--s-8) 0; flex-wrap: wrap; }
+
+/* An inline form: input and submit side by side, not stacked as block children. */
+.wb-toolbar-form {
+  display: flex;
+  align-items: center;
+  gap: var(--s-8);
 }
 
 .wb-app-grid {

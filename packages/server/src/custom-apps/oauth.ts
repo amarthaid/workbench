@@ -1,5 +1,6 @@
 import { config } from "../config";
 import { normalizeBaseUrl, assertSafeUrl, safeFetch } from "./ssrf";
+import { isOwnResource } from "./loop-guard";
 import { CustomApp, CustomAppMetadata, integrationKey } from "./store";
 import {
   createAuthState,
@@ -59,6 +60,12 @@ export async function discoverMetadata(baseUrl: string): Promise<CustomAppMetada
     /* probe is best-effort */
   }
   const resourceMeta = await fetchJson(prmUrl).catch(() => ({} as Record<string, unknown>));
+  // This instance's own /mcp, under whatever hostname was typed: its tools are
+  // the meta-tools, so execute_tools would call itself through the app. The
+  // metadata names what the server is; the URL only names how it was reached.
+  if (typeof resourceMeta.resource === "string" && isOwnResource(resourceMeta.resource)) {
+    throw new Error("That URL is this workbench's own MCP endpoint. A custom app must be a different MCP server.");
+  }
 
   // 2. Authorization-server metadata: PRM's authorization_servers list (a
   // separate IdP), falling back to the app's own origin.

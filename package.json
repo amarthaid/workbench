@@ -1,6 +1,6 @@
 {
   "name": "a-workbench",
-  "version": "0.30.0-rc.1",
+  "version": "0.30.0",
   "private": true,
   "packageManager": "npm@10.2.0",
   "workspaces": [
@@ -18,7 +18,7 @@
   "devDependencies": {
     "@vitest/coverage-v8": "^4.1.11",
     "marked": "^16.4.2",
-    "turbo": "^2.10.12"
+    "turbo": "^2.11.4"
   },
   "dependencies": {
     "pg": "^8.21.0"
