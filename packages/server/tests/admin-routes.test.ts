@@ -103,6 +103,21 @@ describe("/api/admin gate", () => {
     expect(res.statusCode).toBe(403);
   });
 
+  it("a rejected request still reaches root onRequest hooks registered after the scope", async () => {
+    // index.ts registers the metrics onRequest hook after the admin scope. A gate
+    // that replies from onRequest runs first and short-circuits it, so failed
+    // admin auth would vanish from the HTTP metrics.
+    const app = Fastify();
+    await registerAdminRoutes(app);
+    let rootHookRan = false;
+    app.addHook("onRequest", async () => {
+      rootHookRan = true;
+    });
+    const res = await app.inject(ping());
+    expect(res.statusCode).toBe(401);
+    expect(rootHookRan).toBe(true);
+  });
+
   it("gates a route added later in the same scope without it opting in", async () => {
     // Routes registered by later sub-projects live in this scope. Simulate one
     // on a fresh app (the same prefix cannot be registered twice on one app).
