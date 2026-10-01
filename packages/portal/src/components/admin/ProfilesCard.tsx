@@ -5,17 +5,18 @@ import { Badge } from "../ui/Badge";
 import { Box } from "../ui/Box";
 import { DataTable } from "../ui/DataTable";
 import { EmptyState } from "../ui/EmptyState";
-import { CardBody } from "./CardBody";
+import { ADMIN_STALE_MS, CardBody } from "./CardBody";
 
 export default function ProfilesCard() {
-  const { data, isLoading, isError } = useQuery({ queryKey: ["admin", "profiles"], queryFn: fetchAdminProfiles });
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ["admin", "profiles"],
+    queryFn: fetchAdminProfiles,
+    staleTime: ADMIN_STALE_MS,
+  });
   const profiles = data?.profiles ?? [];
   return (
     <Box title="Browser profiles">
       <CardBody isLoading={isLoading} isError={isError} label="browser profiles">
-        {data?.this_worker_only && (
-          <div className="ui-stat-note">Cluster mode is on: only this worker's profiles are listed.</div>
-        )}
         {profiles.length === 0 ? (
           <EmptyState message="No browser profiles." />
         ) : (

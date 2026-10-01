@@ -2,10 +2,14 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchAdminInstance } from "../../api";
 import { Box } from "../ui/Box";
 import { DataTable } from "../ui/DataTable";
-import { CardBody } from "./CardBody";
+import { ADMIN_STALE_MS, CardBody } from "./CardBody";
 
 export default function InstanceCard() {
-  const { data, isLoading, isError } = useQuery({ queryKey: ["admin", "instance"], queryFn: fetchAdminInstance });
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ["admin", "instance"],
+    queryFn: fetchAdminInstance,
+    staleTime: ADMIN_STALE_MS,
+  });
   const rows: [string, string | number][] = data
     ? [
         ["Version", data.version],

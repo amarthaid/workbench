@@ -305,14 +305,13 @@ describe("GET /api/admin/overview/browser-profiles", () => {
       bytes: 10,
       live: true,
     });
-    expect(body.this_worker_only).toBe(false);
     expect(res.body).not.toContain(prof.dir);
   });
 
-  it("says this worker only when cluster mode is on", async () => {
+  it("lists profiles without a worker-scope caveat, in cluster mode too", async () => {
+    // Cluster workers share one profiles volume, so the listing is complete.
     config.CLUSTER_ENABLED = true;
     const body = JSON.parse((await get("/api/admin/overview/browser-profiles")).body);
-    expect(body.this_worker_only).toBe(true);
-    expect(body.profiles).toEqual([]);
+    expect(body).toEqual({ profiles: [] });
   });
 });

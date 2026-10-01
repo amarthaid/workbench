@@ -15,7 +15,7 @@ import { DataTable } from "../ui/DataTable";
 import { EmptyState } from "../ui/EmptyState";
 import { Input, Select } from "../ui/Input";
 import { Tabs } from "../ui/Tabs";
-import { CardBody } from "./CardBody";
+import { ADMIN_STALE_MS, CardBody } from "./CardBody";
 
 const PAGE_SIZE = 50;
 
@@ -41,6 +41,8 @@ export default function ActivityCard() {
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) => fetchAdminActivity({ ...filters, cursor: pageParam }),
     getNextPageParam: (last) => last.next_cursor ?? undefined,
+    // A focus refetch of an infinite query re-requests every loaded page.
+    staleTime: ADMIN_STALE_MS,
   });
 
   const { data: registry } = useQuery({ queryKey: ["integrations"], queryFn: fetchIntegrations });

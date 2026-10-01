@@ -6,7 +6,11 @@ import ConnectionsCard from "./ConnectionsCard";
 const api = vi.hoisted(() => ({ fetchAdminConnections: vi.fn() }));
 vi.mock("../../api", () => api);
 
-beforeEach(() => api.fetchAdminConnections.mockReset());
+// Block body: an arrow that returns the mock makes vitest run it as a teardown
+// hook, which calls the mock again after the test.
+beforeEach(() => {
+  api.fetchAdminConnections.mockReset();
+});
 
 describe("ConnectionsCard", () => {
   it("lists each integration with its connected and needs-reconnect counts", async () => {
@@ -30,10 +34,9 @@ describe("ConnectionsCard", () => {
   });
 
   it("shows an error state", async () => {
-    // Once, not a persistent rejection: a persistent mockRejectedValue on a
-    // query's fetch surfaces as an unhandled "boom" that fails the test.
-    api.fetchAdminConnections.mockRejectedValueOnce(new Error("boom"));
+    api.fetchAdminConnections.mockRejectedValue(new Error("boom"));
     renderWithClient(<ConnectionsCard />);
     expect(await screen.findByText("Couldn't load connections.")).toBeInTheDocument();
+    expect(api.fetchAdminConnections).toHaveBeenCalledTimes(1);
   });
 });

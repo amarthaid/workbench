@@ -4,10 +4,14 @@ import { dayLabel } from "../../format";
 import { Box } from "../ui/Box";
 import { DataTable } from "../ui/DataTable";
 import { EmptyState } from "../ui/EmptyState";
-import { CardBody } from "./CardBody";
+import { ADMIN_STALE_MS, CardBody } from "./CardBody";
 
 export default function CustomAppsCard() {
-  const { data, isLoading, isError } = useQuery({ queryKey: ["admin", "custom-apps"], queryFn: fetchAdminCustomApps });
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ["admin", "custom-apps"],
+    queryFn: fetchAdminCustomApps,
+    staleTime: ADMIN_STALE_MS,
+  });
   const apps = data?.apps ?? [];
   return (
     <Box title="Custom apps">

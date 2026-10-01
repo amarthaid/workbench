@@ -60,7 +60,7 @@ Protected routes answer 401 `{ "error": "Unauthorized" }`.
 | GET | `/api/admin/overview/activity` | session only, admin | query `limit`, `cursor`, `integration`, `status`, `email` | `{ stored, events[], next_cursor }`; each event carries `user_id`, `user_email` | 400, 401, 403 |
 | GET | `/api/admin/overview/connections` | session only, admin | — | `{ integrations: [{ integration, connected, needs_reconnect }] }` | 401, 403 |
 | GET | `/api/admin/overview/custom-apps` | session only, admin | — | `{ apps[], total }` | 401, 403 |
-| GET | `/api/admin/overview/browser-profiles` | session only, admin | — | `{ profiles[], this_worker_only }` | 401, 403 |
+| GET | `/api/admin/overview/browser-profiles` | session only, admin | — | `{ profiles[] }` | 401, 403 |
 | POST | `/api/auth/logout` | **none** | — | `{ success: true }` | — |
 
 The session JWT arrives in the URL **fragment**, not a query parameter, so it never

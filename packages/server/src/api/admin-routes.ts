@@ -1,6 +1,5 @@
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
-import { config } from "../config";
 import { db } from "../db";
 import { activeProfiles, profileDirName, profilesBaseDir } from "../auth/profile-chromium";
 import { adminScope } from "./admin-scope";
@@ -29,8 +28,10 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
         activeDirs: [...activeProfiles].map((userId) => join(base, profileDirName(userId))),
         emailByDirName,
       });
-      // Under CLUSTER_ENABLED each process sees only its own volume.
-      return { profiles, this_worker_only: !!config.CLUSTER_ENABLED };
+      // Cluster workers share one profiles volume, so this is the whole list.
+      // Which profiles are live comes from the use-marker window, not from
+      // this process's own handles.
+      return { profiles };
     });
   });
 }

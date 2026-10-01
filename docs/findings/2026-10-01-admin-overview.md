@@ -22,8 +22,15 @@
 - A profile directory with no use-marker files falls back to the directory's own
   mtime, as the reaper does, so a just-created empty profile reads as live: that
   protects a chromium that has started but not yet written its markers.
-- In the portal tests, a persistent `mockRejectedValue` on a query's fetch fails
-  the test with an unhandled `Error: boom` even though the query function runs
-  once and the component shows its error state. `mockRejectedValueOnce` does not.
-  Cause not fully explained; the repo's `Home.test.tsx` already uses the `Once`
-  form for a query.
+- Cluster workers share one browser-profiles volume, so the profiles card lists
+  every profile; it carries no "this worker only" caveat. Which profiles are live
+  comes from the use-marker window, not from a process's own handles.
+- Overview queries set `staleTime`. React Query's default of 0 refetches on every
+  window focus, and for the profiles card that is a walk of every profile tree on
+  disk each time an admin alt-tabs back.
+- A `beforeEach(() => mock.mockReset())` arrow returns the mock, and vitest runs a
+  hook's return value as a teardown, so the mock is called once more after the
+  test. A persistent `mockRejectedValue` then rejects in that teardown call and
+  fails the test with an unhandled `Error: boom`, while the component itself
+  fetched once. Use a block body. (Same cause as the 2026-09-28 custom app
+  self-loop note.)

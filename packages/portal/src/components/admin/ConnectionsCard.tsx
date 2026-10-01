@@ -3,10 +3,14 @@ import { fetchAdminConnections } from "../../api";
 import { Box } from "../ui/Box";
 import { DataTable } from "../ui/DataTable";
 import { EmptyState } from "../ui/EmptyState";
-import { CardBody } from "./CardBody";
+import { ADMIN_STALE_MS, CardBody } from "./CardBody";
 
 export default function ConnectionsCard() {
-  const { data, isLoading, isError } = useQuery({ queryKey: ["admin", "connections"], queryFn: fetchAdminConnections });
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ["admin", "connections"],
+    queryFn: fetchAdminConnections,
+    staleTime: ADMIN_STALE_MS,
+  });
   const rows = data?.integrations ?? [];
   return (
     <Box title="Connections">

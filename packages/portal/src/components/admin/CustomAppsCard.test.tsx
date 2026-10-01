@@ -8,7 +8,11 @@ vi.mock("../../api", () => api);
 
 const NOW = Math.floor(Date.now() / 1000);
 
-beforeEach(() => api.fetchAdminCustomApps.mockReset());
+// Block body: an arrow that returns the mock makes vitest run it as a teardown
+// hook, which calls the mock again after the test.
+beforeEach(() => {
+  api.fetchAdminCustomApps.mockReset();
+});
 
 describe("CustomAppsCard", () => {
   it("lists apps with owner and URL", async () => {

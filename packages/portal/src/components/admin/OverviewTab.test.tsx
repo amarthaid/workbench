@@ -23,8 +23,7 @@ beforeEach(() => {
 
 describe("OverviewTab", () => {
   it("one failing card does not blank the others", async () => {
-    // Once: a persistent rejection on a query's fetch fails the test as an unhandled error.
-    api.fetchAdminInstance.mockRejectedValueOnce(new Error("boom"));
+    api.fetchAdminInstance.mockRejectedValue(new Error("boom"));
     api.fetchAdminConnections.mockResolvedValue({
       integrations: [{ integration: "jira", connected: 2, needs_reconnect: 0 }],
     });

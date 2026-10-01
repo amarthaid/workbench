@@ -744,7 +744,7 @@ export const fetchAdminCustomApps = () =>
   adminGet<{ apps: AdminCustomApp[]; total: number }>("/api/admin/overview/custom-apps", "custom apps");
 
 export const fetchAdminProfiles = () =>
-  adminGet<{ profiles: AdminProfile[]; this_worker_only: boolean }>(
+  adminGet<{ profiles: AdminProfile[] }>(
     "/api/admin/overview/browser-profiles",
     "browser profiles"
   );

@@ -16,7 +16,11 @@ const info = {
   admin_count: 1,
 };
 
-beforeEach(() => api.fetchAdminInstance.mockReset());
+// Block body: an arrow that returns the mock makes vitest run it as a teardown
+// hook, which calls the mock again after the test.
+beforeEach(() => {
+  api.fetchAdminInstance.mockReset();
+});
 
 describe("InstanceCard", () => {
   it("shows version, database, cluster, audit log and counts", async () => {
@@ -36,10 +40,12 @@ describe("InstanceCard", () => {
   });
 
   it("shows a loading state, then an error state", async () => {
-    // Once: see ConnectionsCard.test.tsx for why not a persistent rejection.
-    api.fetchAdminInstance.mockRejectedValueOnce(new Error("boom"));
+    api.fetchAdminInstance.mockRejectedValue(new Error("boom"));
     renderWithClient(<InstanceCard />);
     expect(screen.getByText("Loading instance info…")).toBeInTheDocument();
     expect(await screen.findByText("Couldn't load instance info.")).toBeInTheDocument();
+    // Exactly one fetch: a rejection that resolved to undefined on a second call
+    // would otherwise hide a double-fetch.
+    expect(api.fetchAdminInstance).toHaveBeenCalledTimes(1);
   });
 });
