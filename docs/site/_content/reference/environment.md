@@ -60,6 +60,7 @@ jots directory both default to siblings of its dirname.
 |---|---|---|---|---|
 | `ENCRYPTION_KEY` | string, exactly 64 chars (hex) | `""`; all-zeros when `NODE_ENV=test` | **yes** | AES-256-GCM key for tokens, cookie bundles, and the API-key copy |
 | `SESSION_SECRET` | string, min 32 chars | `""`; fixed value when `NODE_ENV=test` | **yes** | Keys five credentials: the four HS256 JWTs (portal session, MCP OAuth access, connect, curl-session) and the jot unlock cookie, which is a plain HMAC-SHA256 digest rather than a JWT. Rotating it invalidates all five |
+| `ADMIN_EMAILS` | comma-separated emails, trimmed and lowercased | `""` | no | Who may use the portal's Admin page and `/api/admin/*`. Empty means nobody. Matched against the signed-in user's stored email. Changing it needs a restart. See [Admin page](../deploy/admin.md) |
 | `GOOGLE_CLIENT_ID` | string | — | no | Google Workspace SSO for portal login. Its presence alone enables the `google` provider |
 | `GOOGLE_CLIENT_SECRET` | string | — | no | Required for the token exchange; without it the auth URL builds but the exchange throws |
 | `KEYCLOAK_ISSUER_URL` | URL | — | no | OIDC discovery base for Keycloak SSO |

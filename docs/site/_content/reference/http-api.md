@@ -55,7 +55,8 @@ Protected routes answer 401 `{ "error": "Unauthorized" }`.
 | GET | `/api/auth/keycloak` | none | — | `{ url }` | 503 if not configured |
 | GET | `/api/auth/google/callback` | provider redirect | query `code`, `state`, `error`; cookie `awb_oauth_binding` | 302 to `PORTAL_URL#token=<sessionJWT>`, or 302 to the MCP client's `redirect_uri` when `state` carries a ticket | 400 on provider `error`, missing `code`, or failure |
 | GET | `/api/auth/keycloak/callback` | provider redirect | query `code`, `state`, `error` | 302 to `PORTAL_URL#token=<sessionJWT>` | 400 |
-| GET | `/api/auth/me` | session or api-key | — | `{ id, email }` | 401, 404 |
+| GET | `/api/auth/me` | session or api-key | — | `{ id, email, isAdmin }` | 401, 404 |
+| GET | `/api/admin/ping` | session only, admin | — | `{ ok: true }` | 401, 403 |
 | POST | `/api/auth/logout` | **none** | — | `{ success: true }` | — |
 
 The session JWT arrives in the URL **fragment**, not a query parameter, so it never

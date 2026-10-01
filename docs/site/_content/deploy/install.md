@@ -127,9 +127,10 @@ The user id defaults to `local-dev-user`. The script prints a workbench API key 
 send it as the `x-workbench-api-key` header to authenticate against both `/api/*`
 and `/mcp`. Re-running for the same user id rotates the key.
 
-> [!NOTE] `POST /api/admin/users` does not exist
-> Older onboarding docs described an admin user-creation endpoint. There is no
-> `/api/admin/*` route in the server. Use the seed script or SSO.
+> [!NOTE] There is no admin user-creation endpoint
+> `/api/admin/*` exists, but only for emails in `ADMIN_EMAILS` (see
+> [Admin page](admin.md)), and it does not create users. Users come from SSO
+> sign-in or the seed script.
 
 To rotate or reveal a key later, the portal-authenticated routes are
 `POST /api/keys`, `GET /api/keys`, `GET /api/keys/reveal`, and `DELETE /api/keys`.
