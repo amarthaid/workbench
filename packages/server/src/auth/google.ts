@@ -3,6 +3,7 @@ import { config } from "../config";
 import { db } from "../db";
 import crypto from "crypto";
 import { createAuthState, verifyAuthState } from "./oauth";
+import { isUserDisabled } from "./user-status";
 
 const GOOGLE_DISCOVERY = "https://accounts.google.com/.well-known/openid-configuration";
 
@@ -161,5 +162,7 @@ export async function handleCallback(code: string, state: string): Promise<{ use
     }
   }
 
+  // After account linking, so a disabled account cannot be re-entered by email.
+  if (await isUserDisabled(user.id)) throw new Error("Account disabled");
   return { userId: user.id, email: user.email };
 }
