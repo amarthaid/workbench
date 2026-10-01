@@ -33,4 +33,14 @@ describe("OverviewTab", () => {
     expect(await screen.findByText("jira")).toBeInTheDocument();
     expect(await screen.findByText("No custom apps.")).toBeInTheDocument();
   });
+
+  it("includes the activity card", async () => {
+    api.fetchAdminInstance.mockResolvedValue({
+      version: "0.30.0", db_backend: "sqlite", cluster_enabled: false, audit_log_dest: "sqlite",
+      audit_stored: true, user_count: 1, admin_count: 1,
+    });
+    api.fetchAdminConnections.mockResolvedValue({ integrations: [] });
+    renderWithClient(<OverviewTab />);
+    expect(await screen.findByText("No tool calls recorded yet.")).toBeInTheDocument();
+  });
 });
