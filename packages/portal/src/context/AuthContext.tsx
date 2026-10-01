@@ -5,6 +5,7 @@ import { safeReturnPath } from "../return-path";
 interface AuthUser {
   id: string;
   email: string | null;
+  isAdmin?: boolean;
 }
 
 interface AuthContextType {
