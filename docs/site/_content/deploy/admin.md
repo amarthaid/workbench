@@ -38,7 +38,26 @@ Five read-only cards, each loaded independently:
 - **Custom apps:** every user's custom apps with owner and URL. Credentials are never shown.
 - **Browser profiles:** disk used per user and whether the profile is live. "Live" means a use-marker file moved in the last hour. Workers and pods that share a profiles volume all show up here.
 
+## Managing users
+
+The **Users** tab lists every user with their connection and custom-app counts, last activity, whether they have an API key, and whether they are disabled.
+
+- **Disable** signs the user out of the portal and stops every credential: their API key, OAuth logins and refresh tokens, and new SSO sign-ins. Their connections, vault and files are kept, so **Enable** restores the account. Disabling asks for confirmation.
+- **Revoke key** clears the user's API key; agents using it stop working until they create a new one.
+- You cannot disable yourself or any email on `ADMIN_EMAILS`. Admins are managed by that variable, not here, and this also stops an admin locking everyone out.
+- Every action is written to the audit log with your account as the actor.
+
+## Instance config
+
+The **Config** tab holds two instance-wide settings:
+
+- **Integrations:** turn an integration off for every user. It disappears from tool search, schema lookup and execution, the REST endpoint and the connect flow. Existing connections are kept, and turning it back on restores everything.
+- **Custom apps:** choose who can add custom apps: everyone, no one, or selected users. Excluded users keep their existing apps, but agents stop seeing those apps' tools.
+
+Changes apply at once in the process that handled the request. Other workers and pods pick them up within `INSTANCE_SETTINGS_POLL_SECONDS` (default 5), so allow that long before assuming a change is everywhere. OAuth client secrets are not editable here; they stay in environment variables.
+
 > [!WARNING] The allowlist is a trust boundary
 > The Overview shows every user's tool-call metadata (app, tool, error text, never
-> arguments) and which users have which integrations connected. List only people
-> you would trust with that.
+> arguments) and which users have which integrations connected, and the other tabs
+> disable accounts and turn integrations off for everyone. List only people you
+> would trust with that.

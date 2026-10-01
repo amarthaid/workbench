@@ -55,12 +55,19 @@ Protected routes answer 401 `{ "error": "Unauthorized" }`.
 | GET | `/api/auth/keycloak` | none | — | `{ url }` | 503 if not configured |
 | GET | `/api/auth/google/callback` | provider redirect | query `code`, `state`, `error`; cookie `awb_oauth_binding` | 302 to `PORTAL_URL#token=<sessionJWT>`, or 302 to the MCP client's `redirect_uri` when `state` carries a ticket | 400 on provider `error`, missing `code`, or failure |
 | GET | `/api/auth/keycloak/callback` | provider redirect | query `code`, `state`, `error` | 302 to `PORTAL_URL#token=<sessionJWT>` | 400 |
-| GET | `/api/auth/me` | session or api-key | — | `{ id, email, isAdmin }` | 401, 404 |
+| GET | `/api/auth/me` | session or api-key | — | `{ id, email, isAdmin, canCreateCustomApps }` | 401, 404 |
 | GET | `/api/admin/overview/instance` | session only, admin | — | `{ version, db_backend, cluster_enabled, audit_log_dest, audit_stored, user_count, admin_count }` | 401, 403 |
 | GET | `/api/admin/overview/activity` | session only, admin | query `limit`, `cursor`, `integration`, `status`, `email` | `{ stored, events[], next_cursor }`; each event carries `user_id`, `user_email` | 400, 401, 403 |
 | GET | `/api/admin/overview/connections` | session only, admin | — | `{ integrations: [{ integration, connected, needs_reconnect }] }` | 401, 403 |
 | GET | `/api/admin/overview/custom-apps` | session only, admin | — | `{ apps[], total }` | 401, 403 |
 | GET | `/api/admin/overview/browser-profiles` | session only, admin | — | `{ profiles[] }` | 401, 403 |
+| GET | `/api/admin/users` | session only, admin | — | `{ users: [{ id, email, created_at, disabled_at, has_api_key, connection_count, custom_app_count, last_activity }], total }` | 401, 403 |
+| POST | `/api/admin/users/:id/disable` | session only, admin | — | `{ ok: true }` | 400 `cannot_disable_self` / `cannot_disable_admin`, 401, 403, 404 |
+| POST | `/api/admin/users/:id/enable` | session only, admin | — | `{ ok: true }` | 401, 403, 404 |
+| POST | `/api/admin/users/:id/revoke-key` | session only, admin | — | `{ ok: true }` | 401, 403, 404 |
+| GET | `/api/admin/config` | session only, admin | — | `{ integrations: [{ name, display_name, enabled }], custom_apps_policy }` | 401, 403 |
+| PUT | `/api/admin/config/integrations/:name` | session only, admin | `{ enabled: boolean }` | `{ ok: true }` | 400, 401, 403, 404 `unknown_integration` |
+| PUT | `/api/admin/config/custom-apps` | session only, admin | `{ mode: "all" \| "none" \| "allowlist", user_ids? }` | `{ ok: true }` | 400 `invalid_policy` / `unknown_user`, 401, 403 |
 | POST | `/api/auth/logout` | **none** | — | `{ success: true }` | — |
 
 The session JWT arrives in the URL **fragment**, not a query parameter, so it never
