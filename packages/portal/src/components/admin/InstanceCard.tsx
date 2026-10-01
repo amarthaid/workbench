@@ -17,7 +17,8 @@ export default function InstanceCard() {
         ["Cluster", data.cluster_enabled ? "On" : "Off"],
         ["Audit log", data.audit_stored ? data.audit_log_dest : `${data.audit_log_dest} (not in database)`],
         ["Users", data.user_count],
-        ["Admins", data.admin_count],
+        // The allowlist's length, not a count of users who have admin sessions.
+        ["Allowlisted admins", data.admin_count],
       ]
     : [];
   return (

@@ -7,7 +7,7 @@ area derives admin from `ADMIN_EMAILS` instead.
   session JWT. Reusing it for `/api/admin/*` would let an admin's MCP key act as
   admin, so `resolveAdmin` verifies the session JWT directly.
 - The email is compared from `users.email`, not the JWT claim.
-- The gate is a Fastify `onRequest` hook on an encapsulated `/api/admin` scope,
+- The gate is a Fastify `preHandler` hook on an encapsulated `/api/admin` scope,
   so a route added to it cannot omit the check.
 - `parseAdminEmails` drops empty entries: `ADMIN_EMAILS=","` must not match a
   user whose email is null.

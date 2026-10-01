@@ -29,7 +29,7 @@ describe("InstanceCard", () => {
     const table = await screen.findByRole("table", { name: "Instance settings" });
     const rows = within(table).getAllByRole("row").map((r) => r.textContent);
     expect(rows).toEqual(
-      expect.arrayContaining(["Version0.30.0", "Databasesqlite", "ClusterOff", "Audit logsqlite", "Users3", "Admins1"])
+      expect.arrayContaining(["Version0.30.0", "Databasesqlite", "ClusterOff", "Audit logsqlite", "Users3", "Allowlisted admins1"])
     );
   });
 

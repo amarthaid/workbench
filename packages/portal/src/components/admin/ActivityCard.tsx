@@ -53,14 +53,15 @@ export default function ActivityCard() {
   const stored = pages[0]?.stored ?? true;
   // De-duplicate by id: a refetch of an earlier page racing a "Load more" can
   // otherwise land the same row twice.
+  const pageData = query.data?.pages;
   const events = useMemo(() => {
     const seen = new Set<number>();
-    return pages.flatMap((p) => p.events).filter((e: AdminActivityEvent) => {
+    return (pageData ?? []).flatMap((p) => p.events).filter((e: AdminActivityEvent) => {
       if (seen.has(e.id)) return false;
       seen.add(e.id);
       return true;
     });
-  }, [pages]);
+  }, [pageData]);
 
   return (
     <Box title="Activity">

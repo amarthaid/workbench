@@ -239,6 +239,20 @@ describe("GET /api/admin/overview/activity", () => {
     const body = JSON.parse((await get("/api/admin/overview/activity?limit=0")).body);
     expect(body.events).toHaveLength(1);
   });
+
+  it("treats an empty limit as the default page size, not as one row", async () => {
+    await seedEvent({ userId: "user-dev", tool: "a", createdAt: NOW });
+    await seedEvent({ userId: "user-dev", tool: "b", createdAt: NOW - 1 });
+    const body = JSON.parse((await get("/api/admin/overview/activity?limit=")).body);
+    expect(body.events).toHaveLength(2);
+  });
+
+  it("rejects an unknown status instead of silently returning everything", async () => {
+    await seedEvent({ userId: "user-dev" });
+    const res = await get("/api/admin/overview/activity?status=foo");
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body)).toEqual({ error: "invalid_status" });
+  });
 });
 
 describe("GET /api/admin/overview/connections", () => {

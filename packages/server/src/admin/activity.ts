@@ -12,14 +12,15 @@ const first = (v: string | string[] | undefined): string | undefined => (Array.i
 
 export type AdminActivityResult =
   | { ok: true; page: { stored: boolean; events: AdminAuditEventRow[]; next_cursor: string | null } }
-  | { ok: false; error: "invalid_cursor" };
+  | { ok: false; error: "invalid_cursor" | "invalid_status" };
 
 export async function adminActivity(raw: Raw): Promise<AdminActivityResult> {
   // stdout and kafka write nothing to the table, so an empty list would read as
   // "nothing happened". Say so instead.
   if (!auditStored()) return { ok: true, page: { stored: false, events: [], next_cursor: null } };
 
-  const rawLimit = first(raw.limit);
+  // An empty `?limit=` means "not given", not zero.
+  const rawLimit = first(raw.limit) || undefined;
   const requested = Number(rawLimit);
   const limit =
     rawLimit === undefined || !Number.isFinite(requested)
@@ -34,8 +35,13 @@ export async function adminActivity(raw: Raw): Promise<AdminActivityResult> {
     cursor = decoded;
   }
 
-  const rawStatus = first(raw.status);
-  const status = rawStatus === "success" || rawStatus === "error" ? rawStatus : undefined;
+  // A filter that is not understood is refused, not ignored: ignoring it would
+  // return every event while the caller believes it filtered.
+  const rawStatus = first(raw.status) || undefined;
+  if (rawStatus !== undefined && rawStatus !== "success" && rawStatus !== "error") {
+    return { ok: false, error: "invalid_status" };
+  }
+  const status = rawStatus;
 
   // One extra row: its presence says another page exists, without a COUNT.
   const rows = await listAllAuditEvents({

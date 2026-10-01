@@ -32,8 +32,8 @@ reach the allowlist.
 
 Five read-only cards, each loaded independently:
 
-- **Instance:** version, database backend, cluster mode, audit-log destination, user and admin counts (the admin count is a number, never the list).
-- **Activity:** every user's tool calls, newest first, with the user's email. Filter by app, errors only, or a user's email. Shows tool names and error text, never arguments. With `AUDIT_LOG_DEST` other than `sqlite` the events are not in the database, and the card says so.
+- **Instance:** version, database backend, cluster mode, audit-log destination, user count and the number of allowlisted admins (a number, never the list; it counts allowlist entries, whether or not they have signed in).
+- **Activity:** every user's tool calls, newest first, with the user's email. Filter by app, errors only, or a user's email. An unrecognised `status` filter is refused with a 400 rather than ignored. Shows tool names and error text, never arguments. With `AUDIT_LOG_DEST` other than `sqlite` the events are not in the database, and the card says so.
 - **Connections:** connected users per integration. "Needs reconnect" counts connections whose access token has expired and which have no refresh token; the server does not record refresh failures, so a connection that merely failed to refresh is not counted.
 - **Custom apps:** every user's custom apps with owner and URL. Credentials are never shown.
 - **Browser profiles:** disk used per user and whether the profile is live. "Live" means a use-marker file moved in the last hour. Workers and pods that share a profiles volume all show up here.
