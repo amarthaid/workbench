@@ -63,6 +63,27 @@ async function seedEvent(o: {
   );
 }
 
+async function seedConn(o: {
+  userId: string;
+  integration: string;
+  expiresAt: number | null;
+  refresh: boolean;
+}) {
+  await db.run(
+    `INSERT INTO connections (user_id, integration, access_token, refresh_token, expires_at)
+     VALUES (?, ?, ?, ?, ?)`,
+    [o.userId, o.integration, Buffer.from("tok-abc"), o.refresh ? Buffer.from("rtok-abc") : null, o.expiresAt]
+  );
+}
+
+async function seedApp(o: { id: string; userId: string; name: string; url: string; createdAt: number }) {
+  await db.run(
+    `INSERT INTO custom_apps (id, user_id, name, base_url, metadata, client_id, client_secret_enc, created_at)
+     VALUES (?, ?, ?, ?, '{}', 'cid-1', ?, ?)`,
+    [o.id, o.userId, o.name, o.url, Buffer.from("gsecret-xyz"), o.createdAt]
+  );
+}
+
 beforeEach(async () => {
   for (const t of ["audit_log", "connections", "custom_apps", "users"]) {
     await db.exec(`DELETE FROM ${t}`);
@@ -73,7 +94,12 @@ beforeEach(async () => {
 });
 
 // Every overview endpoint is listed here so the gate is asserted for each.
-const OVERVIEW_URLS = ["/api/admin/overview/instance", "/api/admin/overview/activity"];
+const OVERVIEW_URLS = [
+  "/api/admin/overview/instance",
+  "/api/admin/overview/activity",
+  "/api/admin/overview/connections",
+  "/api/admin/overview/custom-apps",
+];
 
 describe.each(OVERVIEW_URLS)("%s gate", (url) => {
   it("401 without a session", async () => {
@@ -199,5 +225,55 @@ describe("GET /api/admin/overview/activity", () => {
     await seedEvent({ userId: "user-dev", tool: "b", createdAt: NOW - 1 });
     const body = JSON.parse((await get("/api/admin/overview/activity?limit=0")).body);
     expect(body.events).toHaveLength(1);
+  });
+});
+
+describe("GET /api/admin/overview/connections", () => {
+  it("counts connected users per integration and those needing a reconnect", async () => {
+    await seedConn({ userId: "u1", integration: "jira", expiresAt: NOW + 3600, refresh: true });
+    await seedConn({ userId: "u2", integration: "jira", expiresAt: NOW - 10, refresh: false }); // needs reconnect
+    await seedConn({ userId: "u3", integration: "jira", expiresAt: NOW - 10, refresh: true }); // can refresh
+    await seedConn({ userId: "u1", integration: "slack", expiresAt: null, refresh: false }); // cookie / api key
+    await seedConn({ userId: "u1", integration: "custom:abc", expiresAt: NOW - 10, refresh: false }); // custom app
+    const res = await get("/api/admin/overview/connections");
+    expect(JSON.parse(res.body)).toEqual({
+      integrations: [
+        { integration: "jira", connected: 3, needs_reconnect: 1 },
+        { integration: "slack", connected: 1, needs_reconnect: 0 },
+      ],
+    });
+    expect(res.body).not.toContain("tok-abc");
+  });
+
+  it("returns an empty list when nothing is connected", async () => {
+    expect(JSON.parse((await get("/api/admin/overview/connections")).body)).toEqual({ integrations: [] });
+  });
+});
+
+describe("GET /api/admin/overview/custom-apps", () => {
+  it("lists apps across users with the owner's email, newest first, and no secrets", async () => {
+    await seedUser("user-dev", "dev@example.com");
+    await seedApp({ id: "app-1", userId: "user-dev", name: "older", url: "https://mcp.example.com/a", createdAt: NOW - 100 });
+    await seedApp({ id: "app-2", userId: "user-dev", name: "newer", url: "https://mcp.example.com/b", createdAt: NOW });
+    const res = await get("/api/admin/overview/custom-apps");
+    const body = JSON.parse(res.body);
+    expect(body.total).toBe(2);
+    expect(body.apps.map((a: { name: string }) => a.name)).toEqual(["newer", "older"]);
+    expect(body.apps[0]).toEqual({
+      id: "app-2",
+      name: "newer",
+      base_url: "https://mcp.example.com/b",
+      owner_email: "dev@example.com",
+      created_at: NOW,
+    });
+    expect(res.body).not.toContain("gsecret");
+    expect(res.body).not.toContain("cid-1");
+    expect(res.body).not.toContain("client_secret");
+  });
+
+  it("gives a null owner email when the owning user is gone", async () => {
+    await seedApp({ id: "app-9", userId: "user-ghost", name: "orphan", url: "https://mcp.example.com/z", createdAt: NOW });
+    const body = JSON.parse((await get("/api/admin/overview/custom-apps")).body);
+    expect(body.apps[0].owner_email).toBeNull();
   });
 });

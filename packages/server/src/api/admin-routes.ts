@@ -2,6 +2,8 @@ import type { FastifyInstance } from "fastify";
 import { adminScope } from "./admin-scope";
 import { getInstanceInfo } from "../admin/instance";
 import { adminActivity } from "../admin/activity";
+import { getConnectionStats } from "../admin/connections";
+import { listAllCustomApps } from "../admin/custom-apps";
 
 export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
   await adminScope(app, (scope) => {
@@ -11,5 +13,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
       if (!result.ok) return reply.status(400).send({ error: result.error });
       return result.page;
     });
+    scope.get("/overview/connections", async () => getConnectionStats());
+    scope.get("/overview/custom-apps", async () => listAllCustomApps());
   });
 }
