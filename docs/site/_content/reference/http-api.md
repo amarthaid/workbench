@@ -56,7 +56,11 @@ Protected routes answer 401 `{ "error": "Unauthorized" }`.
 | GET | `/api/auth/google/callback` | provider redirect | query `code`, `state`, `error`; cookie `awb_oauth_binding` | 302 to `PORTAL_URL#token=<sessionJWT>`, or 302 to the MCP client's `redirect_uri` when `state` carries a ticket | 400 on provider `error`, missing `code`, or failure |
 | GET | `/api/auth/keycloak/callback` | provider redirect | query `code`, `state`, `error` | 302 to `PORTAL_URL#token=<sessionJWT>` | 400 |
 | GET | `/api/auth/me` | session or api-key | — | `{ id, email, isAdmin }` | 401, 404 |
-| GET | `/api/admin/ping` | session only, admin | — | `{ ok: true }` | 401, 403 |
+| GET | `/api/admin/overview/instance` | session only, admin | — | `{ version, db_backend, cluster_enabled, audit_log_dest, audit_stored, user_count, admin_count }` | 401, 403 |
+| GET | `/api/admin/overview/activity` | session only, admin | query `limit`, `cursor`, `integration`, `status`, `email` | `{ stored, events[], next_cursor }`; each event carries `user_id`, `user_email` | 400, 401, 403 |
+| GET | `/api/admin/overview/connections` | session only, admin | — | `{ integrations: [{ integration, connected, needs_reconnect }] }` | 401, 403 |
+| GET | `/api/admin/overview/custom-apps` | session only, admin | — | `{ apps[], total }` | 401, 403 |
+| GET | `/api/admin/overview/browser-profiles` | session only, admin | — | `{ profiles[], this_worker_only }` | 401, 403 |
 | POST | `/api/auth/logout` | **none** | — | `{ success: true }` | — |
 
 The session JWT arrives in the URL **fragment**, not a query parameter, so it never

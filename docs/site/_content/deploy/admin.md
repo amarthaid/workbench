@@ -28,6 +28,17 @@ The email is read from the stored user record, not from the session token, and
 both SSO providers reject an unverified email, so an unverified address cannot
 reach the allowlist.
 
+## What the Overview shows
+
+Five read-only cards, each loaded independently:
+
+- **Instance:** version, database backend, cluster mode, audit-log destination, user and admin counts (the admin count is a number, never the list).
+- **Activity:** every user's tool calls, newest first, with the user's email. Filter by app, errors only, or a user's email. Shows tool names and error text, never arguments. With `AUDIT_LOG_DEST` other than `sqlite` the events are not in the database, and the card says so.
+- **Connections:** connected users per integration. "Needs reconnect" counts connections whose access token has expired and which have no refresh token; the server does not record refresh failures, so a connection that merely failed to refresh is not counted.
+- **Custom apps:** every user's custom apps with owner and URL. Credentials are never shown.
+- **Browser profiles:** disk used per user and whether the profile is live. Under `CLUSTER_ENABLED` each worker sees only its own volume, so the card lists that worker's profiles only.
+
 > [!WARNING] The allowlist is a trust boundary
-> Admin pages added later show every user's tool-call metadata and manage other
-> users. List only people you would trust with that.
+> The Overview shows every user's tool-call metadata (app, tool, error text, never
+> arguments) and which users have which integrations connected. List only people
+> you would trust with that.
