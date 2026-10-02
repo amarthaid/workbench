@@ -79,9 +79,14 @@ async function startConnect(
 // (`POST /rest/:integration`). Never throws — failures come back as { error }.
 export type ExecResult =
   | { result: unknown }
-  | { error: string; integration?: string; message?: string; step?: string };
+  | { error: string; integration?: string; message?: string; ref_id?: string };
 
-const STEP_ID_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+// `ref_id` names an execution so `{{step:<ref_id>.path}}` (and `return`) can
+// read its result. Same grammar as the id segment of the ref itself.
+const REF_ID_PATTERN = "^[A-Za-z_][A-Za-z0-9_]*$";
+const REF_ID_RE = new RegExp(REF_ID_PATTERN);
+const REF_ID_MAX = 64;
+const COMPOSE_MAX_EXECUTIONS = 8;
 // Compose templates: `{{step:id.path}}` reads an earlier step's result,
 // `{{vault:NAME}}` a secret (same name grammar as vault/interpolate.ts). Both
 // are matched in ONE pass over the agent-written string, so a value inserted
@@ -100,10 +105,12 @@ class ComposeRefError extends Error {
   }
 }
 
+// Own properties only: `{{step:a.constructor}}` or `{{step:a.__proto__}}`
+// would otherwise resolve to something that was never in the step result.
 function getPath(obj: unknown, path: string[]): unknown {
   let cur = obj;
   for (const key of path) {
-    if (cur == null || typeof cur !== "object") return undefined;
+    if (cur == null || typeof cur !== "object" || !Object.hasOwn(cur, key)) return undefined;
     cur = (cur as Record<string, unknown>)[key];
   }
   return cur;
@@ -148,39 +155,38 @@ function resolveTemplate(
   return value;
 }
 
-export type ComposeStep = { id?: string; tool: string; args?: Record<string, unknown> };
+export type Execution = { ref_id?: string; tool: string; args?: Record<string, unknown> };
 
-// `execute_tools` with `compose: true`: run steps in order, each reading
-// earlier results via `{{step:id.path}}`. Intermediate payloads stay
-// in-process; only the resolved `return` template goes back to the agent, so a
-// CSV/file body never has to enter the chat. Stops at the first failing step.
+function badRef(e: unknown): string {
+  if (e instanceof ComposeRefError) return `BAD_REF: ${e.message}`;
+  throw e;
+}
+
+// `execute_tools` with `compose: true`: run executions in order, each reading
+// earlier results via `{{step:<ref_id>.path}}`. Intermediate payloads stay
+// in-process; only the resolved `return` template (or, without one, the last
+// result) goes back to the agent, so a CSV/file body never has to enter the
+// chat. Stops at the first failing step. The schema has already enforced a
+// valid, unique `ref_id` on every execution.
 export async function composeTools(
   userId: string,
-  steps: ComposeStep[],
+  steps: Execution[],
   ret: unknown
 ): Promise<ExecResult> {
-  if (ret === undefined) return { error: "compose: true requires `return`" };
-  const seen = new Set<string>();
-  for (const step of steps) {
-    if (!step.id || !STEP_ID_RE.test(step.id)) return { error: `Invalid step id '${step.id ?? ""}'` };
-    if (seen.has(step.id)) return { error: `Duplicate step id '${step.id}'` };
-    seen.add(step.id);
-  }
-
   const results = new Map<string, unknown>();
+  let last: unknown;
   for (const step of steps) {
-    const id = step.id!;
+    const refId = step.ref_id!;
     const template = step.args ?? {};
-    // Vault refs resolve here, against the agent's template only, and only
-    // for plugin tools: executeSingle scrubs their results, a custom app's it
-    // does not, and vault_* tools take names literally.
-    const vaultOk = !step.tool.startsWith("vault_") && registry.getTool(step.tool) !== undefined;
+    // Vault refs resolve here, against the agent's template only, and the
+    // map is handed down so neither plugin nor custom-app execution scans the
+    // step-resolved args again. vault_* tools take names literally.
     let vault: Map<string, string> | null = null;
-    if (vaultOk) {
+    if (!step.tool.startsWith("vault_")) {
       try {
         vault = (await resolveVaultRefs(userId, template)).substituted;
       } catch (e) {
-        if (e instanceof VaultRefError) return { error: e.code, message: e.message, step: id };
+        if (e instanceof VaultRefError) return { error: e.code, message: e.message, ref_id: refId };
         throw e;
       }
     }
@@ -188,20 +194,97 @@ export async function composeTools(
     try {
       args = resolveTemplate(template, results, vault) as Record<string, unknown>;
     } catch (e) {
-      if (e instanceof ComposeRefError) return { error: `BAD_REF: ${e.message}`, step: id };
-      throw e;
+      return { error: badRef(e), ref_id: refId };
     }
     const out = await executeSingle(userId, step.tool, args, vault ?? undefined);
-    if ("error" in out) return { ...out, step: id };
-    results.set(id, out.result);
+    if ("error" in out) return { ...out, ref_id: refId };
+    results.set(refId, out.result);
+    last = out.result;
   }
+  if (ret === undefined) return { result: last };
   try {
     return { result: resolveTemplate(ret, results, null) };
   } catch (e) {
-    if (e instanceof ComposeRefError) return { error: `BAD_REF: ${e.message}` };
-    throw e;
+    return { error: badRef(e) };
   }
 }
+
+type ExecutionFailure = { index: number; ref_id?: string } & Extract<ExecResult, { error: string }>;
+export type ProjectedResult =
+  | { result: unknown; errors?: ExecutionFailure[] }
+  | { error: string; errors?: ExecutionFailure[] };
+
+// `return` without `compose`: a normal concurrent batch, then the template is
+// resolved over the finished results keyed by `ref_id`. Args are not
+// interpolated (that is compose's job). Failed executions are listed under
+// `errors` — a projection that only names the successful ones would
+// otherwise hide a failed write.
+export async function projectBatch(
+  userId: string,
+  executions: Execution[],
+  ret: unknown
+): Promise<ProjectedResult> {
+  const { results } = await executeMany(userId, executions);
+  const byRef = new Map<string, unknown>();
+  const errors: ExecutionFailure[] = [];
+  results.forEach((r, index) => {
+    const refId = executions[index].ref_id;
+    if ("error" in r) errors.push({ index, ...(refId ? { ref_id: refId } : {}), ...r });
+    else if (refId) byRef.set(refId, r.result);
+  });
+  const withErrors = errors.length > 0 ? { errors } : {};
+  try {
+    return { result: resolveTemplate(ret, byRef, null), ...withErrors };
+  } catch (e) {
+    return { error: badRef(e), ...withErrors };
+  }
+}
+
+const executeToolsInput = z
+  .object({
+    executions: z
+      .array(
+        z.object({
+          ref_id: z
+            .string()
+            .max(REF_ID_MAX, `ref_id must be at most ${REF_ID_MAX} characters`)
+            .regex(REF_ID_RE, "ref_id must match " + REF_ID_PATTERN)
+            .optional(),
+          tool: z.string(),
+          args: z.record(z.unknown()).default({}),
+        })
+      )
+      .min(1),
+    compose: z.boolean().default(false),
+    return: z.unknown().optional(),
+  })
+  .superRefine((v, ctx) => {
+    if (v.compose && v.executions.length > COMPOSE_MAX_EXECUTIONS) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["executions"],
+        message: `compose: true runs at most ${COMPOSE_MAX_EXECUTIONS} executions`,
+      });
+    }
+    const usesRefs = v.compose || v.return !== undefined;
+    const seen = new Set<string>();
+    v.executions.forEach((e, i) => {
+      const path = ["executions", i, "ref_id"];
+      if (e.ref_id === undefined) {
+        if (v.compose) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, path, message: "ref_id is required on every execution with compose: true" });
+        }
+        return;
+      }
+      if (!usesRefs) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path, message: "ref_id is only used with compose or return" });
+      }
+      if (seen.has(e.ref_id)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path, message: `Duplicate ref_id '${e.ref_id}'` });
+      }
+      seen.add(e.ref_id);
+    });
+  });
 
 export async function executeSingle(
   userId: string,
@@ -212,7 +295,7 @@ export async function executeSingle(
   const targetTool = registry.getTool(toolName);
   if (!targetTool) {
     const appTool = await getToolForUser(userId, toolName);
-    if (appTool) return executeCustomAppSingle(userId, appTool, rawArgs);
+    if (appTool) return executeCustomAppSingle(userId, appTool, rawArgs, preSubstituted);
   }
   return withSpan(
     "execute_single",
@@ -485,7 +568,8 @@ export async function executeSingle(
 export async function executeCustomAppSingle(
   userId: string,
   tool: IndexedTool,
-  rawArgs: Record<string, unknown>
+  rawArgs: Record<string, unknown>,
+  preSubstituted?: Map<string, string>
 ): Promise<ExecResult> {
   return withSpan(
     "execute_custom_app",
@@ -514,17 +598,24 @@ export async function executeCustomAppSingle(
         return { error: message, integration: tool.integration };
       }
 
+      // Same contract as executeSingle: `preSubstituted` means compose
+      // already resolved the agent's template in one pass, and a second scan
+      // here would resolve refs that arrived inside an earlier step's output.
       let effectiveArgs: Record<string, unknown> = rawArgs ?? {};
       let substituted = new Map<string, string>();
-      try {
-        const resolved = await resolveVaultRefs(userId, effectiveArgs);
-        effectiveArgs = resolved.args;
-        substituted = resolved.substituted;
-      } catch (e) {
-        if (e instanceof VaultRefError) {
-          return { error: e.code, message: e.message };
+      if (preSubstituted) {
+        substituted = preSubstituted;
+      } else {
+        try {
+          const resolved = await resolveVaultRefs(userId, effectiveArgs);
+          effectiveArgs = resolved.args;
+          substituted = resolved.substituted;
+        } catch (e) {
+          if (e instanceof VaultRefError) {
+            return { error: e.code, message: e.message };
+          }
+          throw e;
         }
-        throw e;
       }
       if (substituted.size > 0) {
         void touchUsed(userId, [...substituted.keys()]).catch(() => undefined);
@@ -694,27 +785,18 @@ export const metaTools = [
   {
     name: "execute_tools",
     description:
-      "Execute one or more tools in a single call. Runs them concurrently (bounded) and returns a `results` array in the same order as `executions`. A single tool failing does not abort the others — its entry carries an `error` instead of a `result`. For a single tool, pass a one-element `executions` array. " +
-      "With `compose: true` the executions instead run in order and pass data between them: give each an `id`, and write `{{step:<id>.<path>}}` anywhere in a later step's args to use an earlier result (e.g. content: \"{{step:export.csv}}\", id: \"{{step:list.files.0.id}}\"); a ref that is the whole value keeps its type. Intermediate results stay on the server — only the resolved `return` template comes back as `{ result }`, so leave fat fields (csv, content, bytes) out of it. Stops at the first failing step; the error carries its `step` id.",
-    inputSchema: z.object({
-      executions: z
-        .array(
-          z.object({
-            id: z.string().optional(),
-            tool: z.string(),
-            args: z.record(z.unknown()).default({}),
-          })
-        )
-        .min(1),
-      compose: z.boolean().default(false),
-      return: z.unknown().optional(),
-    }),
+      "Execute one or more tools in a single call. Runs them concurrently (bounded) and returns a `results` array in the same order as `executions`. A single tool failing does not abort the others — its entry carries an `error` instead of a `result`. For a single tool, pass a one-element `executions` array.\n\n" +
+      "`ref_id` names an execution so its result can be read as `{{step:<ref_id>.<path>}}` (path segments are keys or array indexes, e.g. `{{step:list.files.0.id}}`). It must match " + REF_ID_PATTERN + ", be at most " + REF_ID_MAX + " characters and be unique; it is only accepted together with `compose` or `return`.\n\n" +
+      "`compose: true` runs the executions in order instead (at most " + COMPOSE_MAX_EXECUTIONS + ", each with a `ref_id`) and resolves `{{step:...}}` refs in a later execution's args from earlier results. A ref that is the whole value keeps its type; one embedded in text interpolates. Stops at the first failing execution; the error carries its `ref_id`. Answers `{ result }`: the resolved `return`, or without `return` the last execution's result.\n\n" +
+      "`return` is a template (any JSON) resolved over the results by `ref_id` and is the only thing sent back, so leave fat fields (csv, content, bytes) out of it. Without `compose`, the batch runs concurrently as usual, args are not interpolated, and failed executions are listed under `errors`.\n\n" +
+      "`{{vault:NAME}}` resolves only in args you write — never in `return`, and never in text that arrives inside a tool's output.",
+    inputSchema: executeToolsInput,
     handler: async (
       ctx: { userId: string },
-      args: { executions: ComposeStep[]; compose?: boolean; return?: unknown }
-    ): Promise<{ results: ExecResult[] } | ExecResult> => {
+      args: z.infer<typeof executeToolsInput>
+    ): Promise<{ results: ExecResult[] } | ExecResult | ProjectedResult> => {
       if (args.compose) return composeTools(ctx.userId, args.executions, args.return);
-      if (args.return !== undefined) return { error: "`return` requires compose: true" };
+      if (args.return !== undefined) return projectBatch(ctx.userId, args.executions, args.return);
       return executeMany(ctx.userId, args.executions);
     },
   },
@@ -860,9 +942,14 @@ export const metaToolSchemas: Record<(typeof metaTools)[number]["name"], Record<
         items: {
           type: "object",
           properties: {
-            id: { type: "string", description: "Step id, required with compose: true; referenced as {{step:<id>.<path>}}" },
+            ref_id: {
+              type: "string",
+              pattern: REF_ID_PATTERN,
+              maxLength: REF_ID_MAX,
+              description: "Names this execution so {{step:<ref_id>.<path>}} can read its result. Unique; required on every execution with compose: true; only accepted with compose or return",
+            },
             tool: { type: "string", description: "Tool name returned by search_tools" },
-            args: { type: "object", description: "Arguments for the tool. With compose: true, {{step:<id>.<path>}} (array index allowed: {{step:list.files.0.id}}) is replaced by that earlier result", additionalProperties: true },
+            args: { type: "object", description: "Arguments for the tool. With compose: true, {{step:<ref_id>.<path>}} (array index allowed: {{step:list.files.0.id}}) is replaced by that earlier result", additionalProperties: true },
           },
           required: ["tool"],
         },
@@ -870,10 +957,10 @@ export const metaToolSchemas: Record<(typeof metaTools)[number]["name"], Record<
       compose: {
         type: "boolean",
         default: false,
-        description: "Run executions in order, passing results between them via {{step:<id>.<path>}}. Returns only the resolved `return`.",
+        description: `Run executions in order (at most ${COMPOSE_MAX_EXECUTIONS}), passing results between them via {{step:<ref_id>.<path>}}. Answers { result }: the resolved return, or the last execution's result.`,
       },
       return: {
-        description: "compose: true only. What to send back: any JSON value whose strings may hold {{step:<id>.<path>}} refs, e.g. { \"file_id\": \"{{step:upload.id}}\", \"rows\": \"{{step:export.row_count}}\" }. Leave fat fields out.",
+        description: "What to send back: any JSON value whose strings may hold {{step:<ref_id>.<path>}} refs, e.g. { \"file_id\": \"{{step:upload.id}}\", \"rows\": \"{{step:export.row_count}}\" }. Works with or without compose. Never resolves {{vault:...}}. Leave fat fields out.",
       },
     },
     required: ["executions"],

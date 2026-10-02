@@ -71,16 +71,16 @@ Run one or more plugin tools. This is the only execution path.
 Runs them concurrently (bounded) and returns a `results` array in the same order as
 `executions`. A single tool failing does not abort the others — its entry carries an
 `error` instead of a `result`. For a single tool, pass a one-element `executions`
-array.* The description goes on to explain `compose: true` (below).
+array.* The description goes on to explain `ref_id`, `compose` and `return` (below).
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `executions` | array of objects, min 1 | yes | — | Tools to run; results are returned in this same order |
-| `executions[].id` | string, JS identifier | with `compose` | — | Name later steps use to read this result; unique |
+| `executions[].ref_id` | string, `^[A-Za-z_][A-Za-z0-9_]*$`, ≤ 64 | with `compose` | — | Names this execution so `{{step:<ref_id>.<path>}}` can read its result; unique; only accepted with `compose` or `return` |
 | `executions[].tool` | string | yes | — | Tool name returned by `search_tools` |
 | `executions[].args` | object | no | `{}` | Arguments for the tool |
-| `compose` | boolean | no | `false` | Run in order and pass results between steps — see [compose mode](#compose-mode) |
-| `return` | any JSON | with `compose` | — | Template of what to send back; rejected without `compose: true` |
+| `compose` | boolean | no | `false` | Run in order (at most 8) and pass results between steps — see [compose mode](#compose-mode) |
+| `return` | any JSON | no | — | Template of what to send back, with or without `compose` — see [return](#return-projection) |
 
 Returns `{ results: [...] }`, index-aligned with `executions`. Each entry is either
 `{ result }` on success or an error object. A batch runs through a bounded worker
@@ -123,9 +123,13 @@ results. Use it when the interesting part of a workflow is the *pointer* at the 
 — a file id, a row count, a URL — and the payload in the middle (a CSV body, file
 content, raw bytes) would only burn context or trip the 60,000-character result cap.
 
-A reference is `{{step:<id>.<path>}}`, the same `{{namespace:…}}` shape as
+Every execution needs a `ref_id`, and a compose runs at most 8 executions. Both are
+schema rules, so a violation is rejected before anything runs.
+
+A reference is `{{step:<ref_id>.<path>}}`, the same `{{namespace:…}}` shape as
 [`{{vault:NAME}}`](../integrations/vault.md). Path segments are keys or array indexes
-(`{{step:list.files.0.id}}`); refs work at any depth inside `args`.
+(`{{step:list.files.0.id}}`); refs work at any depth inside `args`. Only a result's
+own properties resolve — `{{step:a.constructor}}` is missing, not a function.
 
 - **Whole value** — `"{{step:export.row_count}}"` is replaced by the value itself,
   keeping its type (number, object, array).
@@ -134,35 +138,53 @@ A reference is `{{step:<id>.<path>}}`, the same `{{namespace:…}}` shape as
 - **Malformed** — anything that opens `{{step:` but doesn't parse (`"{{step:a.csv.}}"`)
   is rejected as `BAD_REF`, never passed to the tool as a literal.
 
-`return` is a template resolved the same way, and its shape is the response shape:
-a single ref returns one value, an object returns an object with your keys, an
-array returns an array.
-
 Each step goes through the same path as a plain `execute_tools` item: connection
 check, Zod validation, audit row, result scrubbing. A step that fails ends the run;
-later steps do not run.
+later steps do not run. Refs are checked when their step runs, so a `BAD_REF` in step
+3 comes after steps 1–2 already took effect.
+
+Answers `{ result }`: the resolved [`return`](#return-projection) if there is one,
+otherwise the last execution's result.
 
 > [!IMPORTANT] Vault refs resolve against what the agent wrote, never against a step result
 > `{{vault:NAME}}` and `{{step:…}}` in a step's `args` are substituted in one pass
-> over the agent's own template. A value inserted from an earlier step is not
-> scanned again, so tool output that happens to contain the text `{{vault:x}}` (a
-> PR title, a CSV cell) reaches the next tool as that literal text, not the secret.
-> `return` never resolves vault refs at all, and neither do `vault_*` tools or
-> custom-app tools (their results are not scrubbed).
+> over the agent's own template, and the resolved values are handed down to plugin
+> and custom-app execution alike so neither scans the args again. A value inserted
+> from an earlier step is not scanned, so tool output that happens to contain the
+> text `{{vault:x}}` (a PR title, a CSV cell) reaches the next tool as that literal
+> text, not the secret. `return` never resolves vault refs, and `vault_*` tools take
+> names literally.
 
-Returns `{ result: <resolved return> }`. Errors:
+### Return projection
+
+`return` is a template resolved over the results by `ref_id`, and its shape is the
+response shape: a single ref returns one value, an object returns an object with
+your keys, an array returns an array. It is the only thing sent back.
+
+It works with or without `compose`:
+
+| `compose` | `return` | Runs | Answers |
+|---|---|---|---|
+| — | — | concurrently | `{ results: [...] }` |
+| — | ✓ | concurrently, args not interpolated | `{ result, errors? }` |
+| ✓ | — | in order, refs resolved | `{ result }` — the last execution's result |
+| ✓ | ✓ | in order, refs resolved | `{ result }` — the resolved `return` |
+
+Without `compose`, failed executions are listed under `errors` (`{ index, ref_id?,
+error, … }`), so a projection that only names the successful ones cannot hide a
+failed write. A ref to a failed execution is `BAD_REF`.
+
+Errors:
 
 | Shape | Cause |
 |---|---|
-| `compose: true requires return` | `return` missing |
-| `return requires compose: true` | `return` sent without `compose` |
-| `{ error: "Invalid step id '<id>'" }` / `{ error: "Duplicate step id '<id>'" }` | Missing, non-identifier, or repeated `id` |
-| `{ error: "BAD_REF: unknown step '<id>'", step }` | A ref names a step that doesn't exist or hasn't run yet |
-| `{ error: "BAD_REF: missing '<id>.<path>'", step }` | The step ran but has no value at that path |
-| `{ error: "BAD_REF: malformed ref in '<value>'", step }` | Opens `{{step:` but isn't a valid ref |
-| `{ error, step, ... }` | A step failed; `step` is its id, the rest is that step's own error |
+| `Invalid arguments: … ref_id …` (JSON-RPC error) | Missing `ref_id` with `compose`, bad pattern/length, duplicate, `ref_id` without `compose` or `return`, more than 8 executions with `compose` |
+| `{ error: "BAD_REF: unknown step '<ref_id>'", ref_id }` | A ref names an execution that doesn't exist, failed, or hasn't run yet |
+| `{ error: "BAD_REF: missing '<ref_id>.<path>'", ref_id }` | The execution ran but has no own value at that path |
+| `{ error: "BAD_REF: malformed ref in '<value>'", ref_id }` | Opens `{{step:` but isn't a valid ref |
+| `{ error, ref_id, ... }` | A compose step failed; the rest is that step's own error |
 
-`step` is absent when the bad ref is in `return`.
+`ref_id` is absent when the bad ref is in `return`.
 
 ```json
 {
@@ -170,8 +192,8 @@ Returns `{ result: <resolved return> }`. Errors:
   "arguments": {
     "compose": true,
     "executions": [
-      { "id": "export", "tool": "superset_export_csv", "args": { "sql": "SELECT …" } },
-      { "id": "upload", "tool": "google_drive_upload",
+      { "ref_id": "export", "tool": "superset_export_csv", "args": { "sql": "SELECT …" } },
+      { "ref_id": "upload", "tool": "google_drive_upload",
         "args": { "name": "{{step:export.filename}}", "content": "{{step:export.csv}}" } }
     ],
     "return": {
@@ -186,8 +208,8 @@ Returns `{ result: <resolved return> }`. Errors:
 Response: `{ "result": { "file_id": "…", "link": "…", "rows": 1200 } }` — the CSV
 never appears.
 
-Compose is MCP-only for now: the REST batch form (`POST /rest/:integration` with
-`executions`) does not accept `compose`.
+`compose` and `return` are MCP-only for now: the REST batch form (`POST
+/rest/:integration` with `executions`) answers either with 400.
 
 ## whoami
 

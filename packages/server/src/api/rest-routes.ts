@@ -197,10 +197,11 @@ export async function registerRestRoutes(app: FastifyInstance): Promise<void> {
         // 200 with an index-aligned `results` array, one failing item never
         // aborting the others.
         if (raw.executions !== undefined) {
-          // `compose` is MCP-only for now. Ignoring it would run the steps in
-          // parallel and hand each tool its `{{step:...}}` refs as literal text.
+          // `compose` and `return` are MCP-only for now. Ignoring them would
+          // run the steps in parallel, hand each tool its `{{step:...}}` refs
+          // as literal text, and answer with the full results.
           if (raw.compose !== undefined || raw.return !== undefined) {
-            return reply.status(400).send({ error: "compose is not supported on /rest; use execute_tools over /mcp" });
+            return reply.status(400).send({ error: "compose and return are not supported on /rest; use execute_tools over /mcp" });
           }
           const parsed = BatchBody.safeParse(raw);
           if (!parsed.success) {
