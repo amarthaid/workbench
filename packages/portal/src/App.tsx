@@ -84,7 +84,7 @@ function AppRoutes() {
         <Route path="/vault/:name/replace" element={<VaultSecretForm />} />
         <Route path="/activity" element={<Activity />} />
         <Route path="/settings" element={<Settings />} />
-        <Route path="/admin" element={<RequireAdmin><Admin /></RequireAdmin>} />
+        <Route path="/admin/*" element={<RequireAdmin><Admin /></RequireAdmin>} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />
