@@ -734,6 +734,53 @@ export interface AdminProfile {
   live: boolean;
 }
 
+export interface AdminStats {
+  /** False when audit events are routed somewhere other than the database. */
+  stored: boolean;
+  calls_24h: number;
+  calls_prev_24h: number;
+  errors_24h: number;
+  active_users_7d: number;
+  total_users: number;
+  disabled_users: number;
+  needs_reconnect: number;
+}
+
+export interface AdminTopTool {
+  integration: string | null;
+  tool: string | null;
+  calls: number;
+  errors: number;
+  avg_ms: number | null;
+}
+
+export interface AdminVaultStats {
+  secrets: number;
+  users_with_secrets: number;
+  stale: number;
+  stale_days: number;
+  pending_links: number;
+  top_holders: { email: string | null; secrets: number }[];
+}
+
+export interface AdminFilesStats {
+  files: number;
+  bytes: number;
+  users: number;
+  oldest_age_seconds: number | null;
+  top_users: { email: string | null; files: number; bytes: number }[];
+  largest: { email: string | null; bytes: number; age_seconds: number }[];
+}
+
+export const fetchAdminStats = () => adminGet<AdminStats>("/api/admin/overview/stats", "usage stats");
+
+export const fetchAdminTopTools = () =>
+  adminGet<{ stored: boolean; tools: AdminTopTool[] }>("/api/admin/overview/top-tools", "top tools");
+
+export const fetchAdminVault = () => adminGet<AdminVaultStats>("/api/admin/vault", "vault stats");
+
+export const fetchAdminFiles = () => adminGet<AdminFilesStats>("/api/admin/files", "files stats");
+
 export const fetchAdminInstance = () =>
   adminGet<AdminInstance>("/api/admin/overview/instance", "instance info");
 

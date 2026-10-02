@@ -30,13 +30,20 @@ reach the allowlist.
 
 ## What the Overview shows
 
-The instance summary sits at the top. Below it, **Activity**, **Connections**, **Custom apps** and **Browser profiles** are tabs; each loads only when you open it, so nothing walks the profiles on disk until you ask. They are read-only and fail independently:
+Every section is its own tab with its own URL (`/admin`, `/admin/activity`, `/admin/connections`, `/admin/custom-apps`, `/admin/profiles`, `/admin/vault`, `/admin/files`, `/admin/users`, `/admin/config`), so the browser's back button moves between them. Each tab loads only when you open it, so nothing walks the profiles or the workspace on disk until you ask. They are read-only and fail independently.
 
+The **Overview** tab holds:
+
+- **Headline numbers:** tool calls and error rate over the last 24 hours (with the change against the 24 hours before), users active in the last 7 days, connections that need a reconnect, and disabled users. Usage figures need `AUDIT_LOG_DEST=sqlite`; otherwise they show a dash and say why, while the user and connection counts still show.
+- **Top tools:** the most-called tools over 7 days with error counts and average time.
+- **Recent failures:** the last five failed calls, with the error text, linking to Activity.
 - **Instance:** version, database backend, cluster mode, audit-log destination, user count and the number of allowlisted admins (a number, never the list; it counts allowlist entries, whether or not they have signed in).
 - **Activity:** every user's tool calls, newest first, with the user's email. Filter by app, errors only, or a user's email. An unrecognised `status` filter is refused with a 400 rather than ignored. Shows tool names and error text, never arguments. With `AUDIT_LOG_DEST` other than `sqlite` the events are not in the database, and the card says so.
 - **Connections:** connected users per integration. "Needs reconnect" counts connections whose access token has expired and which have no refresh token; the server does not record refresh failures, so a connection that merely failed to refresh is not counted.
 - **Custom apps:** every user's custom apps with owner and URL. Credentials are never shown.
 - **Browser profiles:** disk used per user and whether the profile is live. "Live" means a use-marker file moved in the last hour. Workers and pods that share a profiles volume all show up here.
+- **Vault:** counts only. Secrets stored, users holding any, secrets unused for 90 days, pending one-time links, and the users holding the most. No secret name or value is ever returned.
+- **Files:** the agent file workspace. Disk used, file count, the age of the oldest file (older than `WORKSPACE_TTL_HOURS` means the reaper is not running), and the largest users and files by size. No file name or content is ever returned.
 
 ## Managing users
 

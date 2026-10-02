@@ -10,6 +10,11 @@ import { adminActivity } from "../admin/activity";
 import { getConnectionStats } from "../admin/connections";
 import { listAllCustomApps } from "../admin/custom-apps";
 import { listBrowserProfiles } from "../admin/profiles";
+import { getUsageStats, getTopTools } from "../admin/stats";
+import { getVaultStats } from "../admin/vault";
+import { getFilesStats } from "../admin/files";
+import { workspaceRoot } from "../workspace/dir";
+import { userKey } from "../workspace/paths";
 
 export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
   await adminScope(app, (scope) => {
@@ -41,6 +46,16 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
       const result = await setCustomAppsPolicy(adminActor(request), request.body);
       if (!result.ok) return reply.status(result.status).send({ error: result.error });
       return { ok: true };
+    });
+    scope.get("/overview/stats", async () => getUsageStats());
+    scope.get("/overview/top-tools", async () => getTopTools());
+    scope.get("/vault", async () => getVaultStats());
+    scope.get("/files", async () => {
+      const users = await db.all<{ id: string; email: string | null }>("SELECT id, email FROM users");
+      return getFilesStats({
+        root: workspaceRoot(),
+        emailByKey: new Map(users.map((u) => [userKey(u.id), u.email ?? null])),
+      });
     });
     scope.get("/overview/connections", async () => getConnectionStats());
     scope.get("/overview/custom-apps", async () => listAllCustomApps());
