@@ -55,7 +55,7 @@ The nine tools the MCP endpoint actually advertises. They are the entire
 |---|---|
 | `search_tools` | Find tools by what you want to do, ranked best first. |
 | `get_tool_schema` | Return one tool's argument schema as JSON Schema. |
-| `execute_tools` | Run one or many tools, concurrently, results in order. |
+| `execute_tools` | Run one or many tools, concurrently, results in order — or with `compose: true`, in sequence, piping one result into the next; `return` sends back only chosen fields. |
 | `whoami` | The authenticated workbench user — id and email. |
 | `list_integrations` | Every integration with a per-user `connected` flag. |
 | `connect` | Begin connecting an integration; returns a URL and a `connectionId`. |

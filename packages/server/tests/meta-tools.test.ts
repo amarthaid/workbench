@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { z } from "zod";
 import { metaTools } from "../src/mcp/meta-tools";
 import { registry } from "../src/plugins/registry";
 
@@ -41,6 +42,18 @@ vi.mock("../src/auth/users", () => ({
 vi.mock("../src/custom-apps/index", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/custom-apps/index")>()),
   ensureIndex: vi.fn(async () => []),
+}));
+
+vi.mock("../src/custom-apps/store", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/custom-apps/store")>()),
+}));
+
+vi.mock("../src/custom-apps/oauth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/custom-apps/oauth")>()),
+}));
+
+vi.mock("../src/custom-apps/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/custom-apps/client")>()),
 }));
 
 vi.mock("../src/auth/cookie", () => ({
@@ -780,6 +793,441 @@ describe("meta-tools", () => {
       const { metaToolSchemas } = await import("../src/mcp/meta-tools");
       const prop: any = (metaToolSchemas.curl_session as any).properties.expiresInSeconds;
       expect(prop).toMatchObject({ type: "integer", minimum: 60, maximum: 3600, default: 900 });
+    });
+  });
+
+  describe("execute_tools compose", () => {
+    const src = {
+      name: "src_tool",
+      integration: "test-integ",
+      inputSchema: z.object({ q: z.string() }),
+      handler: vi.fn(),
+    };
+    const dest = {
+      name: "dest_tool",
+      integration: "test-integ",
+      inputSchema: z.object({
+        body: z.string(),
+        title: z.string().optional(),
+        nested: z.object({ n: z.number() }).optional(),
+      }),
+      handler: vi.fn(),
+    };
+    const third = {
+      name: "third_tool",
+      integration: "test-integ",
+      inputSchema: z.object({ id: z.string() }),
+      handler: vi.fn(),
+    };
+
+    function stubComposeTools() {
+      vi.spyOn(registry, "getTool").mockImplementation((name: string) => {
+        if (name === "src_tool") return src as any;
+        if (name === "dest_tool") return dest as any;
+        if (name === "third_tool") return third as any;
+        return undefined;
+      });
+      vi.spyOn(registry, "getIntegration").mockReturnValue(mockOauthInteg as any);
+    }
+
+    // Through the schema first, exactly as /mcp parses before the handler.
+    const run = (input: Record<string, unknown>): Promise<any> => {
+      const t = findTool("execute_tools");
+      return t.handler({ userId: "user-1" }, t.inputSchema.parse(input) as any);
+    };
+    const compose = (executions: unknown[], ret: unknown): Promise<any> =>
+      run({ compose: true, executions, return: ret });
+    const schemaError = (input: Record<string, unknown>): string => {
+      const parsed = findTool("execute_tools").inputSchema.safeParse(input);
+      expect(parsed.success).toBe(false);
+      return parsed.success ? "" : parsed.error.message;
+    };
+
+    beforeEach(async () => {
+      const { getToken } = await import("../src/auth/tokens");
+      vi.mocked(getToken).mockResolvedValue({ accessToken: "tok", scopes: "" });
+      src.handler.mockReset();
+      dest.handler.mockReset();
+      third.handler.mockReset();
+    });
+
+    it("pipes {{step:id.field}} into the next tool and returns only the return template", async () => {
+      stubComposeTools();
+      src.handler.mockResolvedValue({ csv: "a,b\n1,2", filename: "out.csv", row_count: 1 });
+      dest.handler.mockResolvedValue({ id: "file-1", name: "out.csv" });
+
+      const result = await compose(
+        [
+          { ref_id: "a", tool: "src_tool", args: { q: "x" } },
+          { ref_id: "b", tool: "dest_tool", args: { body: "{{step:a.csv}}", title: "{{step:a.filename}}" } },
+        ],
+        { file_id: "{{step:b.id}}", rows: "{{step:a.row_count}}" }
+      );
+      expect(dest.handler).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ body: "a,b\n1,2", title: "out.csv" })
+      );
+      expect(result).toEqual({ result: { file_id: "file-1", rows: 1 } });
+      expect(JSON.stringify(result)).not.toContain("a,b");
+    });
+
+    it("keeps the original type for a whole-value ref and chains three steps", async () => {
+      stubComposeTools();
+      src.handler.mockResolvedValue({ n: 7 });
+      dest.handler.mockResolvedValue({ id: "mid-1" });
+      third.handler.mockResolvedValue({ ok: true });
+
+      const result = await compose(
+        [
+          { ref_id: "a", tool: "src_tool", args: { q: "x" } },
+          { ref_id: "b", tool: "dest_tool", args: { body: "n", nested: { n: "{{step:a.n}}" } } },
+          { ref_id: "c", tool: "third_tool", args: { id: "{{step:b.id}}" } },
+        ],
+        "{{step:c.ok}}"
+      );
+      expect(dest.handler).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ nested: { n: 7 } })
+      );
+      expect(third.handler).toHaveBeenCalledWith(expect.anything(), { id: "mid-1" });
+      expect(result).toEqual({ result: true });
+    });
+
+    it("interpolates refs embedded in a larger string", async () => {
+      stubComposeTools();
+      src.handler.mockResolvedValue({ title: "Fix bug", count: 3 });
+      dest.handler.mockResolvedValue({ id: "m-1" });
+
+      await compose(
+        [
+          { ref_id: "pr", tool: "src_tool", args: { q: "x" } },
+          { ref_id: "msg", tool: "dest_tool", args: { body: "Review: {{step:pr.title}} ({{step:pr.count}} files)" } },
+        ],
+        "{{step:msg.id}}"
+      );
+      expect(dest.handler).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ body: "Review: Fix bug (3 files)" })
+      );
+    });
+
+    it("resolves numeric segments into arrays", async () => {
+      stubComposeTools();
+      src.handler.mockResolvedValue({ files: [{ id: "f-0" }, { id: "f-1" }] });
+      third.handler.mockResolvedValue({ ok: true });
+
+      const result = await compose(
+        [
+          { ref_id: "a", tool: "src_tool", args: { q: "x" } },
+          { ref_id: "b", tool: "third_tool", args: { id: "{{step:a.files.1.id}}" } },
+        ],
+        ["{{step:a.files.0.id}}", "{{step:b.ok}}"]
+      );
+      expect(third.handler).toHaveBeenCalledWith(expect.anything(), { id: "f-1" });
+      expect(result).toEqual({ result: ["f-0", true] });
+    });
+
+    it("stops on the first step error, names the step, and runs nothing after it", async () => {
+      stubComposeTools();
+      src.handler.mockRejectedValue(new Error("src failed"));
+
+      const result = await compose(
+        [
+          { ref_id: "a", tool: "src_tool", args: { q: "x" } },
+          { ref_id: "b", tool: "dest_tool", args: { body: "{{step:a.csv}}" } },
+        ],
+        "{{step:b.id}}"
+      );
+      expect(result.error).toMatch(/src failed/);
+      expect(result.ref_id).toBe("a");
+      expect(dest.handler).not.toHaveBeenCalled();
+    });
+
+    it("returns BAD_REF for an unknown step or a missing field", async () => {
+      stubComposeTools();
+      src.handler.mockResolvedValue({ csv: "x" });
+
+      const missingField = await compose(
+        [
+          { ref_id: "a", tool: "src_tool", args: { q: "x" } },
+          { ref_id: "b", tool: "dest_tool", args: { body: "{{step:a.nope}}" } },
+        ],
+        "{{step:b.id}}"
+      );
+      expect(missingField.error).toMatch(/BAD_REF/);
+      expect(missingField.ref_id).toBe("b");
+      expect(dest.handler).not.toHaveBeenCalled();
+
+      const unknownStep = await compose(
+        [
+          { ref_id: "a", tool: "src_tool", args: { q: "x" } },
+          { ref_id: "b", tool: "dest_tool", args: { body: "{{step:z.csv}}" } },
+        ],
+        "{{step:b.id}}"
+      );
+      expect(unknownStep.error).toMatch(/BAD_REF/);
+    });
+
+    it.each(["constructor", "__proto__", "toString", "files.0.hasOwnProperty"])(
+      "treats inherited key '%s' as missing, not as a value",
+      async (path) => {
+        stubComposeTools();
+        src.handler.mockResolvedValue({ files: [{ id: "f-0" }] });
+
+        const result = await compose(
+          [
+            { ref_id: "a", tool: "src_tool", args: { q: "x" } },
+            { ref_id: "b", tool: "dest_tool", args: { body: `{{step:a.${path}}}` } },
+          ],
+          "{{step:b.id}}"
+        );
+        expect(result.error).toMatch(/BAD_REF: missing/);
+        expect(dest.handler).not.toHaveBeenCalled();
+      }
+    );
+
+    it("rejects a malformed {{step:...}} instead of passing it through as a literal", async () => {
+      stubComposeTools();
+      src.handler.mockResolvedValue({ csv: "x" });
+
+      const result = await compose(
+        [
+          { ref_id: "a", tool: "src_tool", args: { q: "x" } },
+          { ref_id: "b", tool: "dest_tool", args: { body: "{{step:a.csv.}}" } },
+        ],
+        "{{step:b.id}}"
+      );
+      expect(result.error).toMatch(/BAD_REF/);
+      expect(dest.handler).not.toHaveBeenCalled();
+    });
+
+    it("returns BAD_REF when the return template points at a missing field", async () => {
+      stubComposeTools();
+      src.handler.mockResolvedValue({ csv: "x" });
+
+      const result = await compose([{ ref_id: "a", tool: "src_tool", args: { q: "x" } }], "{{step:a.nope}}");
+      expect(result.error).toMatch(/BAD_REF/);
+    });
+
+    it("rejects duplicate ref_ids at the schema, before running anything", () => {
+      const msg = schemaError({
+        compose: true,
+        executions: [
+          { ref_id: "a", tool: "src_tool" },
+          { ref_id: "a", tool: "src_tool" },
+        ],
+      });
+      expect(msg).toMatch(/Duplicate ref_id 'a'/);
+    });
+
+    it.each(["1a", "a-b", "a.b", "", "x".repeat(65)])("rejects invalid ref_id %j at the schema", (refId) => {
+      expect(schemaError({ compose: true, executions: [{ ref_id: refId, tool: "src_tool" }] })).toMatch(/ref_id/);
+    });
+
+    it("requires ref_id on every execution with compose: true", () => {
+      expect(schemaError({ compose: true, executions: [{ tool: "src_tool" }] })).toMatch(/ref_id is required/);
+    });
+
+    it("rejects ref_id when neither compose nor return would use it", () => {
+      expect(schemaError({ executions: [{ ref_id: "a", tool: "src_tool" }] })).toMatch(
+        /ref_id is only used with compose or return/
+      );
+    });
+
+    it("caps compose at 8 executions", () => {
+      const executions = Array.from({ length: 9 }, (_, i) => ({ ref_id: `s${i}`, tool: "src_tool" }));
+      expect(schemaError({ compose: true, executions })).toMatch(/at most 8/);
+      expect(findTool("execute_tools").inputSchema.safeParse({ compose: true, executions: executions.slice(0, 8) }).success).toBe(true);
+    });
+
+    it("does not cap a plain batch at 8", () => {
+      const executions = Array.from({ length: 9 }, () => ({ tool: "src_tool" }));
+      expect(findTool("execute_tools").inputSchema.safeParse({ executions }).success).toBe(true);
+    });
+
+    it("advertises the ref_id constraints in the JSON schema", async () => {
+      const { metaToolSchemas } = await import("../src/mcp/meta-tools");
+      const refId = (metaToolSchemas.execute_tools as any).properties.executions.items.properties.ref_id;
+      expect(refId.pattern).toBe("^[A-Za-z_][A-Za-z0-9_]*$");
+      expect(refId.maxLength).toBe(64);
+    });
+
+    it("compose without return answers with the last step's result", async () => {
+      stubComposeTools();
+      src.handler.mockResolvedValue({ n: 7 });
+      dest.handler.mockResolvedValue({ id: "mid-1" });
+
+      const result = await run({
+        compose: true,
+        executions: [
+          { ref_id: "a", tool: "src_tool", args: { q: "x" } },
+          { ref_id: "b", tool: "dest_tool", args: { body: "n={{step:a.n}}" } },
+        ],
+      });
+      expect(result).toEqual({ result: { id: "mid-1" } });
+    });
+
+    it("return without compose projects over a concurrent batch", async () => {
+      stubComposeTools();
+      src.handler.mockResolvedValue({ csv: "a,b\n1,2", row_count: 1 });
+      third.handler.mockResolvedValue({ ok: true });
+
+      const result = await run({
+        executions: [
+          { ref_id: "a", tool: "src_tool", args: { q: "x" } },
+          { ref_id: "c", tool: "third_tool", args: { id: "z" } },
+        ],
+        return: { rows: "{{step:a.row_count}}", ok: "{{step:c.ok}}" },
+      });
+      expect(result).toEqual({ result: { rows: 1, ok: true } });
+      expect(JSON.stringify(result)).not.toContain("a,b");
+    });
+
+    it("return without compose does not interpolate between executions", async () => {
+      stubComposeTools();
+      src.handler.mockResolvedValue({ csv: "x" });
+      third.handler.mockResolvedValue({ ok: true });
+
+      await run({
+        executions: [
+          { ref_id: "a", tool: "src_tool", args: { q: "x" } },
+          { ref_id: "c", tool: "third_tool", args: { id: "{{step:a.csv}}" } },
+        ],
+        return: "{{step:c.ok}}",
+      });
+      expect(third.handler).toHaveBeenCalledWith(expect.anything(), { id: "{{step:a.csv}}" });
+    });
+
+    it("return without compose reports failed executions instead of dropping them", async () => {
+      stubComposeTools();
+      src.handler.mockResolvedValue({ row_count: 1 });
+      third.handler.mockRejectedValue(new Error("third failed"));
+
+      const ok = await run({
+        executions: [
+          { ref_id: "a", tool: "src_tool", args: { q: "x" } },
+          { ref_id: "c", tool: "third_tool", args: { id: "z" } },
+        ],
+        return: "{{step:a.row_count}}",
+      });
+      expect(ok.result).toBe(1);
+      expect(ok.errors).toEqual([expect.objectContaining({ index: 1, ref_id: "c", error: expect.stringMatching(/third failed/) })]);
+
+      const bad = await run({
+        executions: [
+          { ref_id: "a", tool: "src_tool", args: { q: "x" } },
+          { ref_id: "c", tool: "third_tool", args: { id: "z" } },
+        ],
+        return: "{{step:c.ok}}",
+      });
+      expect(bad.error).toMatch(/BAD_REF/);
+      expect(bad.errors).toHaveLength(1);
+    });
+
+    it("substitutes {{vault:...}} written by the agent in a compose step", async () => {
+      stubComposeTools();
+      src.handler.mockResolvedValue({ id: "a-1" });
+      dest.handler.mockResolvedValue({ id: "b-1" });
+
+      await compose(
+        [
+          { ref_id: "a", tool: "src_tool", args: { q: "x" } },
+          { ref_id: "b", tool: "dest_tool", args: { body: "Bearer {{vault:pw}} for {{step:a.id}}" } },
+        ],
+        "{{step:b.id}}"
+      );
+      expect(dest.handler).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ body: "Bearer hunter2 for a-1" })
+      );
+    });
+
+    it("never resolves a {{vault:...}} that arrived inside an earlier step's output", async () => {
+      stubComposeTools();
+      // Attacker-controlled upstream text (a PR title, a CSV cell) that looks
+      // like a vault reference must reach the next tool as literal text.
+      src.handler.mockResolvedValue({ title: "{{vault:pw}}" });
+      dest.handler.mockResolvedValue({ id: "b-1" });
+
+      await compose(
+        [
+          { ref_id: "a", tool: "src_tool", args: { q: "x" } },
+          { ref_id: "b", tool: "dest_tool", args: { body: "{{step:a.title}}", title: "t: {{step:a.title}}" } },
+        ],
+        "{{step:b.id}}"
+      );
+      expect(dest.handler).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ body: "{{vault:pw}}", title: "t: {{vault:pw}}" })
+      );
+      const { readSecretValue } = await import("../src/vault/store");
+      expect(readSecretValue).not.toHaveBeenCalled();
+    });
+
+    it("does not resolve {{vault:...}} in the return template", async () => {
+      stubComposeTools();
+      src.handler.mockResolvedValue({ id: "a-1" });
+
+      const result = await compose(
+        [{ ref_id: "a", tool: "src_tool", args: { q: "x" } }],
+        { id: "{{step:a.id}}", leak: "{{vault:pw}}" }
+      );
+      expect(result).toEqual({ result: { id: "a-1", leak: "{{vault:pw}}" } });
+    });
+
+    it("never resolves a {{vault:...}} from an earlier step's output in a custom-app step", async () => {
+      stubComposeTools();
+      const appIndex = await import("../src/custom-apps/index");
+      const store = await import("../src/custom-apps/store");
+      const oauth = await import("../src/custom-apps/oauth");
+      const client = await import("../src/custom-apps/client");
+      vi.spyOn(appIndex, "getToolForUser").mockImplementation(async (_u: string, name: string) =>
+        name === "remote__echo"
+          ? ({ name: "remote__echo", remoteName: "echo", appId: "app-1", integration: "custom:app-1" } as any)
+          : undefined
+      );
+      vi.spyOn(store, "getCustomApp").mockResolvedValue({ id: "app-1", baseUrl: "https://mcp.example.com" } as any);
+      vi.spyOn(oauth, "ensureCustomAppToken").mockResolvedValue("tok-abc");
+      const remote = vi.spyOn(client, "callRemoteTool").mockResolvedValue({ content: [] } as any);
+      src.handler.mockResolvedValue({ title: "{{vault:pw}}" });
+
+      await compose(
+        [
+          { ref_id: "a", tool: "src_tool", args: { q: "x" } },
+          { ref_id: "b", tool: "remote__echo", args: { text: "{{step:a.title}}" } },
+        ],
+        "{{step:b}}"
+      );
+      expect(remote).toHaveBeenCalledWith(
+        "user-1", "https://mcp.example.com", "tok-abc", "echo", { text: "{{vault:pw}}" }
+      );
+      const { readSecretValue } = await import("../src/vault/store");
+      expect(readSecretValue).not.toHaveBeenCalled();
+    });
+
+    it("substitutes {{vault:...}} the agent wrote in a custom-app step", async () => {
+      stubComposeTools();
+      const appIndex = await import("../src/custom-apps/index");
+      const store = await import("../src/custom-apps/store");
+      const oauth = await import("../src/custom-apps/oauth");
+      const client = await import("../src/custom-apps/client");
+      vi.spyOn(appIndex, "getToolForUser").mockResolvedValue(
+        { name: "remote__echo", remoteName: "echo", appId: "app-1", integration: "custom:app-1" } as any
+      );
+      vi.spyOn(store, "getCustomApp").mockResolvedValue({ id: "app-1", baseUrl: "https://mcp.example.com" } as any);
+      vi.spyOn(oauth, "ensureCustomAppToken").mockResolvedValue("tok-abc");
+      const remote = vi
+        .spyOn(client, "callRemoteTool")
+        .mockResolvedValue({ content: [{ type: "text", text: "echo hunter2" }] } as any);
+
+      const result = await compose(
+        [{ ref_id: "b", tool: "remote__echo", args: { text: "Bearer {{vault:pw}}" } }],
+        "{{step:b}}"
+      );
+      expect(remote).toHaveBeenCalledWith(
+        "user-1", "https://mcp.example.com", "tok-abc", "echo", { text: "Bearer hunter2" }
+      );
+      expect(JSON.stringify(result)).not.toContain("hunter2");
     });
   });
 });

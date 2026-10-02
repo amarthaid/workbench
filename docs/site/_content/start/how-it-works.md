@@ -81,6 +81,14 @@ runs, so `.default()` values are filled in. A validation failure returns
 through a bounded pool and returns `results` index-aligned with `executions`. One
 failure does not abort the others.
 
+**Composed batches are sequential and dependent.** With `compose: true`, the same
+`executions` (at most 8) run one after another; a step's `args` may read an earlier
+result as `{{step:ref_id.path}}`, and only the resolved `return` template — or the
+last result — comes back. The first failing step ends the run. It is the same
+per-tool engine — the difference is that the intermediate payload never enters the
+agent's context. `return` also works on a plain batch, to trim fat fields. See
+[meta-tools](../reference/meta-tools.md#compose-mode).
+
 ## Where credentials live
 
 Everything persistent is one row per user per integration in a `connections` table,

@@ -303,6 +303,25 @@ describe("POST /rest/:integration", () => {
     expect(results[2].result).toEqual({ page: 3 });
   });
 
+  it("400s a compose batch instead of running its steps in parallel with literal refs", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/rest/github",
+      headers: AUTH,
+      payload: {
+        compose: true,
+        executions: [
+          { id: "a", tool: "github_list_repos", args: { perPage: 1 } },
+          { id: "b", tool: "list_repos", args: { perPage: "{{step:a.page}}" } },
+        ],
+        return: "{{step:b.page}}",
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/compose/);
+    expect(listRepos.handler).not.toHaveBeenCalled();
+  });
+
   it("400s a body that is not an object", async () => {
     const res = await app.inject({
       method: "POST",
