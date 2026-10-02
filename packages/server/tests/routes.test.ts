@@ -185,6 +185,15 @@ describe("API routes", () => {
       expect(res.headers.location).toContain("token=signed-jwt-token");
     });
 
+    it("redirects a disabled account to the login page with a reason, not a JSON error", async () => {
+      const { handleCallback } = await import("../src/auth/google");
+      vi.mocked(handleCallback).mockRejectedValueOnce(new Error("Account disabled"));
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/auth/google/callback?code=abc&state=xyz" });
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toBe("http://localhost:5173/login?error=account_disabled");
+    });
+
     it("returns 400 on provider error", async () => {
       const app = await buildApp();
       const res = await app.inject({ method: "GET", url: "/api/auth/google/callback?error=access_denied" });
@@ -263,6 +272,15 @@ describe("API routes", () => {
       const res = await app.inject({ method: "GET", url: "/api/auth/keycloak/callback?code=abc&state=xyz" });
       expect(res.statusCode).toBe(302);
       expect(res.headers.location).toContain("token=signed-jwt-token");
+    });
+
+    it("redirects a disabled account to the login page with a reason, not a JSON error", async () => {
+      const { handleCallback } = await import("../src/auth/keycloak");
+      vi.mocked(handleCallback).mockRejectedValueOnce(new Error("Account disabled"));
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/auth/keycloak/callback?code=abc&state=xyz" });
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toBe("http://localhost:5173/login?error=account_disabled");
     });
 
     it("returns 400 on provider error", async () => {
@@ -380,7 +398,12 @@ describe("API routes", () => {
         headers: { authorization: "Bearer valid-jwt" },
       });
       expect(res.statusCode).toBe(200);
-      expect(JSON.parse(res.body)).toEqual({ id: "user-1", email: "test@example.com", isAdmin: false });
+      expect(JSON.parse(res.body)).toEqual({
+        id: "user-1",
+        email: "test@example.com",
+        isAdmin: false,
+        canCreateCustomApps: true,
+      });
     });
 
     it("reports isAdmin true when the user's email is on the allowlist", async () => {
@@ -423,6 +446,23 @@ describe("API routes", () => {
       const app = await buildApp();
       const res = await app.inject({ method: "GET", url: "/api/auth/me" });
       expect(res.statusCode).toBe(401);
+    });
+
+    it("reports canCreateCustomApps false when the policy excludes the user", async () => {
+      const { saveSetting, resetSettingsForTest } = await import("../src/settings/instance-settings");
+      await saveSetting("custom_apps_policy", { mode: "none", user_ids: [] }, "u-admin");
+      try {
+        const app = await buildApp();
+        const res = await app.inject({
+          method: "GET",
+          url: "/api/auth/me",
+          headers: { authorization: "Bearer valid-jwt" },
+        });
+        expect(JSON.parse(res.body).canCreateCustomApps).toBe(false);
+      } finally {
+        await db.exec("DELETE FROM instance_settings");
+        resetSettingsForTest();
+      }
     });
 
     it("returns 404 for unknown user", async () => {
@@ -1641,6 +1681,48 @@ describe("API routes", () => {
       });
       // The link redeem still warms the browser on this replica.
       expect(ensureSession).toHaveBeenCalledWith("user-1");
+    });
+  });
+
+  describe("POST /api/custom-apps and the custom-app policy", () => {
+    async function withPolicy(policy: unknown, run: () => Promise<void>) {
+      const { saveSetting, resetSettingsForTest } = await import("../src/settings/instance-settings");
+      await saveSetting("custom_apps_policy", policy, "u-admin");
+      try {
+        await run();
+      } finally {
+        await db.exec("DELETE FROM instance_settings");
+        resetSettingsForTest();
+      }
+    }
+
+    const create = (app: Awaited<ReturnType<typeof buildApp>>) =>
+      app.inject({
+        method: "POST",
+        url: "/api/custom-apps",
+        headers: { authorization: "Bearer valid-jwt" },
+        payload: {},
+      });
+
+    it("403 custom_apps_disabled when the policy is none, before any validation or discovery", async () => {
+      await withPolicy({ mode: "none", user_ids: [] }, async () => {
+        const res = await create(await buildApp());
+        expect(res.statusCode).toBe(403);
+        expect(JSON.parse(res.body)).toEqual({ error: "custom_apps_disabled" });
+      });
+    });
+
+    it("403 for a user not on the allowlist", async () => {
+      await withPolicy({ mode: "allowlist", user_ids: ["someone-else"] }, async () => {
+        expect((await create(await buildApp())).statusCode).toBe(403);
+      });
+    });
+
+    it("lets a listed user through to normal validation", async () => {
+      await withPolicy({ mode: "allowlist", user_ids: ["user-1"] }, async () => {
+        const res = await create(await buildApp());
+        expect(res.statusCode).toBe(400); // missing name and baseUrl, not 403
+      });
     });
   });
 });

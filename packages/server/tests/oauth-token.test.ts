@@ -135,3 +135,57 @@ describe("POST /token", () => {
     expect(JSON.parse(res.body).error).toBe("invalid_grant");
   });
 });
+
+describe("POST /token for a disabled user", () => {
+  beforeEach(async () => {
+    await db.exec("DELETE FROM users");
+  });
+
+  async function codeFor(userId: string) {
+    const c = await registerClient({ redirect_uris: ["http://127.0.0.1/cb"] });
+    const code = await issueCode({
+      clientId: c.client_id, userId, redirectUri: "http://127.0.0.1/cb",
+      codeChallenge: crypto.createHash("sha256").update("v").digest("base64url"),
+      scope: "mcp", resource: "http://x/mcp",
+    });
+    return { c, code };
+  }
+
+  function form(o: Record<string, string>) {
+    return {
+      payload: new URLSearchParams(o).toString(),
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+    };
+  }
+
+  it("refuses the authorization_code grant", async () => {
+    await db.run("INSERT INTO users (id, email, disabled_at) VALUES (?, ?, ?)", ["u-off", "off@example.com", 1700000000]);
+    const { c, code } = await codeFor("u-off");
+    const a = await app();
+    const res = await a.inject({
+      method: "POST", url: "/token",
+      ...form({ grant_type: "authorization_code", code, client_id: c.client_id, redirect_uri: "http://127.0.0.1/cb", code_verifier: "v" }),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body)).toEqual({ error: "invalid_grant" });
+  });
+
+  it("refuses the refresh_token grant once the user is disabled, and does not mint a new token", async () => {
+    await db.run("INSERT INTO users (id, email) VALUES (?, ?)", ["u-on", "on@example.com"]);
+    const { c, code } = await codeFor("u-on");
+    const a = await app();
+    const first = JSON.parse((await a.inject({
+      method: "POST", url: "/token",
+      ...form({ grant_type: "authorization_code", code, client_id: c.client_id, redirect_uri: "http://127.0.0.1/cb", code_verifier: "v" }),
+    })).body);
+    expect(first.refresh_token).toBeTruthy();
+
+    await db.run("UPDATE users SET disabled_at = ? WHERE id = ?", [1700000000, "u-on"]);
+    const res = await a.inject({
+      method: "POST", url: "/token",
+      ...form({ grant_type: "refresh_token", refresh_token: first.refresh_token, client_id: c.client_id }),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body)).toEqual({ error: "invalid_grant" });
+  });
+});

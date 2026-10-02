@@ -6,6 +6,8 @@ interface AuthUser {
   id: string;
   email: string | null;
   isAdmin?: boolean;
+  /** False when an admin's custom-app policy excludes this user. */
+  canCreateCustomApps?: boolean;
 }
 
 interface AuthContextType {

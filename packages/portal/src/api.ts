@@ -734,6 +734,53 @@ export interface AdminProfile {
   live: boolean;
 }
 
+export interface AdminStats {
+  /** False when audit events are routed somewhere other than the database. */
+  stored: boolean;
+  calls_24h: number;
+  calls_prev_24h: number;
+  errors_24h: number;
+  active_users_7d: number;
+  total_users: number;
+  disabled_users: number;
+  needs_reconnect: number;
+}
+
+export interface AdminTopTool {
+  integration: string | null;
+  tool: string | null;
+  calls: number;
+  errors: number;
+  avg_ms: number | null;
+}
+
+export interface AdminVaultStats {
+  secrets: number;
+  users_with_secrets: number;
+  stale: number;
+  stale_days: number;
+  pending_links: number;
+  top_holders: { email: string | null; secrets: number }[];
+}
+
+export interface AdminFilesStats {
+  files: number;
+  bytes: number;
+  users: number;
+  oldest_age_seconds: number | null;
+  top_users: { email: string | null; files: number; bytes: number }[];
+  largest: { email: string | null; bytes: number; age_seconds: number }[];
+}
+
+export const fetchAdminStats = () => adminGet<AdminStats>("/api/admin/overview/stats", "usage stats");
+
+export const fetchAdminTopTools = () =>
+  adminGet<{ stored: boolean; tools: AdminTopTool[] }>("/api/admin/overview/top-tools", "top tools");
+
+export const fetchAdminVault = () => adminGet<AdminVaultStats>("/api/admin/vault", "vault stats");
+
+export const fetchAdminFiles = () => adminGet<AdminFilesStats>("/api/admin/files", "files stats");
+
 export const fetchAdminInstance = () =>
   adminGet<AdminInstance>("/api/admin/overview/instance", "instance info");
 
@@ -765,3 +812,72 @@ export function fetchAdminActivity(opts: {
   const suffix = qs.toString() ? `?${qs}` : "";
   return adminGet<AdminActivityPage>(`/api/admin/overview/activity${suffix}`, "activity");
 }
+
+// ─── Admin users ─────────────────────────────────────────────────────────
+export interface AdminUser {
+  id: string;
+  email: string | null;
+  /** Unix seconds. */
+  created_at: number;
+  /** Unix seconds when disabled, null when active. */
+  disabled_at: number | null;
+  has_api_key: boolean;
+  connection_count: number;
+  custom_app_count: number;
+  /** Unix seconds, null when the user has no recorded activity. */
+  last_activity: number | null;
+}
+
+export const fetchAdminUsers = () =>
+  adminGet<{ users: AdminUser[]; total: number }>("/api/admin/users", "users");
+
+const ADMIN_ACTION_MESSAGES: Record<string, string> = {
+  cannot_disable_self: "You can't disable your own account.",
+  cannot_disable_admin: "Admins named in ADMIN_EMAILS can't be disabled here.",
+  user_not_found: "That user no longer exists.",
+  unknown_integration: "That integration is not registered.",
+  unknown_user: "One of the selected users no longer exists.",
+  invalid_policy: "That policy is not valid.",
+  invalid_body: "That request is not valid.",
+};
+
+// Bodyless POST: auth header only. A Content-Type of application/json with no
+// body is rejected by Fastify (FST_ERR_CTP_EMPTY_JSON_BODY).
+async function adminPost(path: string): Promise<void> {
+  const res = await fetch(`${API_URL}${path}`, { method: "POST", headers: authHeaders() });
+  await throwIfAdminActionFailed(res);
+}
+
+async function adminPut(path: string, body: unknown): Promise<void> {
+  const res = await fetch(`${API_URL}${path}`, { method: "PUT", headers: getHeaders(), body: JSON.stringify(body) });
+  await throwIfAdminActionFailed(res);
+}
+
+async function throwIfAdminActionFailed(res: Response): Promise<void> {
+  if (res.status === 401) {
+    localStorage.removeItem("awb_token");
+    window.location.href = "/login";
+    throw new Error("Unauthorized");
+  }
+  if (res.ok) return;
+  const code = ((await res.json().catch(() => ({}))) as { error?: string }).error ?? "";
+  throw new Error(ADMIN_ACTION_MESSAGES[code] ?? "Action failed");
+}
+
+export const disableAdminUser = (id: string) => adminPost(`/api/admin/users/${encodeURIComponent(id)}/disable`);
+export const enableAdminUser = (id: string) => adminPost(`/api/admin/users/${encodeURIComponent(id)}/enable`);
+export const revokeAdminUserKey = (id: string) => adminPost(`/api/admin/users/${encodeURIComponent(id)}/revoke-key`);
+
+// ─── Admin config ────────────────────────────────────────────────────────
+export interface AdminConfig {
+  integrations: { name: string; display_name: string; enabled: boolean }[];
+  custom_apps_policy: { mode: "all" | "none" | "allowlist"; user_ids: string[] };
+}
+
+export const fetchAdminConfig = () => adminGet<AdminConfig>("/api/admin/config", "config");
+
+export const setAdminIntegrationEnabled = (name: string, enabled: boolean) =>
+  adminPut(`/api/admin/config/integrations/${encodeURIComponent(name)}`, { enabled });
+
+export const setAdminCustomAppsPolicy = (policy: AdminConfig["custom_apps_policy"]) =>
+  adminPut("/api/admin/config/custom-apps", policy);

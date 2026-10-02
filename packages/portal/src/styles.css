@@ -913,6 +913,11 @@ body {
 
 .wb-box-toolbar .wb-toolbar-controls { padding: var(--s-8) 0; flex-wrap: wrap; }
 
+/* .ui-input is full-width; in a toolbar the controls sit side by side at their
+   own width. */
+.wb-toolbar-controls .ui-input { width: auto; }
+.wb-toolbar-controls input.ui-input { min-width: 220px; }
+
 /* An inline form: input and submit side by side, not stacked as block children. */
 .wb-toolbar-form {
   display: flex;

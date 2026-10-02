@@ -29,6 +29,7 @@ erDiagram
     TEXT api_key_sha
     BLOB api_key_enc
     BOOLEAN is_admin
+    INTEGER disabled_at
     INTEGER created_at
   }
   connections {
@@ -88,6 +89,12 @@ erDiagram
     INTEGER created_at
     INTEGER expires_at
   }
+  instance_settings {
+    TEXT key PK
+    TEXT value
+    INTEGER updated_at
+    TEXT updated_by
+  }
 ```
 
 The relationships are logical. There are **no foreign-key constraints** in the DDL —
@@ -109,6 +116,7 @@ Identity. One row per person, created on first SSO login or by the local seed sc
 | `api_key_sha` | TEXT | SHA-256 of the API key — the indexed fast lookup. Backfilled on a legacy bcrypt hit | API-key mint and verify |
 | `api_key_enc` | BLOB / BYTEA | AES-256-GCM ciphertext of the plaintext key, so the owner can reveal it again | API-key mint |
 | `is_admin` | BOOLEAN | Defaults FALSE | — |
+| `disabled_at` | INTEGER | Nullable. Unix seconds when an admin disabled the account; NULL when active. A disabled user's API key, portal session, OAuth tokens and SSO sign-in are all refused, and enabling clears it. A user with no row is not treated as disabled | Admin Users tab (migration) |
 | `created_at` | INTEGER | Row creation time | schema default |
 
 ## `connections`
@@ -238,6 +246,22 @@ to `oauth_clients` for the name, reporting the earliest `created_at` and latest
 Rotation runs SELECT, DELETE, INSERT in one transaction, and single-use is enforced by
 the DELETE affecting exactly one row.
 
+## `instance_settings`
+
+Admin-set, instance-wide settings, one row per key. Nothing secret is stored here.
+
+| Column | Type | Stores | Written by |
+|---|---|---|---|
+| `key` | TEXT PK | `disabled_integrations` or `custom_apps_policy` | Admin Config tab |
+| `value` | TEXT NOT NULL | JSON: a list of integration names, or `{ "mode": "all" \| "none" \| "allowlist", "user_ids": [...] }` | Admin Config tab |
+| `updated_at` | INTEGER | Unix seconds of the last change | Admin Config tab |
+| `updated_by` | TEXT | The admin's user id | Admin Config tab |
+
+Writes are upserts (`ON CONFLICT(key) DO UPDATE`). Each process holds the table in
+memory and re-reads it every `INSTANCE_SETTINGS_POLL_SECONDS`, so a change made
+through another worker or pod can take that long to arrive. A row whose value does not
+parse falls back to the default for its key; it never fails startup.
+
 ## Schema initialisation
 
 There is **no versioned migration table**. Schema setup is one idempotent function
@@ -258,6 +282,9 @@ The eleven added columns are the ones marked as migrations above: `users.email`,
 `oauth_refresh_tokens.created_at`. Two partial indexes follow:
 `idx_users_keycloak_sub` (unique, `WHERE keycloak_sub IS NOT NULL`) and
 `idx_users_api_key_sha`.
+
+Added since that list: `pending_auth.nonce` and `users.disabled_at` (both migrations),
+and the `instance_settings` table (created with the rest of the schema).
 
 ## Where the two backends differ
 

@@ -71,12 +71,11 @@ describe("ActivityCard", () => {
     );
   });
 
-  it("filtering by email sends the trimmed email on submit", async () => {
+  it("filtering by email sends the trimmed email once typing pauses", async () => {
     api.fetchAdminActivity.mockResolvedValue({ stored: true, events: [ev(1)], next_cursor: null });
     renderWithClient(<ActivityCard />);
     await screen.findByText("tool_1");
     fireEvent.change(screen.getByLabelText("User email"), { target: { value: "  dev@example.com " } });
-    fireEvent.click(screen.getByRole("button", { name: "Filter" }));
     await waitFor(() =>
       expect(api.fetchAdminActivity).toHaveBeenLastCalledWith(expect.objectContaining({ email: "dev@example.com" }))
     );

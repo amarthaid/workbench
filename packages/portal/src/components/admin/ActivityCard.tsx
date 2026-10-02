@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   fetchAdminActivity,
@@ -18,13 +18,19 @@ import { Tabs } from "../ui/Tabs";
 import { ADMIN_STALE_MS, CardBody } from "./CardBody";
 
 const PAGE_SIZE = 50;
+const EMAIL_DEBOUNCE_MS = 300;
 
 export default function ActivityCard() {
   const [status, setStatus] = useState<"all" | "error">("all");
   const [integration, setIntegration] = useState("all");
-  // The email box is a draft until submitted, so typing does not refetch.
+  // The box is a draft; the query follows it after a pause, so typing does not
+  // refetch on every keystroke.
   const [emailDraft, setEmailDraft] = useState("");
   const [email, setEmail] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setEmail(emailDraft.trim()), EMAIL_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [emailDraft]);
 
   const filters = useMemo(
     () => ({
@@ -84,23 +90,14 @@ export default function ActivityCard() {
               <option key={i.name} value={i.name}>{i.displayName || i.name}</option>
             ))}
           </Select>
-          <form
-            className="wb-toolbar-form"
-            onSubmit={(e) => {
-              e.preventDefault();
-              setEmail(emailDraft.trim());
-            }}
-          >
-            <label className="ui-sr-only" htmlFor="admin-activity-email">User email</label>
-            <Input
-              id="admin-activity-email"
-              type="text"
-              placeholder="User email"
-              value={emailDraft}
-              onChange={(e) => setEmailDraft(e.target.value)}
-            />
-            <Button type="submit" variant="outline">Filter</Button>
-          </form>
+          <label className="ui-sr-only" htmlFor="admin-activity-email">User email</label>
+          <Input
+            id="admin-activity-email"
+            type="search"
+            placeholder="Search by email"
+            value={emailDraft}
+            onChange={(e) => setEmailDraft(e.target.value)}
+          />
         </div>
       </div>
 

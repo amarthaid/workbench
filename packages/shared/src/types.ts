@@ -125,7 +125,16 @@ export interface AuditEvent {
   user_id: string;
   integration?: string;
   tool?: string;
-  action: "EXECUTE" | "CONNECT" | "DISCONNECT" | "REFRESH";
+  action:
+    | "EXECUTE"
+    | "CONNECT"
+    | "DISCONNECT"
+    | "REFRESH"
+    | "ADMIN_USER_DISABLE"
+    | "ADMIN_USER_ENABLE"
+    | "ADMIN_KEY_REVOKE"
+    | "ADMIN_INTEGRATION_SET"
+    | "ADMIN_CUSTOM_APPS_POLICY";
   success: boolean;
   error?: string;
   duration_ms?: number;

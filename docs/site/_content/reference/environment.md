@@ -35,6 +35,7 @@ values so the suite runs without setup.
 | `SERVER_PUBLIC_URL` | URL | `http://localhost:3000` | no | The server's own public origin. Drives every OAuth redirect URI, the OAuth metadata documents, the access token's `iss`/`aud`, and half the live-view origin allowlist |
 | `PORTAL_URL` | URL | `http://localhost:5173` | no | Where SSO and connect flows redirect the user; the other half of the live-view origin allowlist |
 | `PORTAL_DIST_DIR` | string | `./portal` | no | First candidate path for the built portal SPA |
+| `INSTANCE_SETTINGS_POLL_SECONDS` | positive integer | `5` | no | How often each process re-reads the admin-set instance settings (disabled integrations, custom-app policy). A change made through one process applies there at once; other workers and pods pick it up within this many seconds |
 | `PLUGINS_DIR` | string | `./plugins` | no | External plugin directory. Always resolved to an absolute path before import |
 
 > [!WARNING] The default `PORTAL_URL` does not match the dev portal

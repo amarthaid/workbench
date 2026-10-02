@@ -5,6 +5,7 @@ import { registerClient, getClient } from "../auth/oauth-server/clients";
 import { consumeCode } from "../auth/oauth-server/codes";
 import { issueRefreshToken, rotateRefreshToken } from "../auth/oauth-server/refresh";
 import { signAccessToken } from "../auth/oauth-server/tokens";
+import { isUserDisabled } from "../auth/user-status";
 import { config } from "../config";
 import { db } from "../db";
 import { resumeAuthorize } from "../auth/oauth-server/resume";
@@ -147,6 +148,7 @@ export async function registerOAuthRoutes(app: FastifyInstance): Promise<void> {
         clientId: b.client_id, redirectUri: b.redirect_uri, codeVerifier: b.code_verifier,
       });
       if (!consumed) return reply.status(400).send({ error: "invalid_grant" });
+      if (await isUserDisabled(consumed.userId)) return reply.status(400).send({ error: "invalid_grant" });
       const access_token = await signAccessToken({ userId: consumed.userId, scope: consumed.scope, clientId: b.client_id });
       const refresh_token = await issueRefreshToken({ clientId: b.client_id, userId: consumed.userId, scope: consumed.scope });
       return reply.send({ access_token, token_type: "Bearer", expires_in: ttl, refresh_token, scope: consumed.scope });
@@ -155,6 +157,7 @@ export async function registerOAuthRoutes(app: FastifyInstance): Promise<void> {
     if (b.grant_type === "refresh_token") {
       const rot = await rotateRefreshToken(b.refresh_token, b.client_id);
       if (!rot) return reply.status(400).send({ error: "invalid_grant" });
+      if (await isUserDisabled(rot.userId)) return reply.status(400).send({ error: "invalid_grant" });
       const access_token = await signAccessToken({ userId: rot.userId, scope: rot.scope, clientId: b.client_id });
       return reply.send({ access_token, token_type: "Bearer", expires_in: ttl, refresh_token: rot.newToken, scope: rot.scope });
     }

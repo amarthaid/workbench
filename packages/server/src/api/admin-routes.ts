@@ -2,12 +2,19 @@ import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { db } from "../db";
 import { activeProfiles, profileDirName, profilesBaseDir } from "../auth/profile-chromium";
-import { adminScope } from "./admin-scope";
+import { adminScope, adminActor } from "./admin-scope";
+import { listUsers, disableUser, enableUser, revokeUserKey } from "../admin/users";
+import { getConfigView, setIntegrationEnabled, setCustomAppsPolicy } from "../admin/config";
 import { getInstanceInfo } from "../admin/instance";
 import { adminActivity } from "../admin/activity";
 import { getConnectionStats } from "../admin/connections";
 import { listAllCustomApps } from "../admin/custom-apps";
 import { listBrowserProfiles } from "../admin/profiles";
+import { getUsageStats, getTopTools } from "../admin/stats";
+import { getVaultStats } from "../admin/vault";
+import { getFilesStats } from "../admin/files";
+import { workspaceRoot } from "../workspace/dir";
+import { userKey } from "../workspace/paths";
 
 export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
   await adminScope(app, (scope) => {
@@ -16,6 +23,39 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
       const result = await adminActivity(request.query as Record<string, string | string[] | undefined>);
       if (!result.ok) return reply.status(400).send({ error: result.error });
       return result.page;
+    });
+    scope.get("/users", async () => listUsers());
+    for (const [path, act] of [
+      ["disable", disableUser],
+      ["enable", enableUser],
+      ["revoke-key", revokeUserKey],
+    ] as const) {
+      scope.post<{ Params: { id: string } }>(`/users/:id/${path}`, async (request, reply) => {
+        const result = await act(adminActor(request), request.params.id);
+        if (!result.ok) return reply.status(result.status).send({ error: result.error });
+        return { ok: true };
+      });
+    }
+    scope.get("/config", async () => getConfigView());
+    scope.put<{ Params: { name: string }; Body: unknown }>("/config/integrations/:name", async (request, reply) => {
+      const result = await setIntegrationEnabled(adminActor(request), request.params.name, request.body);
+      if (!result.ok) return reply.status(result.status).send({ error: result.error });
+      return { ok: true };
+    });
+    scope.put<{ Body: unknown }>("/config/custom-apps", async (request, reply) => {
+      const result = await setCustomAppsPolicy(adminActor(request), request.body);
+      if (!result.ok) return reply.status(result.status).send({ error: result.error });
+      return { ok: true };
+    });
+    scope.get("/overview/stats", async () => getUsageStats());
+    scope.get("/overview/top-tools", async () => getTopTools());
+    scope.get("/vault", async () => getVaultStats());
+    scope.get("/files", async () => {
+      const users = await db.all<{ id: string; email: string | null }>("SELECT id, email FROM users");
+      return getFilesStats({
+        root: workspaceRoot(),
+        emailByKey: new Map(users.map((u) => [userKey(u.id), u.email ?? null])),
+      });
     });
     scope.get("/overview/connections", async () => getConnectionStats());
     scope.get("/overview/custom-apps", async () => listAllCustomApps());

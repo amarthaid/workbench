@@ -82,6 +82,23 @@ describe("keycloak auth", () => {
 });
 
 describe("handleCallback", () => {
+  it("refuses a disabled user, even when linking by email", async () => {
+    await db.run("INSERT INTO users (id, email, keycloak_sub, disabled_at) VALUES (?, ?, ?, ?)", [
+      "user-off",
+      "off@example.com",
+      null,
+      1700000000,
+    ]);
+    const { state, nonce } = await getStateAndNonce();
+
+    vi.mocked(jwtVerify).mockResolvedValue({
+      payload: { sub: "kc-off", email: "off@example.com", email_verified: true, nonce },
+    } as any);
+    mockFetchRouting({ id_token: "id-123", access_token: "acc-456", expires_in: 3600 });
+
+    await expect(handleCallback("code", state)).rejects.toThrow("Account disabled");
+  });
+
   it("creates new user on first login", async () => {
     const { state, nonce } = await getStateAndNonce();
 

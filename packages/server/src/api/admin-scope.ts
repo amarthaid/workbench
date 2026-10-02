@@ -3,6 +3,21 @@ import { resolveAdmin } from "../auth/admin";
 
 type ScopeSetup = (scope: FastifyInstance) => Promise<void> | void;
 
+export interface AdminActor {
+  userId: string;
+  email: string;
+}
+
+// Who the gate let in, keyed by the request. A handler needs the actor to
+// refuse "disable yourself" and to attribute its audit row.
+const actors = new WeakMap<object, AdminActor>();
+
+export function adminActor(request: object): AdminActor {
+  const actor = actors.get(request);
+  if (!actor) throw new Error("adminActor called outside the admin scope");
+  return actor;
+}
+
 // Everything under /api/admin lives in one encapsulated scope whose hook runs
 // the gate. A route registered inside it cannot forget to check: there is no
 // per-route opt-in to miss.
@@ -23,6 +38,7 @@ export async function adminScope(app: FastifyInstance, setup: ScopeSetup): Promi
             .status(admin.status)
             .send({ error: admin.status === 401 ? "Unauthorized" : "Forbidden" });
         }
+        actors.set(request, { userId: admin.userId, email: admin.email });
       });
       await setup(scope);
     },

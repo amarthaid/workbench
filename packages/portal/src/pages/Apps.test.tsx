@@ -12,8 +12,11 @@ vi.mock("../api", () => ({
   createCustomApp: vi.fn(),
 }));
 
+const auth = vi.hoisted(() => ({
+  user: { id: "u1", email: "dev@example.com" } as { id: string; email: string; canCreateCustomApps?: boolean },
+}));
 vi.mock("../context/AuthContext", () => ({
-  useAuth: () => ({ user: { id: "u1", email: "dev@example.com" }, token: "t", isLoading: false, login: vi.fn(), logout: vi.fn() }),
+  useAuth: () => ({ user: auth.user, token: "t", isLoading: false, login: vi.fn(), logout: vi.fn() }),
 }));
 
 vi.mock("../components/CookieAuthPopup", () => ({ default: () => null }));
@@ -169,5 +172,24 @@ describe("Apps", () => {
     await screen.findByText("Acme");
     fireEvent.change(screen.getByLabelText("Search apps"), { target: { value: "nothing matches this" } });
     expect(screen.getByText("No apps match this filter.")).toBeInTheDocument();
+  });
+});
+
+describe("custom-app policy", () => {
+  it("offers New custom app by default", async () => {
+    auth.user = { id: "u1", email: "dev@example.com" };
+    renderPage();
+    expect(await screen.findByRole("button", { name: "New custom app" })).toBeInTheDocument();
+  });
+
+  it("hides New custom app when the policy excludes this user", async () => {
+    auth.user = { id: "u1", email: "dev@example.com", canCreateCustomApps: false };
+    try {
+      renderPage();
+      await screen.findByText("Acme");
+      expect(screen.queryByRole("button", { name: "New custom app" })).not.toBeInTheDocument();
+    } finally {
+      auth.user = { id: "u1", email: "dev@example.com" };
+    }
   });
 });

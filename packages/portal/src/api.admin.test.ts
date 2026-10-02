@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fetchAdminActivity, fetchAdminInstance } from "./api";
+import {
+  disableAdminUser,
+  enableAdminUser,
+  fetchAdminActivity,
+  fetchAdminInstance,
+  fetchAdminUsers,
+  revokeAdminUserKey,
+} from "./api";
 
 const fetchMock = vi.fn();
 
@@ -43,5 +50,33 @@ describe("admin fetchers", () => {
   it("throws on a non-ok response", async () => {
     fetchMock.mockResolvedValue({ ok: false, status: 403, json: async () => ({}) });
     await expect(fetchAdminInstance()).rejects.toThrow("Failed to fetch instance info");
+  });
+
+  it("fetchAdminUsers calls the users endpoint", async () => {
+    await fetchAdminUsers();
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/users");
+  });
+
+  it.each([
+    ["disable", disableAdminUser],
+    ["enable", enableAdminUser],
+    ["revoke-key", revokeAdminUserKey],
+  ] as const)("%s POSTs with the bearer token and no Content-Type", async (path, fn) => {
+    await fn("u 1");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(`/api/admin/users/u%201/${path}`);
+    expect(init.method).toBe("POST");
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer tok-abc");
+    expect((init.headers as Record<string, string>)["Content-Type"]).toBeUndefined();
+  });
+
+  it("an action the server refuses throws a readable message", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 400, json: async () => ({ error: "cannot_disable_self" }) });
+    await expect(disableAdminUser("me")).rejects.toThrow("You can't disable your own account.");
+  });
+
+  it("an unrecognised error code falls back to a generic message", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 500, json: async () => ({ error: "weird" }) });
+    await expect(enableAdminUser("u1")).rejects.toThrow("Action failed");
   });
 });

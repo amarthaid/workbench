@@ -1,5 +1,6 @@
 import { SignJWT, jwtVerify } from "jose";
 import { config } from "../config";
+import { isUserDisabled } from "./user-status";
 
 const secret = new TextEncoder().encode(config.SESSION_SECRET);
 const AUDIENCE = "a-workbench-curl";
@@ -36,5 +37,6 @@ export async function verifyCurlToken(token: string): Promise<CurlSessionPayload
   ) {
     throw new Error("Invalid curl session token payload");
   }
+  if (await isUserDisabled(payload.sub)) throw new Error("User disabled");
   return { userId: payload.sub, integrations: payload.ints as string[] };
 }

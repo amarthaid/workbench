@@ -1,17 +1,16 @@
-import ActivityCard from "./ActivityCard";
-import ConnectionsCard from "./ConnectionsCard";
-import CustomAppsCard from "./CustomAppsCard";
+import FailuresCard from "./FailuresCard";
 import InstanceCard from "./InstanceCard";
-import ProfilesCard from "./ProfilesCard";
+import StatsCard from "./StatsCard";
+import TopToolsCard from "./TopToolsCard";
 
+// Each card loads on its own, so a slow aggregate does not blank the others.
 export default function OverviewTab() {
   return (
     <div className="wb-section-gap">
+      <StatsCard />
+      <TopToolsCard />
+      <FailuresCard />
       <InstanceCard />
-      <ActivityCard />
-      <ConnectionsCard />
-      <CustomAppsCard />
-      <ProfilesCard />
     </div>
   );
 }
