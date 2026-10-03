@@ -14,8 +14,8 @@
   },
   "dependencies": {
     "@a-workbench/shared": "*",
-    "@fastify/static": "^10.1.4",
-    "@modelcontextprotocol/sdk": "^1.30.1",
+    "@fastify/static": "^10.1.5",
+    "@modelcontextprotocol/sdk": "^1.31.0",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/auto-instrumentations-node": "^0.80.0",
     "@opentelemetry/instrumentation": "^0.222.0",
@@ -24,7 +24,7 @@
     "@opentelemetry/sdk-node": "^0.222.0",
     "@opentelemetry/sdk-trace-node": "^2.11.0",
     "@opentelemetry/semantic-conventions": "^1.43.0",
-    "@types/ws": "^8.18.1",
+    "@types/ws": "^8.18.2",
     "bcryptjs": "^3.0",
     "better-sqlite3": "^13.0.3",
     "fastify": "^5.12.5",
@@ -33,7 +33,7 @@
     "playwright": "^1.62.1",
     "prom-client": "^15.1",
     "tar-stream": "3.2.0",
-    "ws": "^8.21.3",
+    "ws": "^8.22.0",
     "zod": "^3.23",
     "zod-to-json-schema": "^3.25.2"
   },
