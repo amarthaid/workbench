@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { db } from "../src/db";
 import { normalizeBaseUrl, isBlockedHost } from "../src/custom-apps/ssrf";
 import { namespacedName } from "../src/custom-apps/index";
@@ -68,6 +68,9 @@ describe("app URL guard", () => {
 });
 
 describe("app store", () => {
+  afterEach(async () => {
+    await db.run("DELETE FROM custom_apps");
+  });
   beforeEach(async () => {
     await db.run("DELETE FROM custom_apps");
   });
@@ -101,6 +104,9 @@ describe("app store", () => {
 });
 
 describe("app store: header auth", () => {
+  afterEach(async () => {
+    await db.run("DELETE FROM custom_apps");
+  });
   beforeEach(async () => {
     await db.run("DELETE FROM custom_apps");
   });
@@ -164,6 +170,7 @@ describe("app store: header auth", () => {
 
 describe("isCustomAppConnected", () => {
   beforeEach(async () => { await db.run("DELETE FROM custom_apps"); });
+  afterEach(async () => { await db.run("DELETE FROM custom_apps"); });
 
   it("treats a headers app as connected without any connections row", async () => {
     const c = await createCustomApp({
@@ -176,5 +183,19 @@ describe("isCustomAppConnected", () => {
   it("an OAuth app is connected only when a token row exists", async () => {
     const c = await createCustomApp({ userId: "u1", name: "oa", baseUrl: "https://o.example.com/mcp", metadata: {}, clientId: "c" });
     expect(await isCustomAppConnected("u1", c)).toBe(false);
+  });
+});
+
+describe("isCustomAppConnected with unreadable headers", () => {
+  afterEach(async () => { await db.run("DELETE FROM custom_apps"); });
+
+  it("a headers app whose ciphertext is corrupt reports NOT connected", async () => {
+    const c = await createCustomApp({
+      userId: "u1", name: "keyed", baseUrl: "https://mcp.example.com/mcp",
+      metadata: { authType: "headers" }, headers: [{ name: "X-Api-Key", value: "tok-abc" }],
+    });
+    await db.run("UPDATE custom_apps SET headers_enc = ? WHERE id = ?", [Buffer.from("garbage"), c.id]);
+    const again = (await getCustomApp("u1", c.id))!;
+    expect(await isCustomAppConnected("u1", again)).toBe(false);
   });
 });

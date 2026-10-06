@@ -3,6 +3,7 @@ import type { CustomAppHeader } from "./store";
 
 export const MAX_HEADERS = 10;
 export const MAX_HEADER_VALUE_BYTES = 4096;
+export const MAX_HEADER_NAME_LENGTH = 256;
 
 export type HeaderInput = { name: string; value?: string };
 type Result = { ok: true; headers: CustomAppHeader[] } | { ok: false; error: string };
@@ -13,7 +14,7 @@ const TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const DENY = new Set([
   "host", "content-length", "content-type", "accept", "mcp-session-id", "x-workbench-via",
   "connection", "transfer-encoding", "upgrade", "keep-alive", "te", "trailer",
-  "proxy-authorization", "proxy-connection",
+  "proxy-authorization", "proxy-connection", "mcp-protocol-version", "last-event-id",
 ]);
 
 // Errors name the header, never the value.
@@ -30,6 +31,7 @@ export function validateHeaders(input: unknown, existing?: CustomAppHeader[]): R
   for (const raw of input as HeaderInput[]) {
     const name = typeof raw?.name === "string" ? raw.name.trim() : "";
     if (!name || !TOKEN.test(name)) return { ok: false, error: `invalid header name "${name.slice(0, 64)}"` };
+    if (name.length > MAX_HEADER_NAME_LENGTH) return { ok: false, error: `invalid header name "${name.slice(0, 64)}"` };
     const lower = name.toLowerCase();
     if (DENY.has(lower)) return { ok: false, error: `header "${name}" is not allowed` };
     if (seen.has(lower)) return { ok: false, error: `duplicate header "${name}"` };

@@ -75,6 +75,7 @@ function toCustomApp(row: Row): CustomApp {
     } catch {
       // Corrupt/undecryptable headers degrade to "no headers" (the app
       // yields no tools) rather than throwing out of discovery.
+      console.warn(`custom app ${row.id}: headers could not be decrypted; treating as empty`);
       headers = [];
     }
   }
@@ -169,8 +170,8 @@ export async function deleteCustomApp(userId: string, id: string): Promise<void>
   await db.run("DELETE FROM connections WHERE user_id = ? AND integration = ?", [userId, integrationKey(id)]);
 }
 
-/** Headers apps hold their credential on the row itself, so they are always "connected". */
+/** Headers apps hold their credential on the row itself, so they are "connected" while those headers are readable. */
 export async function isCustomAppConnected(userId: string, app: CustomApp): Promise<boolean> {
-  if (isHeadersApp(app)) return true;
+  if (isHeadersApp(app)) return (app.headers?.length ?? 0) > 0;
   return !!(await getToken(userId, integrationKey(app.id)));
 }

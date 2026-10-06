@@ -23,9 +23,17 @@ describe("validateHeaders", () => {
   });
 
   it("rejects deny-listed names case-insensitively", () => {
-    for (const name of ["Host", "content-length", "Content-Type", "ACCEPT", "Mcp-Session-Id", "x-workbench-via", "Transfer-Encoding"]) {
+    for (const name of ["Host", "content-length", "Content-Type", "ACCEPT", "Mcp-Session-Id", "x-workbench-via", "Transfer-Encoding", "MCP-Protocol-Version", "Last-Event-ID"]) {
       expect(validateHeaders([{ name, value: "v" }]).ok, name).toBe(false);
     }
+  });
+
+  it("caps the name length at 256 and truncates it in the error", () => {
+    const ok256 = "a".repeat(256);
+    expect(validateHeaders([{ name: ok256, value: "v" }]).ok).toBe(true);
+    const r = validateHeaders([{ name: "a".repeat(257), value: "v" }]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.length).toBeLessThan(100);
   });
 
   it("rejects header injection and oversized values", () => {
