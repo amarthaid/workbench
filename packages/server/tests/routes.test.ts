@@ -5,6 +5,7 @@ import { db } from "../src/db";
 import { registry } from "../src/plugins/registry";
 import { signConnectToken } from "../src/auth/connect-token";
 import { createCustomApp } from "../src/custom-apps/store";
+import { buildCustomAppAuthUrl } from "../src/custom-apps/oauth";
 import { stopReaper, createPending, getPending, _clearAll } from "../src/auth/connections";
 
 vi.mock("../src/config", () => ({
@@ -29,6 +30,11 @@ vi.mock("../src/config", () => ({
 vi.mock("../src/custom-apps/index", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/custom-apps/index")>()),
   ensureIndex: vi.fn(async () => []),
+}));
+
+vi.mock("../src/custom-apps/oauth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/custom-apps/oauth")>()),
+  buildCustomAppAuthUrl: vi.fn(async () => "https://idp.example.com/authorize"),
 }));
 
 vi.mock("../src/auth/google", () => ({
@@ -1774,6 +1780,29 @@ describe("API routes", () => {
       const ob = JSON.parse(or.body);
       expect(ob.authType).toBe("oauth2");
       expect(ob).not.toHaveProperty("headerNames");
+    });
+
+    it("auth route: refuses a headers app before any OAuth discovery; OAuth app unchanged", async () => {
+      const { h, o } = await seed();
+      vi.mocked(buildCustomAppAuthUrl).mockClear();
+      const app = await buildApp();
+      const hr = await app.inject({ method: "GET", url: `/api/auth/custom:${h.id}`, headers: auth });
+      expect(hr.statusCode).toBe(400);
+      expect(JSON.parse(hr.body).error).toBe("This app uses static headers; there is nothing to connect");
+      expect(buildCustomAppAuthUrl).not.toHaveBeenCalled();
+      const or = await app.inject({ method: "GET", url: `/api/auth/custom:${o.id}`, headers: auth });
+      expect(or.statusCode).toBe(200);
+      expect(JSON.parse(or.body)).toEqual({ type: "oauth2", url: "https://idp.example.com/authorize" });
+    });
+
+    it("disconnect route: refuses a headers app; OAuth app still disconnects", async () => {
+      const { h, o } = await seed();
+      const app = await buildApp();
+      const hr = await app.inject({ method: "DELETE", url: `/api/connections/custom:${h.id}`, headers: auth });
+      expect(hr.statusCode).toBe(400);
+      expect(JSON.parse(hr.body).error).toBe("Headers apps have no connection to disconnect — delete the app instead");
+      const or = await app.inject({ method: "DELETE", url: `/api/connections/custom:${o.id}`, headers: auth });
+      expect(or.statusCode).toBe(200);
     });
   });
 });

@@ -424,6 +424,9 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     if (customId) {
       const app = await getCustomApp(user.userId, customId);
       if (!app) return reply.status(404).send({ error: "Integration not found" });
+      if (isHeadersApp(app)) {
+        return reply.status(400).send({ error: "This app uses static headers; there is nothing to connect" });
+      }
       try {
         const url = await buildCustomAppAuthUrl(user.userId, app);
         return { type: "oauth2", url };
@@ -875,6 +878,9 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       if (customId) {
         const app = await getCustomApp(user.userId, customId);
         if (!app) return reply.status(404).send({ error: "Integration not found" });
+        if (isHeadersApp(app)) {
+          return reply.status(400).send({ error: "Headers apps have no connection to disconnect — delete the app instead" });
+        }
         evictSession(user.userId, app.baseUrl);
         await deleteToken(user.userId, integration);
         invalidateIndex(user.userId);
