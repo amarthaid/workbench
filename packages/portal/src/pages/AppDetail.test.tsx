@@ -13,6 +13,8 @@ vi.mock("../api", () => ({
   resetBrowserSession: vi.fn(),
   startIntegrationAuth: vi.fn(),
   disconnectIntegration: vi.fn(),
+  removeCustomApp: vi.fn(),
+  updateCustomAppHeaders: vi.fn(),
 }));
 
 vi.mock("../context/AuthContext", () => ({
@@ -22,7 +24,7 @@ vi.mock("../context/AuthContext", () => ({
 vi.mock("../components/CookieAuthPopup", () => ({ default: () => null }));
 vi.mock("../components/ApiKeyAuthModal", () => ({ default: () => null }));
 
-import { fetchIntegration, fetchConnections, startIntegrationAuth, disconnectIntegration } from "../api";
+import { fetchIntegration, fetchConnections, startIntegrationAuth, disconnectIntegration, updateCustomAppHeaders } from "../api";
 
 const DETAIL = {
   name: "acme",
@@ -126,5 +128,46 @@ describe("AppDetail", () => {
     renderAt("nope");
     expect(await screen.findByText("That app isn't in this registry.")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Back to apps" })).toHaveAttribute("href", "/apps");
+  });
+
+  describe("custom headers app", () => {
+    const HEADERS_APP = {
+      ...DETAIL,
+      name: "custom:a2",
+      displayName: "Keyed",
+      custom: true,
+      authType: "apikey",
+      headerNames: ["X-Api-Key", "X-Team"],
+      tools: [],
+    };
+
+    it("edits headers, sending a blank value to keep the stored one", async () => {
+      vi.mocked(fetchIntegration).mockResolvedValue(HEADERS_APP);
+      vi.mocked(updateCustomAppHeaders).mockResolvedValue({ app: { id: "a2", name: "Keyed", headerNames: ["X-Api-Key"] } });
+      renderAt("custom:a2");
+      expect(await screen.findByLabelText("Header name 1")).toHaveValue("X-Api-Key");
+      expect(screen.getByLabelText("Header name 2")).toHaveValue("X-Team");
+      expect(screen.getByLabelText("Header value 1")).toHaveValue("");
+      fireEvent.click(screen.getByRole("button", { name: "Remove header 2" }));
+      fireEvent.click(screen.getByRole("button", { name: "Save headers" }));
+      await waitFor(() =>
+        expect(updateCustomAppHeaders).toHaveBeenCalledWith("a2", [{ name: "X-Api-Key", value: "" }])
+      );
+    });
+
+    it("shows the server error inline when saving fails", async () => {
+      vi.mocked(fetchIntegration).mockResolvedValue(HEADERS_APP);
+      vi.mocked(updateCustomAppHeaders).mockRejectedValue(new Error("Server rejected the headers (HTTP 401)"));
+      renderAt("custom:a2");
+      await screen.findByLabelText("Header name 1");
+      fireEvent.click(screen.getByRole("button", { name: "Save headers" }));
+      expect(await screen.findByText("Server rejected the headers (HTTP 401)")).toBeInTheDocument();
+    });
+
+    it("offers no header editor for an OAuth app", async () => {
+      renderAt("acme");
+      await screen.findByText("Acme");
+      expect(screen.queryByLabelText("Header name 1")).toBeNull();
+    });
   });
 });

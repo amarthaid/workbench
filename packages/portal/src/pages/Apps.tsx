@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { fetchIntegrations, fetchConnections, createCustomApp, type IntegrationSummary } from "../api";
+import { fetchIntegrations, fetchConnections, createCustomApp, type HeaderRow, type IntegrationSummary } from "../api";
 import { PageHeader } from "../components/ui/PageHeader";
 import { Tabs } from "../components/ui/Tabs";
 import { EmptyState } from "../components/ui/EmptyState";
@@ -11,6 +11,7 @@ import { Tooltip } from "../components/ui/Tooltip";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Modal } from "../components/ui/Modal";
+import { CustomAppHeadersEditor } from "../components/CustomAppHeadersEditor";
 import IntegrationLogo from "../components/IntegrationLogo";
 import { useConnectFlow } from "../hooks/useConnectFlow";
 import { useAuth } from "../context/AuthContext";
@@ -35,17 +36,27 @@ export default function Apps() {
   const [newUrl, setNewUrl] = useState("");
   // registering → the server discovers and registers the OAuth client;
   // connecting → the OAuth start is in flight or the browser is leaving for it.
+  const [newAuth, setNewAuth] = useState<"oauth" | "headers">("oauth");
+  const [newHeaders, setNewHeaders] = useState<HeaderRow[]>([{ name: "", value: "" }]);
   const [newPhase, setNewPhase] = useState<"idle" | "registering" | "connecting">("idle");
   const newBusy = newPhase !== "idle";
+  const headersReady = newHeaders.some((h) => h.name.trim() && h.value);
   const [newError, setNewError] = useState<string | null>(null);
 
   async function submitNewApp(e: React.FormEvent) {
     e.preventDefault();
     setNewError(null);
     setNewPhase("registering");
+    const useHeaders = newAuth === "headers";
     let app;
     try {
-      ({ app } = await createCustomApp(newName.trim(), newUrl.trim()));
+      ({ app } = useHeaders
+        ? await createCustomApp(
+            newName.trim(),
+            newUrl.trim(),
+            newHeaders.filter((h) => h.name.trim()).map((h) => ({ name: h.name.trim(), value: h.value }))
+          )
+        : await createCustomApp(newName.trim(), newUrl.trim()));
     } catch (err) {
       setNewError(err instanceof Error ? err.message : "Failed to register custom app");
       setNewPhase("idle");
@@ -53,6 +64,16 @@ export default function Apps() {
     }
     qc.invalidateQueries({ queryKey: ["integrations"] });
     qc.invalidateQueries({ queryKey: ["connections"] });
+    if (useHeaders) {
+      // Verified server-side and already connected: no OAuth hand-off.
+      setNewName("");
+      setNewUrl("");
+      setNewHeaders([{ name: "", value: "" }]);
+      setNewAuth("oauth");
+      setShowNewApp(false);
+      setNewPhase("idle");
+      return;
+    }
     // A custom app is useless until it is connected, so go straight into its
     // OAuth. The modal stays up, busy, while the browser leaves for it.
     setNewPhase("connecting");
@@ -212,11 +233,13 @@ export default function Apps() {
             <Button
               type="submit"
               form="new-custom-app-form"
-              disabled={newBusy || !newName.trim() || !newUrl.trim()}
+              disabled={newBusy || !newName.trim() || !newUrl.trim() || (newAuth === "headers" && !headersReady)}
               aria-busy={newBusy}
             >
               {newBusy && <span className="ui-spinner" aria-hidden="true" />}
-              {newPhase === "registering" ? "Registering…" : newPhase === "connecting" ? "Connecting…" : "Connect"}
+              {newPhase === "registering"
+                ? newAuth === "headers" ? "Verifying…" : "Registering…"
+                : newPhase === "connecting" ? "Connecting…" : newAuth === "headers" ? "Add app" : "Connect"}
             </Button>
           </>
         }
@@ -230,6 +253,20 @@ export default function Apps() {
             <label className="ui-field-label" htmlFor="new-app-url">MCP server URL</label>
             <Input id="new-app-url" placeholder="https://mcp.example.com/mcp" value={newUrl} onChange={(e) => setNewUrl(e.target.value)} disabled={newBusy} />
           </div>
+          <fieldset className="ui-field" style={{ border: 0, padding: 0, margin: 0 }} disabled={newBusy}>
+            <legend className="ui-field-label">Authentication</legend>
+            <div style={{ display: "flex", gap: 16 }}>
+              <label>
+                <input type="radio" name="new-app-auth" checked={newAuth === "oauth"} onChange={() => setNewAuth("oauth")} /> OAuth
+              </label>
+              <label>
+                <input type="radio" name="new-app-auth" checked={newAuth === "headers"} onChange={() => setNewAuth("headers")} /> Headers
+              </label>
+            </div>
+          </fieldset>
+          {newAuth === "headers" && (
+            <CustomAppHeadersEditor rows={newHeaders} onChange={setNewHeaders} disabled={newBusy} />
+          )}
           {newError && <div className="ui-form-error">{newError}</div>}
         </form>
       </Modal>

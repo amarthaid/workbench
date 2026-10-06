@@ -9,6 +9,8 @@ import {
   openBrowserLiveUrl,
   resetBrowserSession,
   removeCustomApp,
+  updateCustomAppHeaders,
+  type HeaderRow,
 } from "../api";
 import { PageHeader } from "../components/ui/PageHeader";
 import { Box, BoxRow } from "../components/ui/Box";
@@ -18,6 +20,7 @@ import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { ConfirmDialog } from "../components/dialogs/ConfirmDialog";
+import { CustomAppHeadersEditor } from "../components/CustomAppHeadersEditor";
 import IntegrationLogo from "../components/IntegrationLogo";
 import { useConnectFlow } from "../hooks/useConnectFlow";
 
@@ -155,6 +158,9 @@ export default function AppDetail() {
           )}
         </Box>
 
+        {data.custom && data.authType === "apikey" && (
+          <CustomAppHeaders id={data.name.replace(/^custom:/, "")} names={data.headerNames ?? []} />
+        )}
         {data.authType === "cookie" && <SessionTransfer name={data.name} />}
         {data.name === "browser" && <BrowserControls />}
 
@@ -195,6 +201,46 @@ export default function AppDetail() {
       />
       {deleteError && <div className="ui-form-error">{deleteError}</div>}
     </>
+  );
+}
+
+// Edit a headers app's header names and values. Stored values are never sent
+// to the browser, so a blank value field keeps the stored one.
+function CustomAppHeaders({ id, names }: { id: string; names: string[] }) {
+  const [rows, setRows] = useState<HeaderRow[]>(() =>
+    (names.length ? names : [""]).map((name) => ({ name, value: "" }))
+  );
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const qc = useQueryClient();
+
+  async function onSave() {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await updateCustomAppHeaders(id, rows.filter((h) => h.name.trim()).map((h) => ({ name: h.name.trim(), value: h.value })));
+      setRows((r.app.headerNames.length ? r.app.headerNames : [""]).map((name) => ({ name, value: "" })));
+      setMsg({ ok: true, text: "Headers saved." });
+      qc.invalidateQueries({ queryKey: ["integrations"] });
+      qc.invalidateQueries({ queryKey: ["integration"] });
+    } catch (e) {
+      setMsg({ ok: false, text: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Box title="Headers">
+      <BoxRow className="wb-row-stack">
+        <p className="wb-detail-desc">
+          Sent with every request to this server. Leave a value blank to keep the stored one; removing a row deletes the header.
+        </p>
+        <CustomAppHeadersEditor rows={rows} onChange={setRows} disabled={busy} valueOptional />
+        <Button onClick={onSave} disabled={busy || !rows.some((h) => h.name.trim())}>Save headers</Button>
+        {msg && <div className={msg.ok ? "wb-ok" : "ui-form-error"}>{msg.text}</div>}
+      </BoxRow>
+    </Box>
   );
 }
 

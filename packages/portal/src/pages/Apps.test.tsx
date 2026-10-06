@@ -167,6 +167,42 @@ describe("Apps", () => {
     expect(startIntegrationAuth).not.toHaveBeenCalled();
   });
 
+  it("registers a headers app without starting OAuth", async () => {
+    vi.mocked(createCustomApp).mockResolvedValue({
+      app: { id: "a2", name: "Keyed", baseUrl: "https://mcp.example.com/mcp", integration: "custom:a2" },
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "New custom app" }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Keyed" } });
+    fireEvent.change(screen.getByLabelText("MCP server URL"), { target: { value: "https://mcp.example.com/mcp" } });
+    fireEvent.click(screen.getByRole("radio", { name: "Headers" }));
+    fireEvent.change(screen.getByLabelText("Header name 1"), { target: { value: "X-Api-Key" } });
+    fireEvent.change(screen.getByLabelText("Header value 1"), { target: { value: "tok-abc" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add app" }));
+
+    await waitFor(() =>
+      expect(createCustomApp).toHaveBeenCalledWith("Keyed", "https://mcp.example.com/mcp", [
+        { name: "X-Api-Key", value: "tok-abc" },
+      ])
+    );
+    expect(startIntegrationAuth).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("masks header values and shows the server's verify error inline", async () => {
+    vi.mocked(createCustomApp).mockRejectedValue(new Error("Server rejected the headers (HTTP 401)"));
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "New custom app" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Headers" }));
+    expect(screen.getByLabelText("Header value 1")).toHaveAttribute("type", "password");
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Keyed" } });
+    fireEvent.change(screen.getByLabelText("MCP server URL"), { target: { value: "https://mcp.example.com/mcp" } });
+    fireEvent.change(screen.getByLabelText("Header name 1"), { target: { value: "X-Api-Key" } });
+    fireEvent.change(screen.getByLabelText("Header value 1"), { target: { value: "tok-abc" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add app" }));
+    expect(await screen.findByText("Server rejected the headers (HTTP 401)")).toBeInTheDocument();
+  });
+
   it("explains an empty filter rather than showing a blank grid", async () => {
     renderPage();
     await screen.findByText("Acme");
