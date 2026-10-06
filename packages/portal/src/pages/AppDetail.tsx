@@ -218,6 +218,9 @@ function CustomAppHeaders({ id, names }: { id: string; names: string[] }) {
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const qc = useQueryClient();
 
+  // A value with no name would be silently dropped on save.
+  const orphanValue = rows.some((h) => h.value !== "" && !h.name.trim());
+
   async function onSave() {
     setBusy(true);
     setMsg(null);
@@ -241,7 +244,8 @@ function CustomAppHeaders({ id, names }: { id: string; names: string[] }) {
           Sent with every request to this server. Leave a value blank to keep the stored one; removing a row deletes the header.
         </p>
         <CustomAppHeadersEditor rows={rows} onChange={setRows} disabled={busy} valueOptional />
-        <Button onClick={onSave} disabled={busy || !rows.some((h) => h.name.trim())}>Save headers</Button>
+        <Button onClick={onSave} disabled={busy || orphanValue || !rows.some((h) => h.name.trim())}>Save headers</Button>
+        {orphanValue && <div className="ui-form-error">Every header needs a name</div>}
         {msg && <div className={msg.ok ? "wb-ok" : "ui-form-error"}>{msg.text}</div>}
       </BoxRow>
     </Box>

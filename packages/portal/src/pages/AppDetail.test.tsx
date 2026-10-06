@@ -170,6 +170,23 @@ describe("AppDetail", () => {
       );
     });
 
+    it("blocks save and says why when a row has a value but no name", async () => {
+      vi.mocked(fetchIntegration).mockResolvedValue(HEADERS_APP);
+      vi.mocked(updateCustomAppHeaders).mockClear();
+      renderAt("custom:a2");
+      await screen.findByLabelText("Header name 1");
+      fireEvent.change(screen.getByLabelText("Header value 2"), { target: { value: "tok-new" } });
+      fireEvent.change(screen.getByLabelText("Header name 2"), { target: { value: "" } });
+      expect(screen.getByText("Every header needs a name")).toBeInTheDocument();
+      const save = screen.getByRole("button", { name: "Save headers" });
+      expect(save).toBeDisabled();
+      fireEvent.click(save);
+      expect(updateCustomAppHeaders).not.toHaveBeenCalled();
+      fireEvent.change(screen.getByLabelText("Header name 2"), { target: { value: "X-Team" } });
+      expect(screen.queryByText("Every header needs a name")).toBeNull();
+      expect(save).not.toBeDisabled();
+    });
+
     it("offers no Connect, Reconnect or Disconnect for a headers app", async () => {
       vi.mocked(fetchIntegration).mockResolvedValue(HEADERS_APP);
       vi.mocked(fetchConnections).mockResolvedValue({ connections: [{ name: "custom:a2", connected: true }] });
