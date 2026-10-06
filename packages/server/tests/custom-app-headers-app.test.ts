@@ -11,13 +11,19 @@ vi.mock("../src/config", () => ({
   },
 }));
 
+vi.mock("../src/custom-apps/client", async (orig) => ({
+  ...(await orig<typeof import("../src/custom-apps/client")>()),
+  evictSession: vi.fn(),
+}));
+
+import { evictSession } from "../src/custom-apps/client";
 import { db } from "../src/db";
 import { listCustomApps } from "../src/custom-apps/store";
 import { createHeadersApp, updateHeadersApp, HeadersAppError, verifyFailureMessage } from "../src/custom-apps/headers-app";
 import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 const ok = vi.fn(async () => undefined);
-beforeEach(async () => { await db.run("DELETE FROM custom_apps"); ok.mockClear(); });
+beforeEach(async () => { await db.run("DELETE FROM custom_apps"); ok.mockClear(); vi.mocked(evictSession).mockClear(); });
 
 const args = { userId: "u1", name: "keyed", baseUrl: "https://mcp.example.com/mcp/", headers: [{ name: "X-Api-Key", value: "tok-abc" }] };
 
@@ -83,5 +89,44 @@ describe("verifyFailureMessage", () => {
   it("is status-only for HTTP errors and generic otherwise", () => {
     expect(verifyFailureMessage(new StreamableHTTPError(403, "secret"))).toBe("Server rejected the headers (HTTP 403)");
     expect(verifyFailureMessage(new Error("secret tok-abc"))).toBe("Could not connect to the server with these headers");
+  });
+});
+
+describe("fix round 1", () => {
+  it("evicts the session when create verification fails", async () => {
+    await createHeadersApp(args, async () => { throw new Error("x"); }).catch(() => {});
+    expect(evictSession).toHaveBeenCalledWith("u1", "https://mcp.example.com/mcp");
+  });
+
+  it("update drops a name absent from the request", async () => {
+    const app = await createHeadersApp({ ...args, headers: [{ name: "X-A", value: "a" }, { name: "X-B", value: "b" }] }, ok);
+    const updated = await updateHeadersApp({ userId: "u1", id: app.id, headers: [{ name: "X-A" }] }, ok);
+    expect(updated.headers).toEqual([{ name: "X-A", value: "a" }]);
+  });
+
+  it("update with a blank value for a new name is a 400 and saves nothing", async () => {
+    const app = await createHeadersApp(args, ok);
+    const err = await updateHeadersApp({ userId: "u1", id: app.id, headers: [{ name: "X-Api-Key" }, { name: "X-New" }] }, ok).catch((e) => e);
+    expect(err).toBeInstanceOf(HeadersAppError);
+    expect(err.status).toBe(400);
+    expect((await listCustomApps("u1"))[0].headers).toEqual([{ name: "X-Api-Key", value: "tok-abc" }]);
+  });
+
+  it("concurrent same-name creates: one wins, the other gets 409", async () => {
+    const slow = async () => { await new Promise((r) => setTimeout(r, 20)); };
+    const res = await Promise.allSettled([createHeadersApp(args, slow), createHeadersApp(args, slow)]);
+    expect(res.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    const rej = res.find((r) => r.status === "rejected") as PromiseRejectedResult;
+    expect(rej.reason).toBeInstanceOf(HeadersAppError);
+    expect(rej.reason.status).toBe(409);
+  });
+
+  it("update verify failure with an HTTP status reports it without values, and evicts", async () => {
+    const app = await createHeadersApp(args, ok);
+    const bad = async () => { throw new StreamableHTTPError(401, "denied tok-new"); };
+    const err = await updateHeadersApp({ userId: "u1", id: app.id, headers: [{ name: "X-Api-Key", value: "tok-new" }] }, bad).catch((e) => e);
+    expect(err.message).toContain("401");
+    expect(err.message).not.toContain("tok-new");
+    expect(evictSession).toHaveBeenCalledWith("u1", "https://mcp.example.com/mcp");
   });
 });

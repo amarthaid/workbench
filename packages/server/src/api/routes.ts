@@ -973,6 +973,9 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
   app.put<{ Params: { id: string }; Body: { headers?: unknown } }>("/api/custom-apps/:id", async (request, reply) => {
     const user = await authenticate(request);
     if (!user) return reply.status(401).send({ error: "Unauthorized" });
+    if (!customAppsAllowedFor(user.userId)) {
+      return reply.status(403).send({ error: "custom_apps_disabled" });
+    }
     try {
       const updated = await updateHeadersApp({ userId: user.userId, id: request.params.id, headers: request.body?.headers });
       invalidateIndex(user.userId);

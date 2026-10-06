@@ -4,7 +4,7 @@ import { isOwnResource } from "./loop-guard";
 import { discoverTools, evictSession } from "./client";
 import { validateHeaders, headersToRecord } from "./headers";
 import {
-  createCustomApp, getCustomApp, getCustomAppByName, isHeadersApp,
+  createCustomApp, getCustomApp, listCustomApps, getCustomAppByName, isHeadersApp,
   setCustomAppHeaders, type CustomApp,
 } from "./store";
 
@@ -37,7 +37,7 @@ export async function createHeadersApp(
   if (await getCustomAppByName(args.userId, name)) throw new HeadersAppError(409, `An app named "${name}" already exists`);
 
   const baseUrl = normalizeBaseUrl(args.baseUrl.trim());
-  if (!baseUrl) throw new HeadersAppError(400, `Invalid or blocked URL: ${args.baseUrl.trim().slice(0, 200)}`);
+  if (!baseUrl) throw new HeadersAppError(400, "Invalid or blocked URL");
   if (isOwnResource(baseUrl)) throw new HeadersAppError(400, "This URL points back at this workbench");
 
   const v = validateHeaders(args.headers);
@@ -49,10 +49,23 @@ export async function createHeadersApp(
     evictSession(args.userId, baseUrl);
     throw new HeadersAppError(400, verifyFailureMessage(e));
   }
-  return createCustomApp({
-    id: randomUUID(), userId: args.userId, name, baseUrl,
-    metadata: { authType: "headers" }, headers: v.headers,
-  });
+  try {
+    return await createCustomApp({
+      id: randomUUID(), userId: args.userId, name, baseUrl,
+      metadata: { authType: "headers" }, headers: v.headers,
+    });
+  } catch (e) {
+    if (!isUniqueViolation(e)) throw e;
+    // verify left a cached session with no row; drop it unless another app shares the URL
+    const others = await listCustomApps(args.userId);
+    if (!others.some((a) => a.baseUrl === baseUrl)) evictSession(args.userId, baseUrl);
+    throw new HeadersAppError(409, `An app named "${name}" already exists`);
+  }
+}
+
+function isUniqueViolation(e: unknown): boolean {
+  const err = e as { code?: unknown; message?: unknown } | null;
+  return err?.code === "23505" || (typeof err?.message === "string" && err.message.includes("UNIQUE constraint failed"));
 }
 
 export async function updateHeadersApp(
@@ -68,6 +81,7 @@ export async function updateHeadersApp(
   try {
     await verify(args.userId, app.baseUrl, headersToRecord(v.headers));
   } catch (e) {
+    evictSession(args.userId, app.baseUrl);
     throw new HeadersAppError(400, verifyFailureMessage(e));
   }
   const saved = await setCustomAppHeaders(args.userId, args.id, v.headers);
