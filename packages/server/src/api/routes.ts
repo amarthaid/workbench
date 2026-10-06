@@ -33,6 +33,8 @@ import {
   deleteCustomApp,
   integrationKey,
   idFromIntegrationKey,
+  isHeadersApp,
+  isCustomAppConnected,
 } from "../custom-apps/store";
 import { createHeadersApp, updateHeadersApp, HeadersAppError } from "../custom-apps/headers-app";
 import {
@@ -330,7 +332,8 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
           version: "MCP",
           displayName: c.name,
           description: `Custom MCP server at ${c.baseUrl}`,
-          authType: "oauth2" as const,
+          authType: isHeadersApp(c) ? ("apikey" as const) : ("oauth2" as const),
+          headerNames: isHeadersApp(c) ? (c.headers ?? []).map((h) => h.name) : undefined,
           custom: true,
           toolCount: customIndex.filter((t) => t.appId === c.id).length,
           configured: true,
@@ -851,7 +854,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     const customConnections = await Promise.all(
       customApps.map(async (c) => ({
         name: integrationKey(c.id),
-        connected: !!(await getToken(user.userId, integrationKey(c.id))),
+        connected: await isCustomAppConnected(user.userId, c),
       }))
     );
     return { connections: [...connections, ...customConnections] };

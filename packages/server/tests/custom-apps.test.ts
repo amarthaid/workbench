@@ -12,6 +12,7 @@ import {
   idFromIntegrationKey,
   isHeadersApp,
   setCustomAppHeaders,
+  isCustomAppConnected,
 } from "../src/custom-apps/store";
 
 describe("app naming", () => {
@@ -158,5 +159,22 @@ describe("app store: header auth", () => {
     const again = await getCustomApp("u1", c.id);
     expect(again).not.toBeNull();
     expect(again!.headers).toEqual([]);
+  });
+});
+
+describe("isCustomAppConnected", () => {
+  beforeEach(async () => { await db.run("DELETE FROM custom_apps"); });
+
+  it("treats a headers app as connected without any connections row", async () => {
+    const c = await createCustomApp({
+      userId: "u1", name: "keyed", baseUrl: "https://mcp.example.com/mcp",
+      metadata: { authType: "headers" }, headers: [{ name: "X-Api-Key", value: "tok-abc" }],
+    });
+    expect(await isCustomAppConnected("u1", c)).toBe(true);
+  });
+
+  it("an OAuth app is connected only when a token row exists", async () => {
+    const c = await createCustomApp({ userId: "u1", name: "oa", baseUrl: "https://o.example.com/mcp", metadata: {}, clientId: "c" });
+    expect(await isCustomAppConnected("u1", c)).toBe(false);
   });
 });

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { db } from "../db";
 import { encrypt, decrypt } from "../auth/encryption";
+import { getToken } from "../auth/tokens";
 
 export interface CustomAppHeader {
   name: string;
@@ -166,4 +167,10 @@ export async function deleteCustomApp(userId: string, id: string): Promise<void>
   await db.run("DELETE FROM custom_apps WHERE id = ? AND user_id = ?", [id, userId]);
   // Drop the OAuth token row too — a app's token is meaningless without it.
   await db.run("DELETE FROM connections WHERE user_id = ? AND integration = ?", [userId, integrationKey(id)]);
+}
+
+/** Headers apps hold their credential on the row itself, so they are always "connected". */
+export async function isCustomAppConnected(userId: string, app: CustomApp): Promise<boolean> {
+  if (isHeadersApp(app)) return true;
+  return !!(await getToken(userId, integrationKey(app.id)));
 }

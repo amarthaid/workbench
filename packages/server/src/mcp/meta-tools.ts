@@ -6,7 +6,7 @@ import { auditLogger } from "../audit/logger";
 import { getToken } from "../auth/tokens";
 import { ensureIndex, getToolForUser, type IndexedTool } from "../custom-apps/index";
 import { rankTools } from "../plugins/search";
-import { getCustomApp, listCustomApps, integrationKey } from "../custom-apps/store";
+import { getCustomApp, listCustomApps, integrationKey, isCustomAppConnected } from "../custom-apps/store";
 import { resolveAuthHeaders, upstreamAuthHint } from "../custom-apps/auth";
 import { callRemoteTool } from "../custom-apps/client";
 import { getUserById } from "../auth/users";
@@ -839,7 +839,7 @@ export const metaTools = [
           // see one consistent identifier.
           name: integrationKey(c.id),
           version: "MCP",
-          connected: !!(await getToken(ctx.userId, integrationKey(c.id))),
+          connected: await isCustomAppConnected(ctx.userId, c),
         }))
       );
       return { integrations: [...items, ...customAppItems] };
