@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 import { db } from "../db";
 import { encrypt, decrypt } from "../auth/encryption";
 
+export interface CustomAppHeader {
+  name: string;
+  value: string;
+}
+
 /** Discovered OAuth server + protected-resource metadata for a app. */
 export interface CustomAppMetadata {
   /** /.well-known/oauth-authorization-server */
@@ -13,6 +18,8 @@ export interface CustomAppMetadata {
   scopes?: string[];
   /** Client auth method declared by the registration response. */
   authMethod?: "client_secret_basic" | "client_secret_post" | "none";
+  /** How the app authenticates. Absent means "oauth" (legacy rows). */
+  authType?: "oauth" | "headers";
 }
 
 export interface CustomApp {
@@ -24,6 +31,8 @@ export interface CustomApp {
   clientId?: string;
   /** Decrypted client secret — only held in memory, never serialized to logs. */
   clientSecret?: string;
+  /** Decrypted static headers — memory only, never serialized or logged. */
+  headers?: CustomAppHeader[];
   createdAt: number;
   updatedAt: number;
 }
@@ -45,6 +54,7 @@ interface Row {
   metadata: string;
   client_id: string | null;
   client_secret_enc: Buffer | null;
+  headers_enc: Buffer | null;
   created_at: number;
   updated_at: number;
 }
@@ -56,6 +66,17 @@ function toCustomApp(row: Row): CustomApp {
   } catch {
     /* corrupt metadata degrades to empty */
   }
+  let headers: CustomAppHeader[] | undefined;
+  if (row.headers_enc) {
+    try {
+      const parsed = JSON.parse(decrypt(row.headers_enc)) as CustomAppHeader[];
+      headers = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      // Corrupt/undecryptable headers degrade to "no headers" (the app
+      // yields no tools) rather than throwing out of discovery.
+      headers = [];
+    }
+  }
   return {
     id: row.id,
     userId: row.user_id,
@@ -64,9 +85,14 @@ function toCustomApp(row: Row): CustomApp {
     metadata,
     clientId: row.client_id ?? undefined,
     clientSecret: row.client_secret_enc ? decrypt(row.client_secret_enc) : undefined,
+    headers,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+export function isHeadersApp(app: CustomApp): boolean {
+  return app.headers !== undefined;
 }
 
 export async function createCustomApp(args: {
@@ -78,11 +104,12 @@ export async function createCustomApp(args: {
   metadata: CustomAppMetadata;
   clientId?: string;
   clientSecret?: string;
+  headers?: CustomAppHeader[];
 }): Promise<CustomApp> {
   const id = args.id ?? randomUUID();
   await db.run(
-    `INSERT INTO custom_apps (id, user_id, name, base_url, metadata, client_id, client_secret_enc)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO custom_apps (id, user_id, name, base_url, metadata, client_id, client_secret_enc, headers_enc)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       args.userId,
@@ -91,9 +118,22 @@ export async function createCustomApp(args: {
       JSON.stringify(args.metadata),
       args.clientId ?? null,
       args.clientSecret ? encrypt(args.clientSecret) : null,
+      args.headers ? encrypt(JSON.stringify(args.headers)) : null,
     ]
   );
   return (await getCustomApp(args.userId, id))!;
+}
+
+export async function setCustomAppHeaders(
+  userId: string,
+  id: string,
+  headers: CustomAppHeader[]
+): Promise<CustomApp | null> {
+  await db.run(
+    "UPDATE custom_apps SET headers_enc = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+    [encrypt(JSON.stringify(headers)), Math.floor(Date.now() / 1000), id, userId]
+  );
+  return getCustomApp(userId, id);
 }
 
 export async function getCustomApp(userId: string, id: string): Promise<CustomApp | null> {
