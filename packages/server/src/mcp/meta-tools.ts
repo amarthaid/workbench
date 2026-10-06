@@ -7,7 +7,7 @@ import { getToken } from "../auth/tokens";
 import { ensureIndex, getToolForUser, type IndexedTool } from "../custom-apps/index";
 import { rankTools } from "../plugins/search";
 import { getCustomApp, listCustomApps, integrationKey } from "../custom-apps/store";
-import { ensureCustomAppToken } from "../custom-apps/oauth";
+import { resolveAuthHeaders, upstreamAuthHint } from "../custom-apps/auth";
 import { callRemoteTool } from "../custom-apps/client";
 import { getUserById } from "../auth/users";
 import { hasValidCookies } from "../auth/cookie";
@@ -581,9 +581,9 @@ export async function executeCustomAppSingle(
         return { error: "CustomApp not found" };
       }
 
-      let accessToken: string;
+      let authHeaders: Record<string, string>;
       try {
-        accessToken = await ensureCustomAppToken(userId, app);
+        authHeaders = await resolveAuthHeaders(userId, app);
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         await auditLogger.log({
@@ -631,7 +631,7 @@ export async function executeCustomAppSingle(
 
       try {
         const result = scrubVaultValues(
-          await callRemoteTool(userId, app.baseUrl, accessToken, tool.remoteName, effectiveArgs),
+          await callRemoteTool(userId, app.baseUrl, authHeaders, tool.remoteName, effectiveArgs),
           scrubEntries,
           substringOk
         ) as { content?: Array<{ type?: string; text?: string }>; isError?: boolean };
@@ -673,7 +673,11 @@ export async function executeCustomAppSingle(
         toolExecutionDuration.observe({ integration: tool.integration, tool: tool.name, success: "true" }, durationS);
         return { result };
       } catch (e) {
-        const err = scrubString(e instanceof Error ? e.message : String(e), scrubEntries, substringOk);
+        const err = scrubString(
+          upstreamAuthHint(app, e) ?? (e instanceof Error ? e.message : String(e)),
+          scrubEntries,
+          substringOk
+        );
         const duration_ms = Date.now() - start;
         await auditLogger.log({
           user_id: userId,

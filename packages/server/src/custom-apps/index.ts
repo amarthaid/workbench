@@ -1,5 +1,5 @@
 import { listCustomApps, integrationKey, type CustomApp } from "./store";
-import { ensureCustomAppToken } from "./oauth";
+import { resolveAuthHeaders } from "./auth";
 import { discoverTools } from "./client";
 import { customAppsAllowedFor } from "../settings/instance-settings";
 
@@ -79,8 +79,8 @@ async function discover(userId: string): Promise<IndexedTool[]> {
   const settled = await Promise.allSettled(
     customApps.map((c) =>
       withTimeout(DISCOVERY_TIMEOUT_MS, async (): Promise<IndexedTool[]> => {
-        const token = await ensureCustomAppToken(userId, c);
-        const remote = await discoverTools(userId, c.baseUrl, token);
+        const headers = await resolveAuthHeaders(userId, c);
+        const remote = await discoverTools(userId, c.baseUrl, headers);
         return remote.map((t) => ({
           name: namespacedName(c.name, t.name),
           integration: integrationKey(c.id),

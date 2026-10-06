@@ -1199,7 +1199,7 @@ describe("meta-tools", () => {
         "{{step:b}}"
       );
       expect(remote).toHaveBeenCalledWith(
-        "user-1", "https://mcp.example.com", "tok-abc", "echo", { text: "{{vault:pw}}" }
+        "user-1", "https://mcp.example.com", { Authorization: "Bearer tok-abc" }, "echo", { text: "{{vault:pw}}" }
       );
       const { readSecretValue } = await import("../src/vault/store");
       expect(readSecretValue).not.toHaveBeenCalled();
@@ -1225,7 +1225,7 @@ describe("meta-tools", () => {
         "{{step:b}}"
       );
       expect(remote).toHaveBeenCalledWith(
-        "user-1", "https://mcp.example.com", "tok-abc", "echo", { text: "Bearer hunter2" }
+        "user-1", "https://mcp.example.com", { Authorization: "Bearer tok-abc" }, "echo", { text: "Bearer hunter2" }
       );
       expect(JSON.stringify(result)).not.toContain("hunter2");
     });
