@@ -45,7 +45,7 @@ values replaces the live session, so the next call uses them.
 | Rule | Value |
 |------|-------|
 | Header count | at most 10 |
-| Name | an RFC 7230 token (letters, digits and ``!#$%&'*+-.^_`|~``) |
+| Name | at most 256 characters; an RFC 7230 token (letters, digits and ``!#$%&'*+-.^_`\|~``) |
 | Value | non-empty, printable Latin-1, at most 4096 bytes |
 
 Values are limited to printable Latin-1 (tab and `0x20`-`0x7E`, `0x80`-`0xFF`)
@@ -57,7 +57,8 @@ control the connection, and are refused (case-insensitive):
 
 `host`, `content-length`, `content-type`, `accept`, `mcp-session-id`,
 `x-workbench-via`, `connection`, `transfer-encoding`, `upgrade`, `keep-alive`,
-`te`, `trailer`, `proxy-authorization`, `proxy-connection`.
+`te`, `trailer`, `proxy-authorization`, `proxy-connection`, `mcp-protocol-version`,
+`last-event-id`.
 
 ### Differences from OAuth apps
 

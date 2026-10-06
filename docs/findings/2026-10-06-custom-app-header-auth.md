@@ -11,19 +11,29 @@ row would have said "not connected" and the admin "needs reconnect" view (expire
 and no refresh token) would have been wrong too. The only change needed was one
 helper, `isCustomAppConnected`, used by `/api/connections` and `list_integrations`.
 The admin derivation needed nothing. A corrupt ciphertext degrades to no headers
-instead of throwing.
+instead of throwing, and such an app reports not connected.
 
 **Sessions are keyed on a header fingerprint.** The pooled MCP client used to be
 keyed on URL and user. The key now includes a SHA-256 fingerprint of the header
 record, so rotating a key makes the next call build a fresh session instead of
-reusing one authenticated with the old key. Update does not evict anything; the
-old session simply ages out. A failed create or update does evict, so a rejected
-key does not linger.
+reusing one authenticated with the old key. The verify during an update connects
+with the new headers, which replaces the cached session and closes the old one
+immediately, so nothing ages out. A failed create or update verify evicts, so a
+rejected key does not linger.
 
 **Verify errors are status-only.** Add and edit open a real session first. The
 failure message is `Server rejected the headers (HTTP <status>)` and never the
 upstream body, because servers echo request details (including the header that was
-sent) in error text. The bad-URL error does not echo the URL either.
+sent) in error text. The bad-URL error does not echo the URL either. Verify is
+bounded to 15 seconds (the SDK default is 60s per request); a timeout evicts the
+session and reports the same generic "Could not connect" message.
+
+**Call-time errors are redacted.** A non-401/403 failure while executing a headers
+app's tool carries the SDK's message, which includes the response body and may echo
+a request header. `redactHeaderValues` replaces every stored header value with
+`[redacted]` before the text reaches the agent result, the audit log or a log line
+(the `isError` result text too). `scrubString` only knows vault secrets, so it
+could not do this.
 
 **Blank value on update keeps the stored value.** Values are write-only, so the
 portal cannot pre-fill them. An update row with a name and `""` keeps the stored
@@ -37,7 +47,9 @@ and `"  "` would be sent as empty. Both are refused at validation (tab,
 a deny-list covers headers workbench sets itself or that control the connection
 (`host`, `content-length`, `content-type`, `accept`, `mcp-session-id`,
 `x-workbench-via`, `connection`, `transfer-encoding`, `upgrade`, `keep-alive`,
-`te`, `trailer`, `proxy-authorization`, `proxy-connection`).
+`te`, `trailer`, `proxy-authorization`, `proxy-connection`, `mcp-protocol-version`,
+`last-event-id` — the SDK sets the last two, and a differently-cased user header
+would be merged into a bad value). Names are capped at 256 characters.
 
 **Racing duplicate names map to 409.** Verify takes a network round trip between
 the name-exists check and the insert, which widens the TOCTOU window. Two creates
