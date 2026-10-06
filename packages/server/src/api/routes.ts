@@ -34,6 +34,7 @@ import {
   integrationKey,
   idFromIntegrationKey,
 } from "../custom-apps/store";
+import { createHeadersApp, updateHeadersApp, HeadersAppError } from "../custom-apps/headers-app";
 import {
   discoverMetadata,
   registerClient,
@@ -894,11 +895,33 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
 
   // --- Custom apps (per-user external MCP servers, exposed as apps) ---
 
-  app.post<{ Body: { name?: string; baseUrl?: string } }>("/api/custom-apps", async (request, reply) => {
+  app.post<{ Body: { name?: string; baseUrl?: string; authType?: "oauth" | "headers"; headers?: unknown } }>("/api/custom-apps", async (request, reply) => {
     const user = await authenticate(request);
     if (!user) return reply.status(401).send({ error: "Unauthorized" });
     if (!customAppsAllowedFor(user.userId)) {
       return reply.status(403).send({ error: "custom_apps_disabled" });
+    }
+
+    if (request.body?.authType === "headers") {
+      try {
+        const created = await createHeadersApp({
+          userId: user.userId,
+          name: request.body.name ?? "",
+          baseUrl: request.body.baseUrl ?? "",
+          headers: request.body.headers,
+        });
+        invalidateIndex(user.userId);
+        return {
+          app: {
+            id: created.id, name: created.name, baseUrl: created.baseUrl,
+            integration: integrationKey(created.id), authType: "headers" as const,
+            headerNames: (created.headers ?? []).map((h) => h.name),
+          },
+        };
+      } catch (err) {
+        if (err instanceof HeadersAppError) return reply.status(err.status).send({ error: err.message });
+        throw err;
+      }
     }
 
     const name = (request.body?.name ?? "").trim();
@@ -945,6 +968,19 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     await deleteCustomApp(user.userId, request.params.id);
     invalidateIndex(user.userId);
     return { success: true };
+  });
+
+  app.put<{ Params: { id: string }; Body: { headers?: unknown } }>("/api/custom-apps/:id", async (request, reply) => {
+    const user = await authenticate(request);
+    if (!user) return reply.status(401).send({ error: "Unauthorized" });
+    try {
+      const updated = await updateHeadersApp({ userId: user.userId, id: request.params.id, headers: request.body?.headers });
+      invalidateIndex(user.userId);
+      return { app: { id: updated.id, name: updated.name, headerNames: (updated.headers ?? []).map((h) => h.name) } };
+    } catch (err) {
+      if (err instanceof HeadersAppError) return reply.status(err.status).send({ error: err.message });
+      throw err;
+    }
   });
 
   // Provider redirects here after the user authorizes. Lands on the same
