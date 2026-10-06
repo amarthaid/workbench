@@ -1,6 +1,7 @@
 import { listCustomApps, integrationKey, type CustomApp } from "./store";
 import { resolveAuthHeaders } from "./auth";
 import { discoverTools } from "./client";
+import { withTimeout } from "./timeout";
 import { customAppsAllowedFor } from "../settings/instance-settings";
 
 export interface IndexedTool {
@@ -92,7 +93,7 @@ async function discover(userId: string): Promise<IndexedTool[]> {
           annotations: t.annotations,
           inputSchema: t.inputSchema,
         }));
-      })
+      }, "discovery")
     )
   );
 
@@ -103,15 +104,6 @@ async function discover(userId: string): Promise<IndexedTool[]> {
   }
   cache.set(userId, { at: Date.now(), tools });
   return tools;
-}
-
-function withTimeout<T>(ms: number, fn: () => Promise<T>): Promise<T> {
-  return Promise.race([
-    fn(),
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`discovery timed out after ${ms}ms`)), ms)
-    ),
-  ]);
 }
 
 export async function getToolForUser(userId: string, name: string): Promise<IndexedTool | undefined> {

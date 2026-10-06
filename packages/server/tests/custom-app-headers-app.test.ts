@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("../src/config", () => ({
   config: {
@@ -19,11 +19,13 @@ vi.mock("../src/custom-apps/client", async (orig) => ({
 import { evictSession } from "../src/custom-apps/client";
 import { db } from "../src/db";
 import { listCustomApps } from "../src/custom-apps/store";
-import { createHeadersApp, updateHeadersApp, HeadersAppError, verifyFailureMessage } from "../src/custom-apps/headers-app";
+import { createHeadersApp, updateHeadersApp, HeadersAppError, verifyFailureMessage, VERIFY_TIMEOUT_MS } from "../src/custom-apps/headers-app";
 import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 const ok = vi.fn(async () => undefined);
 beforeEach(async () => { await db.run("DELETE FROM custom_apps"); ok.mockClear(); vi.mocked(evictSession).mockClear(); });
+
+afterEach(async () => { await db.run("DELETE FROM custom_apps"); });
 
 const args = { userId: "u1", name: "keyed", baseUrl: "https://mcp.example.com/mcp/", headers: [{ name: "X-Api-Key", value: "tok-abc" }] };
 
@@ -128,5 +130,35 @@ describe("fix round 1", () => {
     expect(err.message).toContain("401");
     expect(err.message).not.toContain("tok-new");
     expect(evictSession).toHaveBeenCalledWith("u1", "https://mcp.example.com/mcp");
+  });
+});
+
+describe("verify time limit", () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it("create 400s with the generic message, evicts, and persists nothing when verify never settles", async () => {
+    vi.useFakeTimers();
+    const hang = vi.fn(() => new Promise<void>(() => undefined));
+    const p = createHeadersApp(args, hang).catch((e) => e);
+    await vi.advanceTimersByTimeAsync(VERIFY_TIMEOUT_MS + 1);
+    const err = await p;
+    expect(err).toBeInstanceOf(HeadersAppError);
+    expect(err.status).toBe(400);
+    expect(err.message).toBe("Could not connect to the server with these headers");
+    expect(evictSession).toHaveBeenCalled();
+    vi.useRealTimers();
+    expect(await listCustomApps("u1")).toHaveLength(0);
+  });
+
+  it("update times out the same way and keeps the stored headers", async () => {
+    const app = await createHeadersApp(args, ok);
+    vi.useFakeTimers();
+    const hang = vi.fn(() => new Promise<void>(() => undefined));
+    const p = updateHeadersApp({ userId: "u1", id: app.id, headers: [{ name: "X-Api-Key", value: "tok-new" }] }, hang).catch((e) => e);
+    await vi.advanceTimersByTimeAsync(VERIFY_TIMEOUT_MS + 1);
+    const err = await p;
+    expect(err.status).toBe(400);
+    vi.useRealTimers();
+    expect((await listCustomApps("u1"))[0].headers).toEqual([{ name: "X-Api-Key", value: "tok-abc" }]);
   });
 });
