@@ -361,7 +361,8 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
           version: "MCP",
           displayName: app.name,
           description: `Custom MCP server at ${app.baseUrl}`,
-          authType: "oauth2",
+          authType: isHeadersApp(app) ? "apikey" : "oauth2",
+          headerNames: isHeadersApp(app) ? (app.headers ?? []).map((h) => h.name) : undefined,
           custom: true,
           tools: tools.map((t) => ({ name: t.name, description: t.description })),
         };

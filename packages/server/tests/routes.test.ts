@@ -4,6 +4,7 @@ import { registerApiRoutes } from "../src/api/routes";
 import { db } from "../src/db";
 import { registry } from "../src/plugins/registry";
 import { signConnectToken } from "../src/auth/connect-token";
+import { createCustomApp } from "../src/custom-apps/store";
 import { stopReaper, createPending, getPending, _clearAll } from "../src/auth/connections";
 
 vi.mock("../src/config", () => ({
@@ -22,6 +23,12 @@ vi.mock("../src/config", () => ({
     AUDIT_LOG_KAFKA_TOPIC: "audit-log",
     SERVER_PUBLIC_URL: "http://localhost:3000",
   },
+}));
+
+// No network discovery in route-shape tests: every custom app indexes to zero tools.
+vi.mock("../src/custom-apps/index", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/custom-apps/index")>()),
+  ensureIndex: vi.fn(async () => []),
 }));
 
 vi.mock("../src/auth/google", () => ({
@@ -1723,6 +1730,50 @@ describe("API routes", () => {
         const res = await create(await buildApp());
         expect(res.statusCode).toBe(400); // missing name and baseUrl, not 403
       });
+    });
+  });
+
+  describe("custom app integration shape", () => {
+    const SECRET = "tok-abc-secret-value";
+    async function seed() {
+      await db.run("DELETE FROM custom_apps");
+      const h = await createCustomApp({
+        userId: "user-1", name: "keyed", baseUrl: "https://mcp.example.com/mcp",
+        metadata: { authType: "headers" }, headers: [{ name: "X-Api-Key", value: SECRET }],
+      });
+      const o = await createCustomApp({
+        userId: "user-1", name: "oa", baseUrl: "https://o.example.com/mcp", metadata: {}, clientId: "c",
+      });
+      return { h, o };
+    }
+    const auth = { authorization: "Bearer valid-jwt" };
+
+    it("list route: headers app is apikey with header names and no values; OAuth app has none", async () => {
+      vi.spyOn(registry, "listIntegrations").mockReturnValue([]);
+      const { h, o } = await seed();
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/integrations", headers: auth });
+      expect(res.statusCode).toBe(200);
+      expect(res.body).not.toContain(SECRET);
+      const list = JSON.parse(res.body).integrations;
+      const hi = list.find((i: { name: string }) => i.name === `custom:${h.id}`);
+      const oi = list.find((i: { name: string }) => i.name === `custom:${o.id}`);
+      expect(hi).toMatchObject({ authType: "apikey", headerNames: ["X-Api-Key"], custom: true });
+      expect(oi.authType).toBe("oauth2");
+      expect(oi).not.toHaveProperty("headerNames");
+    });
+
+    it("detail route: same shape for both kinds", async () => {
+      const { h, o } = await seed();
+      const app = await buildApp();
+      const hr = await app.inject({ method: "GET", url: `/api/integrations/custom:${h.id}`, headers: auth });
+      expect(hr.statusCode).toBe(200);
+      expect(hr.body).not.toContain(SECRET);
+      expect(JSON.parse(hr.body)).toMatchObject({ authType: "apikey", headerNames: ["X-Api-Key"] });
+      const or = await app.inject({ method: "GET", url: `/api/integrations/custom:${o.id}`, headers: auth });
+      const ob = JSON.parse(or.body);
+      expect(ob.authType).toBe("oauth2");
+      expect(ob).not.toHaveProperty("headerNames");
     });
   });
 });
