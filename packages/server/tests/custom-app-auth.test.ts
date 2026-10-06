@@ -40,7 +40,7 @@ vi.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
 }));
 
 import { discoverTools, evictSession } from "../src/custom-apps/client";
-import { resolveAuthHeaders, upstreamAuthHint } from "../src/custom-apps/auth";
+import { resolveAuthHeaders, upstreamAuthHint, redactHeaderValues } from "../src/custom-apps/auth";
 import type { CustomApp } from "../src/custom-apps/store";
 import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
@@ -94,5 +94,25 @@ describe("upstreamAuthHint", () => {
   it("returns null for other errors and for OAuth apps", () => {
     expect(upstreamAuthHint(headersApp, new Error("x"))).toBeNull();
     expect(upstreamAuthHint(base as CustomApp, new StreamableHTTPError(401, "x"))).toBeNull();
+  });
+});
+
+describe("redactHeaderValues", () => {
+  const mk = (headers: { name: string; value: string }[]): CustomApp => ({ ...base, metadata: { authType: "headers" }, headers });
+
+  it("redacts every value, including a value appearing twice", () => {
+    const app = mk([{ name: "X-A", value: "sec-one" }, { name: "X-B", value: "sec-two" }]);
+    const out = redactHeaderValues(app, "bad sec-one and sec-two, again sec-one");
+    expect(out).toBe("bad [redacted] and [redacted], again [redacted]");
+  });
+
+  it("removes a longer value whole when it contains a shorter one", () => {
+    const app = mk([{ name: "X-A", value: "abc" }, { name: "X-B", value: "abcdef" }]);
+    expect(redactHeaderValues(app, "got abcdef")).toBe("got [redacted]");
+  });
+
+  it("is a no-op for an empty header list and for OAuth apps", () => {
+    expect(redactHeaderValues(mk([]), "text")).toBe("text");
+    expect(redactHeaderValues({ ...base, metadata: {} }, "text")).toBe("text");
   });
 });

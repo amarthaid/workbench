@@ -574,6 +574,9 @@ describe("meta-tools", () => {
 
   describe("list_integrations", () => {
     it("lists integrations with connection status", async () => {
+      // Real listCustomApps reads the shared DB; start from none.
+      const { db } = await import("../src/db");
+      await db.run("DELETE FROM custom_apps");
       const { getToken } = await import("../src/auth/tokens");
       vi.mocked(getToken).mockResolvedValue({ accessToken: "tok", scopes: "" });
       vi.spyOn(registry, "listIntegrations").mockReturnValue([mockOauthInteg as any, mockCookieInteg as any]);
@@ -1228,6 +1231,65 @@ describe("meta-tools", () => {
         "user-1", "https://mcp.example.com", { Authorization: "Bearer tok-abc" }, "echo", { text: "Bearer hunter2" }
       );
       expect(JSON.stringify(result)).not.toContain("hunter2");
+    });
+  });
+
+  describe("headers custom app execution", () => {
+    const SECRET = "tok-abc-secret-value";
+    const headersApp = {
+      id: "app-h", userId: "user-1", name: "keyed", baseUrl: "https://mcp.example.com/mcp",
+      metadata: { authType: "headers" }, headers: [{ name: "X-Api-Key", value: SECRET }],
+    };
+    const tool = { name: "keyed__echo", remoteName: "echo", appId: "app-h", integration: "custom:app-h" } as any;
+
+    async function setup() {
+      const store = await import("../src/custom-apps/store");
+      const client = await import("../src/custom-apps/client");
+      const { auditLogger } = await import("../src/audit/logger");
+      vi.spyOn(store, "getCustomApp").mockResolvedValue(headersApp as any);
+      vi.mocked(auditLogger.log).mockClear();
+      return { client, auditLogger };
+    }
+
+    it("sends the stored headers record to callRemoteTool", async () => {
+      const { client } = await setup();
+      const remote = vi.spyOn(client, "callRemoteTool").mockResolvedValue({ content: [{ type: "text", text: "ok" }] } as any);
+      const { executeCustomAppSingle } = await import("../src/mcp/meta-tools");
+      const res = await executeCustomAppSingle("user-1", tool, { a: 1 });
+      expect(res).toHaveProperty("result");
+      expect(remote).toHaveBeenCalledWith("user-1", "https://mcp.example.com/mcp", { "X-Api-Key": SECRET }, "echo", { a: 1 });
+    });
+
+    it("an upstream 401 yields the check-the-headers hint without the value", async () => {
+      const { client, auditLogger } = await setup();
+      const { StreamableHTTPError } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
+      vi.spyOn(client, "callRemoteTool").mockRejectedValue(new StreamableHTTPError(401, `denied ${SECRET}`));
+      const { executeCustomAppSingle } = await import("../src/mcp/meta-tools");
+      const res = (await executeCustomAppSingle("user-1", tool, {})) as { error: string };
+      expect(res.error).toContain("check the app's headers");
+      expect(JSON.stringify(res)).not.toContain(SECRET);
+      expect(JSON.stringify(vi.mocked(auditLogger.log).mock.calls)).not.toContain(SECRET);
+    });
+
+    it("redacts header values echoed in a non-auth call-time error, in result and audit log", async () => {
+      const { client, auditLogger } = await setup();
+      vi.spyOn(client, "callRemoteTool").mockRejectedValue(new Error(`upstream 500: request had X-Api-Key: ${SECRET}`));
+      const { executeCustomAppSingle } = await import("../src/mcp/meta-tools");
+      const res = (await executeCustomAppSingle("user-1", tool, {})) as { error: string };
+      expect(res.error).toContain("[redacted]");
+      expect(res.error).not.toContain(SECRET);
+      const audit = JSON.stringify(vi.mocked(auditLogger.log).mock.calls);
+      expect(audit).toContain("[redacted]");
+      expect(audit).not.toContain(SECRET);
+    });
+
+    it("redacts header values echoed in an isError result", async () => {
+      const { client, auditLogger } = await setup();
+      vi.spyOn(client, "callRemoteTool").mockResolvedValue({ isError: true, content: [{ type: "text", text: `bad ${SECRET}` }] } as any);
+      const { executeCustomAppSingle } = await import("../src/mcp/meta-tools");
+      const res = (await executeCustomAppSingle("user-1", tool, {})) as { error: string };
+      expect(res.error).toBe("bad [redacted]");
+      expect(JSON.stringify(vi.mocked(auditLogger.log).mock.calls)).not.toContain(SECRET);
     });
   });
 });

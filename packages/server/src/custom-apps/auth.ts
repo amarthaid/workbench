@@ -25,3 +25,17 @@ export function upstreamAuthHint(app: CustomApp, e: unknown): string | null {
   }
   return null;
 }
+
+/**
+ * Strip every stored header value from text that may have echoed them (an
+ * upstream error body, an SDK message). Longest values first so a value that
+ * contains another is removed whole.
+ */
+export function redactHeaderValues(app: CustomApp, text: string): string {
+  if (!isHeadersApp(app)) return text;
+  const values = [...new Set((app.headers ?? []).map((h) => h.value).filter((v) => v.length >= 1))]
+    .sort((a, b) => b.length - a.length);
+  let out = text;
+  for (const v of values) out = out.split(v).join("[redacted]");
+  return out;
+}

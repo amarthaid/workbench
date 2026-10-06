@@ -7,7 +7,7 @@ import { getToken } from "../auth/tokens";
 import { ensureIndex, getToolForUser, type IndexedTool } from "../custom-apps/index";
 import { rankTools } from "../plugins/search";
 import { getCustomApp, listCustomApps, integrationKey, isCustomAppConnected } from "../custom-apps/store";
-import { resolveAuthHeaders, upstreamAuthHint } from "../custom-apps/auth";
+import { resolveAuthHeaders, upstreamAuthHint, redactHeaderValues } from "../custom-apps/auth";
 import { callRemoteTool } from "../custom-apps/client";
 import { getUserById } from "../auth/users";
 import { hasValidCookies } from "../auth/cookie";
@@ -640,11 +640,11 @@ export async function executeCustomAppSingle(
         if (result.isError) {
           // The remote MCP server reported a failed tool call — audit, metrics
           // and REST status must reflect that, not a 200 "success".
-          const errText = (result.content ?? [])
+          const errText = redactHeaderValues(app, (result.content ?? [])
             .filter((b) => b.type === "text")
             .map((b) => b.text ?? "")
             .join("\n")
-            .slice(0, 500) || "Remote tool returned isError";
+            .slice(0, 500)) || "Remote tool returned isError";
           await auditLogger.log({
             user_id: userId,
             integration: tool.integration,
@@ -674,7 +674,7 @@ export async function executeCustomAppSingle(
         return { result };
       } catch (e) {
         const err = scrubString(
-          upstreamAuthHint(app, e) ?? (e instanceof Error ? e.message : String(e)),
+          redactHeaderValues(app, upstreamAuthHint(app, e) ?? (e instanceof Error ? e.message : String(e))),
           scrubEntries,
           substringOk
         );
