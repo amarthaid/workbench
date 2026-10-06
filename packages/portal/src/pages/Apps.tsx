@@ -40,7 +40,23 @@ export default function Apps() {
   const [newHeaders, setNewHeaders] = useState<HeaderRow[]>([{ name: "", value: "" }]);
   const [newPhase, setNewPhase] = useState<"idle" | "registering" | "connecting">("idle");
   const newBusy = newPhase !== "idle";
-  const headersReady = newHeaders.some((h) => h.name.trim() && h.value);
+  // Rows blank in both fields are dropped; a half-filled row blocks submit.
+  const filledHeaders = newHeaders.filter((h) => h.name.trim() || h.value);
+  const headersReady = filledHeaders.length > 0 && filledHeaders.every((h) => h.name.trim() && h.value);
+
+  // Every close path resets the whole form so typed secrets never linger.
+  function closeNewApp() {
+    if (newBusy) return;
+    setShowNewApp(false);
+    resetNewApp();
+  }
+  function resetNewApp() {
+    setNewName("");
+    setNewUrl("");
+    setNewHeaders([{ name: "", value: "" }]);
+    setNewAuth("oauth");
+    setNewError(null);
+  }
   const [newError, setNewError] = useState<string | null>(null);
 
   async function submitNewApp(e: React.FormEvent) {
@@ -54,7 +70,7 @@ export default function Apps() {
         ? await createCustomApp(
             newName.trim(),
             newUrl.trim(),
-            newHeaders.filter((h) => h.name.trim()).map((h) => ({ name: h.name.trim(), value: h.value }))
+            filledHeaders.map((h) => ({ name: h.name.trim(), value: h.value }))
           )
         : await createCustomApp(newName.trim(), newUrl.trim()));
     } catch (err) {
@@ -66,10 +82,7 @@ export default function Apps() {
     qc.invalidateQueries({ queryKey: ["connections"] });
     if (useHeaders) {
       // Verified server-side and already connected: no OAuth hand-off.
-      setNewName("");
-      setNewUrl("");
-      setNewHeaders([{ name: "", value: "" }]);
-      setNewAuth("oauth");
+      resetNewApp();
       setShowNewApp(false);
       setNewPhase("idle");
       return;
@@ -88,8 +101,7 @@ export default function Apps() {
     if (handedOff) return;
     // The app is registered but the connect could not start: close so the
     // page's error shows beside the new app, whose cell still offers Connect.
-    setNewName("");
-    setNewUrl("");
+    resetNewApp();
     setShowNewApp(false);
     setNewPhase("idle");
   }
@@ -221,15 +233,13 @@ export default function Apps() {
 
       <Modal
         open={showNewApp}
-        onClose={() => {
-          if (!newBusy) setShowNewApp(false);
-        }}
+        onClose={closeNewApp}
         title="New custom app"
         size="md"
         dismissible={!newBusy}
         footer={
           <>
-            <Button variant="outline" disabled={newBusy} onClick={() => setShowNewApp(false)}>Cancel</Button>
+            <Button variant="outline" disabled={newBusy} onClick={closeNewApp}>Cancel</Button>
             <Button
               type="submit"
               form="new-custom-app-form"

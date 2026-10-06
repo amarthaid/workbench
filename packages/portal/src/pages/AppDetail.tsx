@@ -84,6 +84,8 @@ export default function AppDetail() {
 
   const label = data.displayName || data.name;
   const alwaysOn = data.authType === "none";
+  // A headers app is connected by its stored headers: no OAuth to start or drop.
+  const headersApp = data.custom === true && data.authType === "apikey";
 
   return (
     <>
@@ -94,10 +96,12 @@ export default function AppDetail() {
         actions={
           alwaysOn ? undefined : (
             <>
-              <Button variant="outline" onClick={() => flow.connect(data)}>
-                {connected ? "Reconnect" : "Connect"}
-              </Button>
-              {connected && (
+              {!headersApp && (
+                <Button variant="outline" onClick={() => flow.connect(data)}>
+                  {connected ? "Reconnect" : "Connect"}
+                </Button>
+              )}
+              {connected && !headersApp && (
                 <Button variant="danger" onClick={() => flow.disconnect(data.name)}>
                   Disconnect
                 </Button>
@@ -158,7 +162,7 @@ export default function AppDetail() {
           )}
         </Box>
 
-        {data.custom && data.authType === "apikey" && (
+        {headersApp && (
           <CustomAppHeaders id={data.name.replace(/^custom:/, "")} names={data.headerNames ?? []} />
         )}
         {data.authType === "cookie" && <SessionTransfer name={data.name} />}

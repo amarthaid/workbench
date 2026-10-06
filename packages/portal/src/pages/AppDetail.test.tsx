@@ -155,6 +155,38 @@ describe("AppDetail", () => {
       );
     });
 
+    it("sends a typed value as a replacement and an untouched row as blank", async () => {
+      vi.mocked(fetchIntegration).mockResolvedValue(HEADERS_APP);
+      vi.mocked(updateCustomAppHeaders).mockResolvedValue({ app: { id: "a2", name: "Keyed", headerNames: ["X-Api-Key", "X-Team"] } });
+      renderAt("custom:a2");
+      await screen.findByLabelText("Header name 1");
+      fireEvent.change(screen.getByLabelText("Header value 1"), { target: { value: "tok-new" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save headers" }));
+      await waitFor(() =>
+        expect(updateCustomAppHeaders).toHaveBeenCalledWith("a2", [
+          { name: "X-Api-Key", value: "tok-new" },
+          { name: "X-Team", value: "" },
+        ])
+      );
+    });
+
+    it("offers no Connect, Reconnect or Disconnect for a headers app", async () => {
+      vi.mocked(fetchIntegration).mockResolvedValue(HEADERS_APP);
+      vi.mocked(fetchConnections).mockResolvedValue({ connections: [{ name: "custom:a2", connected: true }] });
+      renderAt("custom:a2");
+      await screen.findByLabelText("Header name 1");
+      expect(screen.queryByRole("button", { name: /^(Connect|Reconnect|Disconnect)$/ })).toBeNull();
+      expect(screen.getByRole("button", { name: "Delete app" })).toBeInTheDocument();
+    });
+
+    it("keeps Reconnect and Disconnect for an OAuth custom app", async () => {
+      vi.mocked(fetchIntegration).mockResolvedValue({ ...DETAIL, name: "custom:a1", custom: true, authType: "oauth2" });
+      vi.mocked(fetchConnections).mockResolvedValue({ connections: [{ name: "custom:a1", connected: true }] });
+      renderAt("custom:a1");
+      expect(await screen.findByRole("button", { name: "Reconnect" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Disconnect" })).toBeInTheDocument();
+    });
+
     it("shows the server error inline when saving fails", async () => {
       vi.mocked(fetchIntegration).mockResolvedValue(HEADERS_APP);
       vi.mocked(updateCustomAppHeaders).mockRejectedValue(new Error("Server rejected the headers (HTTP 401)"));

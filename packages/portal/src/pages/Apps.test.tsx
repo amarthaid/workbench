@@ -203,6 +203,47 @@ describe("Apps", () => {
     expect(await screen.findByText("Server rejected the headers (HTTP 401)")).toBeInTheDocument();
   });
 
+  it("resets the form on cancel so typed headers do not reappear", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "New custom app" }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Keyed" } });
+    fireEvent.click(screen.getByRole("radio", { name: "Headers" }));
+    fireEvent.change(screen.getByLabelText("Header name 1"), { target: { value: "X-Api-Key" } });
+    fireEvent.change(screen.getByLabelText("Header value 1"), { target: { value: "tok-abc" } });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "New custom app" }));
+    expect(screen.getByLabelText("Name")).toHaveValue("");
+    expect(screen.getByRole("radio", { name: "OAuth" })).toBeChecked();
+    fireEvent.click(screen.getByRole("radio", { name: "Headers" }));
+    expect(screen.getByLabelText("Header name 1")).toHaveValue("");
+    expect(screen.getByLabelText("Header value 1")).toHaveValue("");
+  });
+
+  it("drops fully blank header rows and blocks a row with a name but no value", async () => {
+    vi.mocked(createCustomApp).mockResolvedValue({
+      app: { id: "a2", name: "Keyed", baseUrl: "https://mcp.example.com/mcp", integration: "custom:a2" },
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "New custom app" }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Keyed" } });
+    fireEvent.change(screen.getByLabelText("MCP server URL"), { target: { value: "https://mcp.example.com/mcp" } });
+    fireEvent.click(screen.getByRole("radio", { name: "Headers" }));
+    fireEvent.change(screen.getByLabelText("Header name 1"), { target: { value: "X-Api-Key" } });
+    fireEvent.change(screen.getByLabelText("Header value 1"), { target: { value: "tok-abc" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add header" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add header" }));
+    fireEvent.change(screen.getByLabelText("Header name 3"), { target: { value: "X-Team" } });
+    expect(screen.getByRole("button", { name: "Add app" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Header name 3"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add app" }));
+    await waitFor(() =>
+      expect(createCustomApp).toHaveBeenCalledWith("Keyed", "https://mcp.example.com/mcp", [
+        { name: "X-Api-Key", value: "tok-abc" },
+      ])
+    );
+  });
+
   it("explains an empty filter rather than showing a blank grid", async () => {
     renderPage();
     await screen.findByText("Acme");
