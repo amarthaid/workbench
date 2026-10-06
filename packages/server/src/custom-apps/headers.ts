@@ -42,7 +42,9 @@ export function validateHeaders(input: unknown, existing?: CustomAppHeader[]): R
       out.push({ name: prior.name, value: prior.value });
       continue;
     }
-    if (/[\r\n\0]/.test(value)) return { ok: false, error: `header "${name}" has an invalid value` };
+    // Only bytes fetch() accepts as a ByteString header value (no CR/LF/NUL, other controls, DEL, or > U+00FF),
+    // and not whitespace-only (it would be trimmed to empty on the wire).
+    if (/[^\t\x20-\x7e\x80-\xff]/.test(value) || value.trim() === "") return { ok: false, error: `header "${name}" has an invalid value` };
     if (Buffer.byteLength(value, "utf8") > MAX_HEADER_VALUE_BYTES) {
       return { ok: false, error: `header "${name}" value is too long` };
     }

@@ -65,6 +65,38 @@ describe("validateHeaders", () => {
   });
 });
 
+describe("validateHeaders hardening", () => {
+  it("rejects control chars, DEL, non-Latin1 and whitespace-only values without echoing them", () => {
+    for (const value of ["a\x01b", "a\x7fb", "pay\u20ac", "   ", "\t "]) {
+      const r = validateHeaders([{ name: "X-Api-Key", value }]);
+      expect(r.ok, JSON.stringify(value)).toBe(false);
+      expect(JSON.stringify(r)).not.toContain(value.trim() || "\u0000never");
+      expect(JSON.stringify(r)).toContain("invalid value");
+    }
+  });
+
+  it("accepts exactly 4096 bytes and rejects 4097", () => {
+    expect(validateHeaders([{ name: "X-Api-Key", value: "x".repeat(4096) }]).ok).toBe(true);
+    expect(validateHeaders([{ name: "X-Api-Key", value: "x".repeat(4097) }]).ok).toBe(false);
+  });
+
+  it("denies a padded deny-listed name", () => {
+    expect(validateHeaders([{ name: " Host ", value: "v" }]).ok).toBe(false);
+  });
+
+  it("drops omitted names on update and keeps blank as keep-stored", () => {
+    const existing = [
+      { name: "X-A", value: "1" },
+      { name: "X-B", value: "2" },
+    ];
+    expect(validateHeaders([{ name: "X-B", value: "" }], existing)).toEqual({
+      ok: true,
+      headers: [{ name: "X-B", value: "2" }],
+    });
+    expect(validateHeaders([{ name: "X-B", value: "   " }], existing).ok).toBe(false);
+  });
+});
+
 describe("headersToRecord / fingerprint", () => {
   it("builds a record and fingerprints order-independently", () => {
     const a = headersToRecord([{ name: "X-A", value: "1" }, { name: "X-B", value: "2" }]);
