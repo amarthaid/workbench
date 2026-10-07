@@ -48,6 +48,12 @@ COPY --from=builder /app/packages/shared/package.json ./node_modules/@a-workbenc
 COPY --from=builder /app/packages/shared/dist ./node_modules/@a-workbench/shared/dist
 COPY --from=builder /app/packages/portal/dist ./portal
 COPY --from=builder /app/packages/plugins ./plugins
+# Browser audio pipeline: a PulseAudio daemon (child of the server) gives each
+# user's chromium a private virtual speaker and mic. Idle unless
+# BROWSER_AUDIO_ENABLED is set. See docs/guides/browser-audio.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends pulseaudio pulseaudio-utils \
+ && rm -rf /var/lib/apt/lists/*
 # Cookie-auth capture spawns chromium via playwright's chromium.executablePath().
 # Bake the matching browser + its system libraries into the image so the flow
 # works headless in-container. Installed world-readable so any runtime uid works.

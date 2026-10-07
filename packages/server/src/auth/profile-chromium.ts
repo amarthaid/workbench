@@ -158,7 +158,7 @@ export interface SpawnedChromium {
 // activeProfiles lock (acquire before calling, release on failure/teardown).
 export async function spawnProfileChromium(
   userId: string,
-  opts: { startUrl?: string } = {}
+  opts: { startUrl?: string; env?: NodeJS.ProcessEnv; extraArgs?: string[] } = {}
 ): Promise<SpawnedChromium> {
   const t0 = Date.now();
   const remotePort = await getFreePort();
@@ -196,11 +196,12 @@ export async function spawnProfileChromium(
     "--no-sandbox",
     "--disable-dev-shm-usage",
   ];
+  if (opts.extraArgs) args.push(...opts.extraArgs);
   if (opts.startUrl) args.push(opts.startUrl);
   // Capture stderr so a launch failure (missing lib, crashed renderer, unwritable
   // profile dir, OOM) surfaces as a real reason instead of an opaque CDP timeout.
   const tSpawn = Date.now();
-  const proc = spawn(execPath, args, { stdio: ["ignore", "ignore", "pipe"], detached: false });
+  const proc = spawn(execPath, args, { stdio: ["ignore", "ignore", "pipe"], detached: false, env: opts.env ?? process.env });
 
   let stderrTail = "";
   proc.stderr?.on("data", (chunk: Buffer) => {
