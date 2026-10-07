@@ -252,8 +252,12 @@ export class PulseManager extends EventEmitter {
       [`--device=${sink}.monitor`, "--format=s16le", `--rate=${rate}`, "--channels=1", "--raw", "--latency-msec=20"],
       this.helperEnv()
     );
+    let realExitSeen = false;
+    proc.once("exit", () => {
+      realExitSeen = true;
+    });
     proc.on("error", (err) => {
-      if (proc.exitCode === null) {
+      if (!realExitSeen) {
         proc.emit("exit", null, null);
       }
     });
@@ -266,8 +270,12 @@ export class PulseManager extends EventEmitter {
       ["--playback", `--device=${sink}`, "--format=s16le", `--rate=${rate}`, "--channels=1", "--raw", "--latency-msec=20"],
       this.helperEnv()
     );
+    let realExitSeen = false;
+    proc.once("exit", () => {
+      realExitSeen = true;
+    });
     proc.on("error", (err) => {
-      if (proc.exitCode === null) {
+      if (!realExitSeen) {
         proc.emit("exit", null, null);
       }
     });

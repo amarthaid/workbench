@@ -18,6 +18,15 @@ function fakeProc() {
   return p;
 }
 
+function fakeProcWithError() {
+  const p = fakeProc();
+  setImmediate(() => {
+    p.exitCode = -2; // Node.js sets exitCode before emitting error on spawn failure
+    p.emit("error", new Error("ENOENT: pulseaudio not found"));
+  });
+  return p;
+}
+
 // A fake pactl backed by a module table, so create/destroy/list are checked
 // against state rather than against call order.
 function fakePactl() {
@@ -120,18 +129,18 @@ describe("PulseManager daemon", () => {
     await expect(pm.ensureDaemon()).rejects.toThrow(/pulseaudio did not start/);
   });
 
-  it("after a failed start, ensureDaemon spawns again and no daemon-exit fired", async () => {
-    const { exec } = fakePactl();
-    const pm = new PulseManager({ key: "test5", exec, spawn: spawnFn, runtimeDir: "/tmp/wb-pulse-test", readyTimeoutMs: 100 });
-    const spawnFail = vi.fn(() => fakeProc()) as unknown as Spawn;
-    const pmFail = new PulseManager({ key: "test6", exec: vi.fn(async () => { throw new Error("fail"); }), spawn: spawnFail, runtimeDir: "/tmp/wb-pulse-fail", readyTimeoutMs: 100 });
+  it("after a failed start, same manager spawns again and no daemon-exit fired", async () => {
+    const pmFail = new PulseManager({ key: "test5", exec: vi.fn(async () => { throw new Error("fail"); }), spawn: spawnFn, runtimeDir: "/tmp/wb-pulse-fail", readyTimeoutMs: 100 });
     const exitFired = vi.fn();
     pmFail.on("daemon-exit", exitFired);
+    // First ensureDaemon fails (exec throws)
     await expect(pmFail.ensureDaemon()).rejects.toThrow(/pulseaudio did not start/);
     expect(exitFired).not.toHaveBeenCalled();
-    // Now reset and spawn again
-    const pmFail2 = new PulseManager({ key: "test7", exec: vi.fn(async () => { throw new Error("fail"); }), spawn: spawnFail, runtimeDir: "/tmp/wb-pulse-fail2", readyTimeoutMs: 100 });
-    await expect(pmFail2.ensureDaemon()).rejects.toThrow(/pulseaudio did not start/);
+    // Second ensureDaemon on same manager: replace exec but it still fails
+    (pmFail as any).opts.exec = vi.fn(async () => { throw new Error("fail again"); });
+    daemon = fakeProc();
+    await expect(pmFail.ensureDaemon()).rejects.toThrow(/pulseaudio did not start/);
+    expect(exitFired).not.toHaveBeenCalled();
   });
 });
 
@@ -218,8 +227,23 @@ describe("PulseManager clients", () => {
     const captureProc = pm.capture("wb_sink_abcd1234abcd1234", 24000);
     const exitCalled = vi.fn();
     captureProc.on("exit", exitCalled);
+    captureProc.exitCode = -2; // Node.js sets exitCode before emitting error
     captureProc.emit("error", new Error("ENOENT"));
-    expect(exitCalled).toHaveBeenCalled();
+    expect(exitCalled).toHaveBeenCalledTimes(1);
+  });
+
+  it("capture proc: error doesn't double-emit when real exit follows", async () => {
+    const { exec } = fakePactl();
+    const pm = new PulseManager({ key: "cli4", exec, spawn: spawnFn, runtimeDir: "/tmp/wb-pulse-test" });
+    const captureProc = pm.capture("wb_sink_abcd1234abcd1234", 24000);
+    const exitCalled = vi.fn();
+    captureProc.on("exit", exitCalled);
+    captureProc.exitCode = -2;
+    captureProc.emit("error", new Error("ENOENT"));
+    expect(exitCalled).toHaveBeenCalledTimes(1);
+    // Real exit follows error
+    captureProc.emit("exit", -2, null);
+    expect(exitCalled).toHaveBeenCalledTimes(2); // Only one exit, not three
   });
 
   it("pactl env has no SESSION_SECRET even when process.env does", async () => {
