@@ -60,6 +60,16 @@ const configSchema = z.object({
   BROWSER_PROFILE_TTL_DAYS: z.coerce.number().int().nonnegative().default(30),
   BROWSER_PROFILE_REAP_INTERVAL_SECONDS: z.coerce.number().int().positive().default(3600),
   BROWSER_DISK_CACHE_MB: z.coerce.number().int().nonnegative().default(32),
+  // Virtual speaker + mic per user's chromium so an agent can take part in a
+  // browser call (docs/superpowers/specs/2026-10-07-browser-audio-pipeline-design.md).
+  // Off: no PulseAudio daemon, no devices, the audio tools answer AUDIO_DISABLED.
+  BROWSER_AUDIO_ENABLED: z
+    .enum(["true", "false", "1", "0"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1"),
+  // Hard cap on one audio session, so a forgotten uplink cannot hold a
+  // chromium and two child processes forever.
+  BROWSER_AUDIO_MAX_MINUTES: z.coerce.number().int().positive().default(120),
   JOTS_DIR: z.string().optional(),
   JOTS_MAX_BYTES: z.coerce.number().int().positive().default(5_242_880),
   JOTS_MAX_FILES: z.coerce.number().int().positive().default(1000),
