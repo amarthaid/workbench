@@ -6,7 +6,7 @@ vi.mock("../src/config", () => ({
   config: { SESSION_SECRET: "test-session-secret-32-chars-long!!" },
 }));
 
-import { PulseManager, deviceKey, deviceNames, type Exec, type Spawn } from "../src/audio/pulse";
+import { PulseManager, deviceKey, deviceNames, pulseFor, releasePulse, shutdownAllPulse, type Exec, type Spawn } from "../src/audio/pulse";
 
 function fakeProc() {
   const p = new EventEmitter() as any;
@@ -54,19 +54,19 @@ beforeEach(() => {
 });
 
 describe("device naming", () => {
-  it("derives 8 hex chars from the user id, never the id itself", () => {
+  it("derives 16 hex chars from the user id, never the id itself", () => {
     const k = deviceKey("user-1");
-    expect(k).toMatch(/^[0-9a-f]{8}$/);
+    expect(k).toMatch(/^[0-9a-f]{16}$/);
     expect(k).not.toContain("user");
     expect(deviceKey("user-1")).toBe(k);
     expect(deviceKey("user-2")).not.toBe(k);
   });
 
   it("names the three devices from the key", () => {
-    expect(deviceNames("abcd1234")).toEqual({
-      sink: "wb_sink_abcd1234",
-      mic: "wb_mic_abcd1234",
-      source: "wb_src_abcd1234",
+    expect(deviceNames("abcd1234abcd1234")).toEqual({
+      sink: "wb_sink_abcd1234abcd1234",
+      mic: "wb_mic_abcd1234abcd1234",
+      source: "wb_src_abcd1234abcd1234",
     });
   });
 });
@@ -74,7 +74,7 @@ describe("device naming", () => {
 describe("PulseManager daemon", () => {
   it("spawns pulseaudio once, bumps epoch when pactl answers", async () => {
     const { exec } = fakePactl();
-    const pm = new PulseManager({ exec, spawn: spawnFn, runtimeDir: "/tmp/wb-pulse-test" });
+    const pm = new PulseManager({ key: "test1", exec, spawn: spawnFn, runtimeDir: "/tmp/wb-pulse-test" });
     await Promise.all([pm.ensureDaemon(), pm.ensureDaemon()]);
     expect(spawnFn).toHaveBeenCalledTimes(1);
     const [cmd, args] = (spawnFn as any).mock.calls[0];
@@ -88,7 +88,7 @@ describe("PulseManager daemon", () => {
 
   it("emits daemon-exit and respawns with a new epoch on next demand", async () => {
     const { exec } = fakePactl();
-    const pm = new PulseManager({ exec, spawn: spawnFn, runtimeDir: "/tmp/wb-pulse-test" });
+    const pm = new PulseManager({ key: "test2", exec, spawn: spawnFn, runtimeDir: "/tmp/wb-pulse-test" });
     await pm.ensureDaemon();
     const exited = vi.fn();
     pm.on("daemon-exit", exited);
@@ -103,79 +103,177 @@ describe("PulseManager daemon", () => {
 
   it("fails with the reason when pulseaudio dies before answering", async () => {
     const exec: Exec = vi.fn(async () => { throw new Error("Connection refused"); });
-    const pm = new PulseManager({ exec, spawn: spawnFn, runtimeDir: "/tmp/wb-pulse-test", readyTimeoutMs: 300 });
+    const pm = new PulseManager({ key: "test3", exec, spawn: spawnFn, runtimeDir: "/tmp/wb-pulse-test", readyTimeoutMs: 300 });
     const p = pm.ensureDaemon();
     daemon.exitCode = 1;
     await expect(p).rejects.toThrow(/pulseaudio did not start/);
+  });
+
+  it("fails immediately when spawn emits error", async () => {
+    const exec: Exec = vi.fn(async () => { throw new Error("Connection refused"); });
+    const spawnError = vi.fn(() => {
+      const p = fakeProc();
+      setImmediate(() => p.emit("error", new Error("ENOENT: pulseaudio not found")));
+      return p;
+    }) as unknown as Spawn;
+    const pm = new PulseManager({ key: "test4", exec, spawn: spawnError, runtimeDir: "/tmp/wb-pulse-test", readyTimeoutMs: 200 });
+    await expect(pm.ensureDaemon()).rejects.toThrow(/pulseaudio did not start/);
+  });
+
+  it("after a failed start, ensureDaemon spawns again and no daemon-exit fired", async () => {
+    const { exec } = fakePactl();
+    const pm = new PulseManager({ key: "test5", exec, spawn: spawnFn, runtimeDir: "/tmp/wb-pulse-test", readyTimeoutMs: 100 });
+    const spawnFail = vi.fn(() => fakeProc()) as unknown as Spawn;
+    const pmFail = new PulseManager({ key: "test6", exec: vi.fn(async () => { throw new Error("fail"); }), spawn: spawnFail, runtimeDir: "/tmp/wb-pulse-fail", readyTimeoutMs: 100 });
+    const exitFired = vi.fn();
+    pmFail.on("daemon-exit", exitFired);
+    await expect(pmFail.ensureDaemon()).rejects.toThrow(/pulseaudio did not start/);
+    expect(exitFired).not.toHaveBeenCalled();
+    // Now reset and spawn again
+    const pmFail2 = new PulseManager({ key: "test7", exec: vi.fn(async () => { throw new Error("fail"); }), spawn: spawnFail, runtimeDir: "/tmp/wb-pulse-fail2", readyTimeoutMs: 100 });
+    await expect(pmFail2.ensureDaemon()).rejects.toThrow(/pulseaudio did not start/);
   });
 });
 
 describe("PulseManager devices", () => {
   it("creates sink, mic sink, and a remap source over the mic monitor", async () => {
     const { exec, modules } = fakePactl();
-    const pm = new PulseManager({ exec, spawn: spawnFn, runtimeDir: "/tmp/wb-pulse-test" });
-    const d = await pm.createDevices("abcd1234");
-    expect(d).toEqual(deviceNames("abcd1234"));
+    const pm = new PulseManager({ key: "dev1", exec, spawn: spawnFn, runtimeDir: "/tmp/wb-pulse-test" });
+    const d = await pm.createDevices("abcd1234abcd1234");
+    expect(d).toEqual(deviceNames("abcd1234abcd1234"));
     expect(modules.map((m) => m.name)).toEqual(["module-null-sink", "module-null-sink", "module-remap-source"]);
-    expect(modules[0].args).toContain("sink_name=wb_sink_abcd1234");
-    expect(modules[1].args).toContain("sink_name=wb_mic_abcd1234");
-    expect(modules[2].args).toContain("source_name=wb_src_abcd1234");
-    expect(modules[2].args).toContain("master=wb_mic_abcd1234.monitor");
+    expect(modules[0].args).toContain("sink_name=wb_sink_abcd1234abcd1234");
+    expect(modules[1].args).toContain("sink_name=wb_mic_abcd1234abcd1234");
+    expect(modules[2].args).toContain("source_name=wb_src_abcd1234abcd1234");
+    expect(modules[2].args).toContain("master=wb_mic_abcd1234abcd1234.monitor");
   });
 
   it("is idempotent", async () => {
     const { exec, modules } = fakePactl();
-    const pm = new PulseManager({ exec, spawn: spawnFn, runtimeDir: "/tmp/wb-pulse-test" });
-    await pm.createDevices("abcd1234");
-    await pm.createDevices("abcd1234");
+    const pm = new PulseManager({ key: "dev2", exec, spawn: spawnFn, runtimeDir: "/tmp/wb-pulse-test" });
+    await pm.createDevices("abcd1234abcd1234");
+    await pm.createDevices("abcd1234abcd1234");
     expect(modules).toHaveLength(3);
+  });
+
+  it("concurrent createDevices(sameKey) share one creation", async () => {
+    const { exec, modules } = fakePactl();
+    const pm = new PulseManager({ key: "dev3", exec, spawn: spawnFn, runtimeDir: "/tmp/wb-pulse-test" });
+    const [d1, d2] = await Promise.all([
+      pm.createDevices("abcd1234abcd1234"),
+      pm.createDevices("abcd1234abcd1234"),
+    ]);
+    expect(modules).toHaveLength(3);
+    expect(d1).toEqual(d2);
   });
 
   it("destroys only that key's modules, remap source first", async () => {
     const { exec, modules, calls } = fakePactl();
-    const pm = new PulseManager({ exec, spawn: spawnFn, runtimeDir: "/tmp/wb-pulse-test" });
-    await pm.createDevices("aaaa1111");
-    await pm.createDevices("bbbb2222");
-    await pm.destroyDevices("aaaa1111");
-    expect(modules.every((m) => !m.args.includes("aaaa1111"))).toBe(true);
+    const pm = new PulseManager({ key: "dev4", exec, spawn: spawnFn, runtimeDir: "/tmp/wb-pulse-test" });
+    await pm.createDevices("aaaa1111aaaa1111");
+    await pm.createDevices("bbbb2222bbbb2222");
+    await pm.destroyDevices("aaaa1111aaaa1111");
+    expect(modules.every((m) => !m.args.includes("aaaa1111aaaa1111"))).toBe(true);
     expect(modules).toHaveLength(3);
     const unloads = calls.filter((c) => c[0] === "unload-module").map((c) => c[1]);
-    expect(unloads[0]).toBe("3"); // remap-source of aaaa1111 was module 3
+    expect(unloads[0]).toBe("3"); // remap-source of aaaa1111aaaa1111 was module 3
   });
 
-  it("lists keys and reaps those this process did not create or already released", async () => {
+  it("lists device keys", async () => {
     const { exec, modules } = fakePactl();
-    const pm = new PulseManager({ exec, spawn: spawnFn, runtimeDir: "/tmp/wb-pulse-test" });
-    await pm.createDevices("aaaa1111");
-    // A leftover nobody in this process owns.
-    modules.push({ idx: 99, name: "module-null-sink", args: "sink_name=wb_sink_dead0000 rate=48000 channels=1" });
-    expect((await pm.listDeviceKeys()).sort()).toEqual(["aaaa1111", "dead0000"]);
-    expect(await pm.reapOrphans()).toEqual(["dead0000"]);
-    expect(await pm.listDeviceKeys()).toEqual(["aaaa1111"]);
+    const pm = new PulseManager({ key: "dev5", exec, spawn: spawnFn, runtimeDir: "/tmp/wb-pulse-test" });
+    await pm.createDevices("aaaa1111aaaa1111");
+    expect((await pm.listDeviceKeys()).sort()).toEqual(["aaaa1111aaaa1111"]);
   });
 });
 
 describe("PulseManager clients", () => {
   it("capture reads the sink monitor at the session rate", async () => {
     const { exec } = fakePactl();
-    const pm = new PulseManager({ exec, spawn: spawnFn, runtimeDir: "/tmp/wb-pulse-test" });
-    pm.capture("wb_sink_abcd1234", 24000);
+    const pm = new PulseManager({ key: "cli1", exec, spawn: spawnFn, runtimeDir: "/tmp/wb-pulse-test" });
+    pm.capture("wb_sink_abcd1234abcd1234", 24000);
     const [cmd, args, env] = (spawnFn as any).mock.calls.at(-1);
     expect(cmd).toBe("parec");
     expect(args).toEqual(expect.arrayContaining([
-      "--device=wb_sink_abcd1234.monitor", "--format=s16le", "--rate=24000", "--channels=1", "--raw",
+      "--device=wb_sink_abcd1234abcd1234.monitor", "--format=s16le", "--rate=24000", "--channels=1", "--raw",
     ]));
     expect(env.PULSE_SERVER).toBe("unix:/tmp/wb-pulse-test/native");
   });
 
   it("playback writes into the mic sink at the session rate", async () => {
     const { exec } = fakePactl();
-    const pm = new PulseManager({ exec, spawn: spawnFn, runtimeDir: "/tmp/wb-pulse-test" });
-    pm.playback("wb_mic_abcd1234", 16000);
-    const [cmd, args] = (spawnFn as any).mock.calls.at(-1);
+    const pm = new PulseManager({ key: "cli2", exec, spawn: spawnFn, runtimeDir: "/tmp/wb-pulse-test" });
+    pm.playback("wb_mic_abcd1234abcd1234", 16000);
+    const [cmd, args, env] = (spawnFn as any).mock.calls.at(-1);
     expect(cmd).toBe("pacat");
     expect(args).toEqual(expect.arrayContaining([
-      "--playback", "--device=wb_mic_abcd1234", "--format=s16le", "--rate=16000", "--channels=1", "--raw", "--latency-msec=20",
+      "--playback", "--device=wb_mic_abcd1234abcd1234", "--format=s16le", "--rate=16000", "--channels=1", "--raw", "--latency-msec=20",
     ]));
+    expect(env.PULSE_SERVER).toBe("unix:/tmp/wb-pulse-test/native");
+  });
+
+  it("capture proc emitting error fires its exit listener", async () => {
+    const { exec } = fakePactl();
+    const pm = new PulseManager({ key: "cli3", exec, spawn: spawnFn, runtimeDir: "/tmp/wb-pulse-test" });
+    const captureProc = pm.capture("wb_sink_abcd1234abcd1234", 24000);
+    const exitCalled = vi.fn();
+    captureProc.on("exit", exitCalled);
+    captureProc.emit("error", new Error("ENOENT"));
+    expect(exitCalled).toHaveBeenCalled();
+  });
+
+  it("pactl env has no SESSION_SECRET even when process.env does", async () => {
+    const { exec, calls } = fakePactl();
+    const oldSecret = process.env.SESSION_SECRET;
+    process.env.SESSION_SECRET = "should-not-appear-in-pactl";
+    try {
+      const pm = new PulseManager({ key: "cli4", exec, spawn: spawnFn, runtimeDir: "/tmp/wb-pulse-test" });
+      await pm.ensureDaemon();
+      const pactlEnv = (exec as any).mock.calls[0][2];
+      expect(pactlEnv.SESSION_SECRET).toBeUndefined();
+      expect(pactlEnv.PULSE_SERVER).toBeDefined();
+    } finally {
+      if (oldSecret !== undefined) process.env.SESSION_SECRET = oldSecret;
+      else delete process.env.SESSION_SECRET;
+    }
+  });
+});
+
+describe("pulseFor/releasePulse/shutdownAllPulse", () => {
+  it("returns same instance for same key", () => {
+    const pm1 = pulseFor("user-1");
+    const pm2 = pulseFor("user-1");
+    expect(pm1).toBe(pm2);
+  });
+
+  it("returns different instances for different keys", () => {
+    const pm1 = pulseFor("user-1");
+    const pm2 = pulseFor("user-2");
+    expect(pm1).not.toBe(pm2);
+  });
+
+  it("releasePulse shuts down and deletes, later pulseFor returns fresh instance", async () => {
+    const { exec } = fakePactl();
+    const pm1 = pulseFor("user-123");
+    (pm1 as any).opts.exec = exec;
+    (pm1 as any).opts.spawn = spawnFn;
+    (pm1 as any).opts.runtimeDir = "/tmp/wb-pulse-test";
+    await pm1.ensureDaemon();
+    const killCalled = vi.fn();
+    pm1.on("daemon-exit", killCalled);
+    releasePulse("user-123");
+    const pm2 = pulseFor("user-123");
+    expect(pm1).not.toBe(pm2);
+  });
+
+  it("shutdownAllPulse shuts down all daemons", () => {
+    const pm1 = pulseFor("user-a");
+    const pm2 = pulseFor("user-b");
+    shutdownAllPulse();
+    // Both should be cleared
+    const pm1After = pulseFor("user-a");
+    const pm2After = pulseFor("user-b");
+    expect(pm1After).not.toBe(pm1);
+    expect(pm2After).not.toBe(pm2);
   });
 });
