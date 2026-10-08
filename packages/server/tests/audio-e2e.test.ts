@@ -72,14 +72,14 @@ function toneHz(pcm: Buffer, rate: number): number {
 // runtime dir removed after it exits), then the page server (≤2 s): worst case
 // ~9.5 s, well inside the hook's 20 s.
 const torn: {
-  timer?: ReturnType<typeof setInterval>;
+  session?: { end(reason: "stopped"): void };
   clients: Array<{ close(): void }>;
   procs: ChildProcess[];
   pm?: { shutdown(): Promise<void> };
   server?: http.Server;
 } = { clients: [], procs: [] };
 afterAll(async () => {
-  clearInterval(torn.timer);
+  torn.session?.end("stopped");
   for (const c of torn.clients) { try { c.close(); } catch { /* best effort */ } }
   await Promise.all(torn.procs.map(killAndWait));
   try { await torn.pm?.shutdown(); } catch { /* best effort */ }
@@ -142,16 +142,46 @@ describe.skipIf(!ENABLED)("browser audio over real PulseAudio + chromium", () =>
     await page.ready;
     await page.send("Page.navigate", { url: origin });
 
-    // Downlink: chromium's 440 Hz oscillator lands on the sink's monitor.
-    const capStart = Date.now();
-    const cap: ChildProcess = pm.capture(devices.sink, 24000);
-    torn.procs.push(cap);
-    const chunks: Buffer[] = [];
-    let firstAudibleAt: number | undefined;
-    cap.stdout!.on("data", (c: Buffer) => {
-      chunks.push(c);
-      if (firstAudibleAt === undefined && peak(c) > 0) firstAudibleAt = Date.now();
+    // Both directions go through AudioSession, as in production: it owns parec
+    // (downlink, 40 ms frames to the subscriber) and pacat (uplink, paced from
+    // its own queue). end() kills both, so it is registered before the process
+    // kills and pm.shutdown() in the teardown.
+    const { AudioSession } = await import("../src/audio/session");
+    const session = new AudioSession({
+      userId: "e2e-user",
+      tabId: chrome.cdpPageTargetId,
+      rate: 24000,
+      devices,
+      io: pm,
+      maxMs: 60_000,
     });
+    torn.session = session;
+
+    // Downlink: chromium's 440 Hz oscillator lands on the sink's monitor. The
+    // frames arrive as audio events; a gap in `seq` is a dropped frame and is
+    // filled with zeros, so it counts as silence in the dropout metric (the
+    // metrics below read the reassembled PCM exactly as the 9a ones did).
+    const FRAME_BYTES = 1920; // 40 ms at 24 kHz, s16le mono
+    const chunks: Buffer[] = [];
+    let nextSeq = 0;
+    let droppedFrames = 0;
+    let firstAudibleAt: number | undefined;
+    const peak = (b: Buffer) => {
+      let m = 0;
+      for (let i = 0; i + 1 < b.length; i += 2) m = Math.max(m, Math.abs(b.readInt16LE(i)));
+      return m;
+    };
+    const capStart = Date.now();
+    session.subscribe((e) => {
+      if (e.event !== "audio") return;
+      const pcm = Buffer.from(e.data.pcm, "base64");
+      for (; nextSeq < e.data.seq; nextSeq++, droppedFrames++) chunks.push(Buffer.alloc(FRAME_BYTES));
+      nextSeq = e.data.seq + 1;
+      chunks.push(pcm);
+      if (firstAudibleAt === undefined && peak(pcm) > 0) firstAudibleAt = Date.now();
+    });
+    session.start();
+
     // Chromium needs a moment after navigate to load the page and open its
     // stream, and parec delivers nothing for its first ~2 s in the container
     // (measured). The stream also drops out for ~100-300 ms every few seconds
@@ -160,11 +190,6 @@ describe.skipIf(!ENABLED)("browser audio over real PulseAudio + chromium", () =>
     // with no silent gap (a clipped 440 Hz sine never has 10 ms of zeros) and
     // measure that; the assertions on it are unchanged.
     const have = () => chunks.reduce((n, c) => n + c.length, 0);
-    const peak = (b: Buffer) => {
-      let m = 0;
-      for (let i = 0; i + 1 < b.length; i += 2) m = Math.max(m, Math.abs(b.readInt16LE(i)));
-      return m;
-    };
     const hasGap = (b: Buffer) => {
       let run = 0;
       for (let i = 0; i + 1 < b.length; i += 2) {
@@ -200,7 +225,7 @@ describe.skipIf(!ENABLED)("browser audio over real PulseAudio + chromium", () =>
     const startupMs = firstAudibleAt === undefined ? Infinity : firstAudibleAt - capStart;
     console.log(
       `[audio-e2e] downlink captured=${have()}B max=${max} freq=${down.toFixed(1)}Hz waited=${Date.now() - t0}ms ` +
-        `startup=${startupMs}ms (audio-time onset ${onset / 48}ms) ` +
+        `startup=${startupMs}ms (audio-time onset ${onset / 48}ms) droppedFrames=${droppedFrames} ` +
         `dropoutFraction=${dropoutFraction.toFixed(3)} (${silentAfterOnset}/${blocksAfterOnset} 100ms blocks after onset; ` +
         `whole capture ${silent}/${blocks})`
     );
@@ -212,23 +237,17 @@ describe.skipIf(!ENABLED)("browser audio over real PulseAudio + chromium", () =>
     expect(startupMs).toBeLessThan(5_000);
     expect(dropoutFraction).toBeLessThan(0.25);
 
-    // Uplink: an 880 Hz tone pacat'd into the mic sink is what getUserMedia hears.
-    const play: ChildProcess = pm.playback(devices.mic, 24000);
-    // pacat may exit (or be killed in teardown) with a chunk still in flight;
-    // without a listener that EPIPE is an uncaught exception that fails the run.
-    play.stdin!.on("error", () => {});
-    torn.procs.push(play);
-    let n = 0;
-    const timer = setInterval(() => {
-      const buf = Buffer.alloc(960);
-      for (let i = 0; i < 480; i++) {
-        buf.writeInt16LE(Math.round(12000 * Math.sin((2 * Math.PI * 880 * (n + i)) / 24000)), i * 2);
-      }
-      n += 480;
-      if (n >= 24000 * 4) { clearInterval(timer); play.stdin!.end(); return; }
-      play.stdin!.write(buf);
-    }, 20);
-    torn.timer = timer;
+    // Uplink: an 880 Hz tone written to the session's queue in one go (4 s);
+    // the session paces it into the mic sink, which getUserMedia hears.
+    const tone = (hz: number, ms: number, rate: number) => {
+      const n = Math.round((rate * ms) / 1000);
+      const buf = Buffer.alloc(n * 2);
+      for (let i = 0; i < n; i++) buf.writeInt16LE(Math.round(12000 * Math.sin((2 * Math.PI * hz * i) / rate)), i * 2);
+      return buf;
+    };
+    const up = session.openUplink();
+    if (typeof up === "string") throw new Error(`openUplink: ${up}`);
+    await up.write(tone(880, 4000, 24000));
 
     const devs = (await page.send("Runtime.evaluate", {
       expression:
@@ -252,5 +271,22 @@ describe.skipIf(!ENABLED)("browser audio over real PulseAudio + chromium", () =>
     })) as { result?: { value?: number }; exceptionDetails?: unknown };
     console.log(`[audio-e2e] uplink freq=${r.result?.value}Hz ${r.exceptionDetails ? JSON.stringify(r.exceptionDetails) : ""}`);
     expect(Math.abs((r.result?.value ?? 0) - 880)).toBeLessThan(30);
+
+    // clear() drops what has not played: played + cleared is the 4 s written,
+    // and the pending end() settles at once with the same played_ms.
+    const c = session.clear();
+    const endStart = Date.now();
+    const ended = await up.end();
+    const endMs = Date.now() - endStart;
+    console.log(
+      `[audio-e2e] clear played_ms=${c.played_ms} cleared_ms=${c.cleared_ms} end()=${endMs}ms end.played_ms=${ended.played_ms}`
+    );
+    expect(c.played_ms).toBeGreaterThan(1000);
+    expect(c.cleared_ms).toBeGreaterThan(0);
+    expect(Math.abs(c.played_ms + c.cleared_ms - 4000)).toBeLessThanOrEqual(100);
+    expect(endMs).toBeLessThan(1000);
+    expect(Math.abs(ended.played_ms - c.played_ms)).toBeLessThanOrEqual(40);
+    // No capture_failed / playback_failed during the run.
+    expect(session.ended).toBeUndefined();
   }, 60_000);
 });
