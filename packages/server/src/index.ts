@@ -10,6 +10,9 @@ import { registerJotRoutes } from "./jots/routes";
 import { registerCurlProxy } from "./api/curl-proxy";
 import { registerRestRoutes } from "./api/rest-routes";
 import { registerWorkspaceRoutes } from "./workspace/routes";
+import { registerAudioRoutes } from "./audio/routes";
+import { initBrowserAudio } from "./audio/manager";
+import { shutdownAllPulse } from "./audio/pulse";
 import { registerVaultRoutes } from "./vault/routes";
 import { startVaultReaper } from "./vault/otl";
 import { startRecentReaper } from "./vault/recent";
@@ -151,6 +154,8 @@ async function main() {
 
   await registerCurlProxy(app);
   await registerWorkspaceRoutes(app);
+  await registerAudioRoutes(app);
+  if (config.BROWSER_AUDIO_ENABLED) initBrowserAudio();
   await registerVaultRoutes(app);
   await registerJotRoutes(app);
   startUploadReaper();
@@ -198,9 +203,13 @@ if (config.CLUSTER_ENABLED) {
 function registerShutdown() {
   const shutdown = async (signal: string) => {
     console.log(`[shutdown] ${signal} received — draining connection pool`);
+    await shutdownAllPulse().catch(() => undefined);
     await db.close();
     process.exit(0);
   };
   process.once("SIGTERM", () => shutdown("SIGTERM"));
   process.once("SIGINT",  () => shutdown("SIGINT"));
+  // A crash must not leave PulseAudio daemons behind. 'exit' handlers run
+  // synchronously: shutdownAllPulse sends the kills before its first await.
+  process.once("exit", () => { void shutdownAllPulse(); });
 }

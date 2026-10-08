@@ -31,7 +31,8 @@ import {
 } from "../../auth/browser-session";
 import { expectDownload, awaitDownload } from "../../auth/browser-downloads";
 import { uploadWorkspaceFile, BrowserUploadError } from "../../auth/browser-upload";
-import { verifySessionKey } from "../../auth/cdp-bridge";
+import { verifySessionKey, mintSessionKey } from "../../auth/cdp-bridge";
+import { startAudio, stopAudio } from "../../audio/manager";
 
 export const BROWSER_INTEGRATION_NAME = "browser";
 
@@ -282,6 +283,57 @@ const tools: PluginTool[] = [
       const tabs = await listTabs(ctx.userId);
       return { tabs: tabs.map((t) => ({ session_id: t.id, url: t.url, title: t.title, active: t.active })) };
     },
+  },
+  {
+    name: "browser_audio_start",
+    description:
+      "Give this tab a live audio pipe so you can take part in a browser call (Zoom web, Slack huddle, Meet). " +
+      "Call it after opening the meeting page, before joining. Returns stream_url: GET it as SSE for the call audio " +
+      "(`audio` events: base64 PCM16 mono, 40 ms each) and POST one long chunked `Content-Type: audio/pcm` body to it " +
+      "with your voice at the same rate. POST clear_url to stop your audio at once (barge-in); it returns played_ms. " +
+      "Send `headers` on every one of those requests. One call per user at a time.",
+    integration: BROWSER_INTEGRATION_NAME,
+    inputSchema: z.object({
+      session_id: z.string().describe(SESSION_ID_DESC),
+      sample_rate: z
+        .union([z.literal(16000), z.literal(24000), z.literal(48000)])
+        .optional()
+        .describe("PCM sample rate for both directions. Default 24000."),
+      restart: z
+        .boolean()
+        .optional()
+        .describe("Only after a BROWSER_RESTART_REQUIRED error: restart the browser with audio. Open tabs close; this page reopens in a new tab."),
+    }),
+    handler: async (ctx: any, args: any) => {
+      const t = await resolveTab(ctx, args);
+      if (isNotFound(t)) return t;
+      const r = await startAudio(ctx.userId, t.id, args.sample_rate ?? 24000, { restart: args.restart === true });
+      if (!r.ok) {
+        return { error: r.error, detail: r.detail, ...(r.session_id ? { session_id: r.session_id } : {}) };
+      }
+      if (r.session.ended) {
+        return { error: "AUDIO_ENDED", detail: `audio ended during start: ${r.session.ended}` };
+      }
+      const base = `${config.SERVER_PUBLIC_URL}/api/browser/tabs/${encodeURIComponent(r.session_id)}/audio`;
+      return {
+        session_id: r.session_id,
+        restarted: r.restarted,
+        format: "pcm_s16le",
+        channels: 1,
+        sample_rate: r.session.rate,
+        stream_url: `${base}/stream`,
+        clear_url: `${base}/clear`,
+        headers: { "X-Browser-Session": mintSessionKey(ctx.userId) },
+      };
+    },
+  },
+  {
+    name: "browser_audio_stop",
+    description: "End the audio pipe on this tab: the SSE stream gets `ended`, an open audio POST returns. The tab stays open.",
+    integration: BROWSER_INTEGRATION_NAME,
+    inputSchema: z.object({ session_id: z.string().describe(SESSION_ID_DESC) }),
+    // No resolveTab: stopping must work after the tab is already gone.
+    handler: async (ctx: any, args: any) => stopAudio(ctx.userId, args.session_id),
   },
   {
     name: "browser_live_url",
