@@ -74,7 +74,9 @@ beforeEach(() => {
     : {}) };
   bs.browserClient.mockResolvedValue(browser);
   bs.touchTab.mockClear();
-  bs.closeBrowserSession.mockClear();
+  bs.closeBrowserSession.mockReset();
+  bs.closeBrowserSession.mockResolvedValue(undefined);
+  bs.openTab.mockReset();
   bs.navigate.mockClear();
   initBrowserAudio();
 });
@@ -151,18 +153,96 @@ describe("mic permission follows navigation", () => {
     expect(browser.send).not.toHaveBeenCalledWith("Browser.setPermission", expect.objectContaining({ origin: "https://ads.example.net" }));
   });
 
-  it("revokes every granted origin when the session ends", async () => {
+  it("holds one granted origin at a time: revokes the previous before granting the next", async () => {
     await startAudio("user-1", "T1", 24000);
-    tabs.get("T1").cdp.emit("Page.frameNavigated", { frame: { id: "main", url: "https://app.example.com/wc/123" } });
-    await vi.waitFor(() => expect(browser.send).toHaveBeenCalledTimes(3));
+    const cdp = tabs.get("T1").cdp;
+    cdp.emit("Page.frameNavigated", { frame: { id: "main", url: "https://app.example.com/wc/123" } });
+    cdp.emit("Page.frameNavigated", { frame: { id: "main", url: "https://evil.example.net/x" } });
+    await vi.waitFor(() => expect(browser.send).toHaveBeenCalledWith("Browser.setPermission", {
+      permission: { name: "microphone" }, setting: "granted", origin: "https://evil.example.net",
+    }));
+    const calls = browser.send.mock.calls.filter((c) => c[0] === "Browser.setPermission").map((c) => `${c[1].setting}:${c[1].origin}`);
+    expect(calls).toEqual([
+      "granted:https://meet.example.com",
+      "prompt:https://meet.example.com",
+      "granted:https://app.example.com",
+      "prompt:https://app.example.com",
+      "granted:https://evil.example.net",
+    ]);
+  });
+
+  it("revokes the current origin when the session ends", async () => {
+    await startAudio("user-1", "T1", 24000);
     stopAudio("user-1", "T1");
-    await vi.waitFor(() => {
-      for (const origin of ["https://meet.example.com", "https://app.example.com"]) {
-        expect(browser.send).toHaveBeenCalledWith("Browser.setPermission", {
-          permission: { name: "microphone" }, setting: "prompt", origin,
-        });
-      }
+    await vi.waitFor(() => expect(browser.send).toHaveBeenCalledWith("Browser.setPermission", {
+      permission: { name: "microphone" }, setting: "prompt", origin: "https://meet.example.com",
+    }));
+  });
+
+  it("falls back to resetPermissions when a revoke fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await startAudio("user-1", "T1", 24000);
+    browser.send.mockImplementation(async (m: string, p: any) => {
+      if (m === "Browser.setPermission" && p.setting === "prompt") throw new Error("boom");
+      return {};
     });
+    stopAudio("user-1", "T1");
+    await vi.waitFor(() => expect(browser.send).toHaveBeenCalledWith("Browser.resetPermissions", {}));
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("does not grant after the session ended during the url lookup", async () => {
+    let release!: () => void;
+    browser.send.mockImplementation((m: string) => m === "Target.getTargetInfo"
+      ? new Promise((r) => { release = () => r({ targetInfo: { url: "https://meet.example.com/x" } }); })
+      : Promise.resolve({}));
+    const p = startAudio("user-1", "T1", 24000);
+    await vi.waitFor(() => expect(getAudio("user-1")).toBeDefined());
+    stopAudio("user-1", "T1");
+    release();
+    await p;
+    await vi.advanceTimersByTimeAsync(10);
+    expect(browser.send).not.toHaveBeenCalledWith("Browser.setPermission", expect.objectContaining({ setting: "granted" }));
+  });
+});
+
+describe("races and failures", () => {
+  it("single-flights concurrent starts of the same tab", async () => {
+    const [a, b] = await Promise.all([startAudio("user-1", "T1", 24000), startAudio("user-1", "T1", 24000)]);
+    expect(a).toMatchObject({ ok: true });
+    expect((b as any).session).toBe((a as any).session);
+    expect(fakePm.capture).toHaveBeenCalledTimes(1);
+  });
+
+  it("concurrent starts of two tabs: one wins, the other is AUDIO_BUSY", async () => {
+    const rs = await Promise.all([startAudio("user-1", "T1", 24000), startAudio("user-1", "T2", 24000)]);
+    expect(rs.filter((r) => r.ok)).toHaveLength(1);
+    expect(rs.find((r) => !r.ok)).toMatchObject({ error: "AUDIO_BUSY", session_id: "T1" });
+    expect(fakePm.capture).toHaveBeenCalledTimes(1);
+  });
+
+  it("a tab that vanishes while the daemon is checked is BROWSER_TAB_NOT_FOUND", async () => {
+    fakePm.ensureDaemon.mockImplementation(async () => { tabs.delete("T1"); });
+    expect(await startAudio("user-1", "T1", 24000)).toMatchObject({ ok: false, error: "BROWSER_TAB_NOT_FOUND" });
+    expect(fakePm.capture).not.toHaveBeenCalled();
+    expect(getAudio("user-1")).toBeUndefined();
+  });
+
+  it("a failed restart is BROWSER_RESTART_FAILED, not a throw", async () => {
+    warm.get("user-1").audio = undefined;
+    bs.openTab.mockResolvedValue({ ok: false, error: "nope" });
+    expect(await startAudio("user-1", "T1", 24000, { restart: true })).toMatchObject({ ok: false, error: "BROWSER_RESTART_FAILED" });
+  });
+
+  it("a restart that still has a stale epoch is BROWSER_RESTART_FAILED", async () => {
+    warm.get("user-1").audio = undefined;
+    const fresh = fakeTab("T9");
+    bs.closeBrowserSession.mockImplementation(async () => {
+      warm.set("user-1", warmWith({ ...freshAudio(), epoch: 0 }));
+    });
+    bs.openTab.mockImplementation(async () => { tabs.set("T9", fresh); return { ok: true, tab: fresh }; });
+    expect(await startAudio("user-1", "T1", 24000, { restart: true })).toMatchObject({ ok: false, error: "BROWSER_RESTART_FAILED" });
   });
 });
 
