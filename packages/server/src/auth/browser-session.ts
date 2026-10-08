@@ -303,23 +303,35 @@ async function startSession(userId: string): Promise<WarmSession> {
     // ensureDownloadRouting and awaits the same promise.
     void ensureDownloadRouting(session).catch(() => undefined);
     spawned.proc.on("exit", () => {
-      activeProfiles.delete(userId);
-      warmSessions.delete(userId);
-      cancelDownloads(userId);
+      // This exit may be stale: closeBrowserSession already cleared the maps and
+      // the user may have started a newer chromium before this one's exit event
+      // fired. Process-scoped state (maps, downloads, session-exit, profile
+      // caches) is only touched when no newer session owns it.
+      const cur = warmSessions.get(userId);
+      const own = cur === session;
+      const newer = !own && (cur !== undefined || activeProfiles.has(userId));
+      if (own) {
+        activeProfiles.delete(userId);
+        warmSessions.delete(userId);
+        cancelDownloads(userId);
+      }
       for (const t of session.tabs.values()) { try { t.cdp.close(); } catch { /* noop */ } }
       session.tabs.clear();
       try { session.browserCdp?.close(); } catch { /* noop */ }
       try { session.authWs?.close(); } catch { /* noop */ }
-      // Releases the whole per-user daemon; its devices die with it.
+      // Releases the whole per-user daemon; its devices die with it. Guarded by
+      // manager identity so a stale exit cannot shut down a newer daemon.
       if (session.audio) void releasePulse(session.audio.key, session.audio.pm).catch(() => undefined);
+      if (newer) return;
       // The profile outlives the process on purpose — that's what keeps the user
       // logged in. Its caches don't: reclaim them here so disk cost tracks the
       // number of users, not the number of sessions they've ever run. Hooked on
       // exit rather than in closeBrowserSession so a crashed or reaped chromium
-      // is cleaned up the same way. Fire-and-forget; the lock is already released
-      // and the process is dead, so nothing is holding these files open.
+      // is cleaned up the same way. Fire-and-forget; skipped above when a newer
+      // chromium may be using this profile right now.
       void trimProfileCaches(userProfileDir(userId)).catch(() => undefined);
-      emitSafe("session-exit", userId);
+      // closeBrowserSession already emitted for a session it closed itself.
+      if (own) emitSafe("session-exit", userId);
     });
     return session;
   } catch (e) {

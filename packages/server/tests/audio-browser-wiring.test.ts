@@ -42,6 +42,8 @@ vi.mock("ws", async () => {
   return { default: FakeWs, WebSocket: FakeWs };
 });
 
+import { cancelDownloads } from "../src/auth/browser-downloads";
+import { trimProfileCaches } from "../src/auth/profile-disk";
 import { ensureSession, closeTab, browserEvents, getWarmSession, closeBrowserSession } from "../src/auth/browser-session";
 
 let proc: any;
@@ -172,5 +174,32 @@ describe("chromium spawn with audio", () => {
     expect(sends).toContain("Target.closeTarget");
     browserEvents.off("tab-closed", boom);
     await closeBrowserSession("user-9");
+  });
+
+  it("a stale chromium exit does not tear down a newer session", async () => {
+    const oldProc = proc;
+    await ensureSession("user-10");
+    await closeBrowserSession("user-10");
+    const proc2: any = new EventEmitter();
+    proc2.kill = vi.fn();
+    spawnMock.mockResolvedValueOnce({
+      proc: proc2, remotePort: 9224,
+      cdpBrowserWsUrl: "ws://127.0.0.1:9224/devtools/browser/z",
+      cdpPageWsUrl: "ws://127.0.0.1:9224/devtools/page/T2",
+      cdpPageTargetId: "T2", timings: {},
+    });
+    const s2 = await ensureSession("user-10");
+    const exited = vi.fn();
+    browserEvents.on("session-exit", exited);
+    vi.mocked(cancelDownloads).mockClear();
+    vi.mocked(trimProfileCaches).mockClear();
+    oldProc.emit("exit", 0, null);
+    expect(getWarmSession("user-10")).toBe(s2);
+    expect(exited).not.toHaveBeenCalled();
+    expect(cancelDownloads).not.toHaveBeenCalled();
+    expect(trimProfileCaches).not.toHaveBeenCalled();
+    // activeProfiles still claims the profile: a third start is refused.
+    browserEvents.off("session-exit", exited);
+    await closeBrowserSession("user-10");
   });
 });
