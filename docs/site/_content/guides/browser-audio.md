@@ -28,8 +28,8 @@ close, logins survive (same profile), and the page reopens in a new tab whose
 1. `browser_start` gives a `session_id`; `browser_navigate` to the meeting link.
 2. `browser_audio_start { session_id, sample_rate: 24000 }` returns `stream_url`,
    `clear_url` (both absolute), `sample_rate`, `format` and `headers`.
-   `sample_rate` in the response is authoritative: an existing session keeps its
-   rate.
+   Repeating `browser_audio_start` with the same tab and rate is idempotent; a
+   different rate returns `AUDIO_BUSY`, so stop first, then start again.
 3. Open the downlink: `GET stream_url` with `headers` (SSE).
 4. Open the uplink: `POST stream_url` with `headers`,
    `Content-Type: audio/pcm`, chunked, and keep it open.
@@ -41,7 +41,8 @@ close, logins survive (same profile), and the page reopens in a new tab whose
    `{ played_ms, cleared_ms }`. `audio_end_ms = played_ms - <ms of audio you had
    sent before this response started>` is what a realtime API's truncate call
    needs.
-8. Leave the meeting, then `browser_audio_stop { session_id }`.
+8. Leave the meeting, then `browser_audio_stop { session_id }`, which returns
+   `{ played_ms, duration_ms }` for the call.
 
 ## Wire format
 
@@ -53,7 +54,7 @@ SSE events:
 | event | data |
 |---|---|
 | `audio` | `{ "seq": 412, "pcm": "<base64>" }`, 40 ms each; a `seq` gap means frames were dropped because you read too slowly |
-| `playback` | `{ "played_ms", "buffered_ms" }` every 200 ms while your audio is queued, and once when it drains |
+| `playback` | `{ "played_ms", "buffered_ms" }` every 200 ms while your audio is queued, and once when it drains or when `clear` drops buffered audio |
 | `ended` | `{ "reason" }`: `stopped`, `tab_closed`, `browser_exit`, `replaced`, `max_duration`, `capture_failed`, `playback_failed`, `audio_daemon_exit` |
 
 Opening a second `GET` replaces the first (`ended{replaced}`), so reconnecting
@@ -64,7 +65,8 @@ response is `200 { "played_ms" }`. Cancelling the request, even after the body
 is fully sent, drops the queued audio and frees the slot.
 
 Other HTTP responses: `401` without valid credentials, `404 audio_not_started`
-(no audio on that `session_id`), `415` unless `Content-Type` is `audio/pcm`.
+(no audio on that `session_id`, or your audio runs on a different tab, which the
+detail names; nothing is forwarded in that case), `415` unless `Content-Type` is `audio/pcm`.
 
 ## Errors from the tools
 
@@ -72,7 +74,7 @@ Other HTTP responses: `401` without valid credentials, `404 audio_not_started`
 |---|---|
 | `AUDIO_DISABLED` | `BROWSER_AUDIO_ENABLED` is off |
 | `BROWSER_TAB_NOT_FOUND` | that `session_id` is not one of your open tabs |
-| `AUDIO_BUSY` | another tab already holds your call; the error carries that `session_id` |
+| `AUDIO_BUSY` | another tab already holds your call, or this tab is running at a different `sample_rate`; the error carries the holding `session_id`. Call `browser_audio_stop` on it first |
 | `BROWSER_RESTART_REQUIRED` | the browser predates audio; call again with `restart: true` |
 | `BROWSER_RESTART_FAILED` | the restart did not come back |
 | `AUDIO_ENDED` | audio ended while starting; the detail names the reason |
@@ -82,9 +84,11 @@ Other HTTP responses: `401` without valid credentials, `404 audio_not_started`
 Send the returned `headers` (`X-Browser-Session`) on all three requests so the
 mesh routes them to the pod running your browser. If a request lands elsewhere
 the server pipes it to the right pod itself (it needs `INTERNAL_MCP_URL`), at
-the cost of an extra hop. Same operator rules as
-[browser sessions](browser-sessions.md): consistent hash on that header, to pod
-endpoints, `CLUSTER_ENABLED` off. Background:
+the cost of an extra hop. Operator rules, as for every browser request: hash
+consistently on `X-Browser-Session`, hash to pod endpoints rather than a
+ClusterIP (which would re-round-robin), and keep `CLUSTER_ENABLED` off, since no
+proxy can route inside a worker pool. Details in
+[Docker: multiple replicas](../deploy/docker.md#multiple-replicas) and
 [browser session pod affinity](../field-notes/2026-09-10-browser-session-pod-affinity.md).
 
 ## Isolation
@@ -99,6 +103,6 @@ main-frame navigation. See the
 
 - One call per user at a time (`AUDIO_BUSY` names the tab that has it).
 - Audio from your other tabs is mixed into the stream.
-- A pod restart ends the call (`ended{browser_exit}`); rejoin.
+- A pod restart drops the connection with no `ended` event; reconnect and call `browser_audio_start` again. `ended{browser_exit}` means chromium itself exited.
 - Tell the people in the call they are talking to an agent. Recording and
   consent rules where you operate are yours to follow.

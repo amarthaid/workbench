@@ -31,8 +31,9 @@ Headless chromium has no audio devices.
   mic stays live between turns.
 - Pacing agent audio in the server (one 20 ms frame per tick into `pacat
   --latency-msec=20`, monotonic clock, at most 5 ticks of catch-up) keeps the
-  queue in-process, so `clear` is instant and `played_ms` is exact to about
-  ±40 ms, which is what `conversation.item.truncate` needs. Frames are written
+  queue in-process, so `clear` is instant and `played_ms` is accurate to about
+  ±40 ms in steady state (catch-up after an event-loop stall can briefly exceed
+  that), which is what `conversation.item.truncate` needs. Frames are written
   as **whole samples only**: after an underrun a chunk boundary that split a
   16-bit sample would shift every later sample by a byte and turn the rest of
   the call into noise. `played_ms` counts agent audio only.
