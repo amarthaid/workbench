@@ -141,4 +141,38 @@ describe("AudioSession end", () => {
     vi.advanceTimersByTime(5_000);
     expect(s.ended).toBe("max_duration");
   });
+
+  it("a subscriber that throws on ended still results in whenEnded resolving and onEnd being called once", async () => {
+    const onEnd = vi.fn();
+    const s = makeSession({ onEnd });
+    s.subscribe(() => {
+      throw new Error("subscriber error");
+    });
+    s.end("stopped");
+    expect(s.ended).toBe("stopped");
+    expect(onEnd).toHaveBeenCalledTimes(1);
+    expect(onEnd).toHaveBeenCalledWith("stopped");
+    await expect(s.whenEnded).resolves.toBe("stopped");
+  });
+
+  it("processes are killed even if onEnded throws", () => {
+    class FailingSession extends AudioSession {
+      protected onEnded(): void {
+        throw new Error("onEnded error");
+      }
+    }
+    const s = new FailingSession({
+      userId: "user-1",
+      tabId: "T1",
+      rate: 24000,
+      devices: DEVICES,
+      io,
+      maxMs: 60 * 60_000,
+    });
+    s.start();
+    s.end("stopped");
+    expect(cap.kill).toHaveBeenCalled();
+    expect(play.kill).toHaveBeenCalled();
+    expect(s.ended).toBe("stopped");
+  });
 });

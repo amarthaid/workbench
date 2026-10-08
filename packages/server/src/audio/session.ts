@@ -131,14 +131,16 @@ export class AudioSession {
     if (this.ended) return;
     this.ended = reason;
     if (this.maxTimer) clearTimeout(this.maxTimer);
-    this.onEnded();
     try { this.capture?.kill("SIGTERM"); } catch { /* noop */ }
     try { this.playback?.kill("SIGTERM"); } catch { /* noop */ }
-    const sub = this.subscriber;
-    this.subscriber = undefined;
-    sub?.({ event: "ended", data: { reason } });
+    try { this.onEnded(); } catch { /* noop */ }
+    try {
+      const sub = this.subscriber;
+      this.subscriber = undefined;
+      sub?.({ event: "ended", data: { reason } });
+    } catch { /* noop */ }
     this.resolveEnded(reason);
-    this.opts.onEnd?.(reason);
+    try { this.opts.onEnd?.(reason); } catch { /* noop */ }
   }
 
   /** Hook for the uplink half (Task 3) to release its waiters. */
