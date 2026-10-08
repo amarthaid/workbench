@@ -340,6 +340,26 @@ describe("pulseFor/releasePulse/shutdownAllPulse", () => {
     expect(pm1).not.toBe(pm2);
   });
 
+  it("releasePulse(key, expected) removes and shuts down when expected is registered", async () => {
+    const pm = pulseFor("user-exp1");
+    const spy = vi.spyOn(pm, "shutdown").mockResolvedValue();
+    await releasePulse("user-exp1", pm);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(pulseFor("user-exp1")).not.toBe(pm);
+  });
+
+  it("releasePulse(key, expected) leaves a newer registered manager alone", async () => {
+    const old = pulseFor("user-exp2");
+    await releasePulse("user-exp2");
+    const newer = pulseFor("user-exp2");
+    const oldSpy = vi.spyOn(old, "shutdown").mockResolvedValue();
+    const newSpy = vi.spyOn(newer, "shutdown").mockResolvedValue();
+    await releasePulse("user-exp2", old);
+    expect(oldSpy).toHaveBeenCalledTimes(1);
+    expect(newSpy).not.toHaveBeenCalled();
+    expect(pulseFor("user-exp2")).toBe(newer);
+  });
+
   it("shutdownAllPulse shuts down all daemons", () => {
     const pm1 = pulseFor("user-a");
     const pm2 = pulseFor("user-b");

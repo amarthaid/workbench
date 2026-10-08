@@ -326,11 +326,17 @@ export function pulseFor(key: string): PulseManager {
   return pm;
 }
 
-export function releasePulse(key: string): Promise<void> {
-  const pm = managers.get(key);
-  if (!pm) return Promise.resolve();
+/**
+ * `expected` guards against a stale caller: a chromium that exits after its
+ * user already re-spawned holds a manager that is no longer the registered one,
+ * and must shut down only its own daemon, not the newer session's.
+ */
+export function releasePulse(key: string, expected?: PulseManager): Promise<void> {
+  const registered = managers.get(key);
+  if (expected && registered !== expected) return expected.shutdown();
+  if (!registered) return Promise.resolve();
   managers.delete(key);
-  return pm.shutdown();
+  return registered.shutdown();
 }
 
 export async function shutdownAllPulse(): Promise<void> {

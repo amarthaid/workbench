@@ -20,6 +20,12 @@ import type { CookieData, RawCookie } from "./cookie";
 export const browserEvents = new EventEmitter();
 browserEvents.setMaxListeners(50);
 
+/** A throwing listener must not abort the teardown that emitted the event. */
+function emitSafe(event: "tab-closed" | "session-exit", ...args: string[]): void {
+  try { browserEvents.emit(event, ...args); }
+  catch (e) { console.warn(`[browser] ${event} listener threw:`, (e as Error).message); }
+}
+
 // Persistent CDP client: one long-lived socket to a page target, many
 // request/response commands multiplexed by auto-incrementing id.
 export class CdpClient {
@@ -159,7 +165,7 @@ async function attachTab(s: WarmSession, targetId: string, wsUrl: string): Promi
     const cur = s.tabs.get(targetId);
     if (cur && cur.cdp === cdp) {
       s.tabs.delete(targetId);
-      browserEvents.emit("tab-closed", s.userId, targetId);
+      emitSafe("tab-closed", s.userId, targetId);
     }
   });
   await cdp.ready;
@@ -258,7 +264,7 @@ async function startSession(userId: string): Promise<WarmSession> {
         audio = { key, pm, devices, epoch: pm.epoch };
       } catch (e) {
         console.warn(`[browser] audio devices unavailable:`, (e as Error).message);
-        void releasePulse(key).catch(() => undefined);
+        void releasePulse(key, pm).catch(() => undefined);
       }
     }
     const spawned = await spawnProfileChromium(
@@ -305,8 +311,7 @@ async function startSession(userId: string): Promise<WarmSession> {
       try { session.browserCdp?.close(); } catch { /* noop */ }
       try { session.authWs?.close(); } catch { /* noop */ }
       // Releases the whole per-user daemon; its devices die with it.
-      if (session.audio) void releasePulse(session.audio.key).catch(() => undefined);
-      browserEvents.emit("session-exit", userId);
+      if (session.audio) void releasePulse(session.audio.key, session.audio.pm).catch(() => undefined);
       // The profile outlives the process on purpose — that's what keeps the user
       // logged in. Its caches don't: reclaim them here so disk cost tracks the
       // number of users, not the number of sessions they've ever run. Hooked on
@@ -314,11 +319,12 @@ async function startSession(userId: string): Promise<WarmSession> {
       // is cleaned up the same way. Fire-and-forget; the lock is already released
       // and the process is dead, so nothing is holding these files open.
       void trimProfileCaches(userProfileDir(userId)).catch(() => undefined);
+      emitSafe("session-exit", userId);
     });
     return session;
   } catch (e) {
     activeProfiles.delete(userId);
-    if (audio) void releasePulse(audio.key).catch(() => undefined);
+    if (audio) void releasePulse(audio.key, audio.pm).catch(() => undefined);
     throw e;
   }
 }
@@ -453,8 +459,8 @@ export async function closeTab(userId: string, tabId: string): Promise<boolean> 
   const tab = s?.tabs.get(tabId);
   if (!s || !tab) return false;
   s.tabs.delete(tabId);
-  browserEvents.emit("tab-closed", userId, tabId);
   try { tab.cdp.close(); } catch { /* noop */ }
+  emitSafe("tab-closed", userId, tabId);
   try {
     const browser = await browserClient(s);
     await browser.send("Target.closeTarget", { targetId: tabId });
@@ -503,13 +509,16 @@ export async function closeBrowserSession(userId: string): Promise<void> {
   warmSessions.delete(userId);
   activeProfiles.delete(userId);
   cancelDownloads(userId);
-  // The process exit handler emits again; listeners must be idempotent.
-  browserEvents.emit("session-exit", userId);
+  // Release now, not on proc exit: a re-spawn before that exit must get a
+  // fresh manager, and the stale exit handler is guarded by `pm` identity.
+  if (s.audio) void releasePulse(s.audio.key, s.audio.pm).catch(() => undefined);
   for (const t of s.tabs.values()) { try { t.cdp.close(); } catch { /* noop */ } }
   s.tabs.clear();
   try { s.browserCdp?.close(); } catch { /* noop */ }
   try { s.authWs?.close(); } catch { /* noop */ }
   try { s.proc.kill("SIGKILL"); } catch { /* noop */ }
+  // The process exit handler emits again; listeners must be idempotent.
+  emitSafe("session-exit", userId);
 }
 
 export function reapIdleSessions(now = Date.now()): void {
