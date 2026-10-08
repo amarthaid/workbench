@@ -89,6 +89,10 @@
               "label": "Browser sessions"
             },
             {
+              "path": "guides/browser-audio",
+              "label": "Browser audio"
+            },
+            {
               "path": "guides/self-hosted-instances",
               "label": "Self-hosted instances"
             }

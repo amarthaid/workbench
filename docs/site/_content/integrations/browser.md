@@ -46,6 +46,8 @@ Because the profile persists, sites the user logged into stay logged in across s
 | `browser_upload_file` | Put a workspace file into an `<input type="file">` |
 | `browser_close` | Close this tab; the browser and profile stay |
 | `browser_tabs` | List open tabs with their `session_id`, url, title |
+| `browser_audio_start` | Give a tab a live audio pipe for a browser call (SSE out, chunked PCM in). See [Browser audio](../guides/browser-audio.md) |
+| `browser_audio_stop` | End the audio pipe on a tab |
 | `browser_live_url` | Mint a short-lived URL for a human to watch and take over |
 
 ## Screenshots and the token budget
