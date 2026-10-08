@@ -10,3 +10,12 @@ describe("config BROWSER_SESSION_TTL_SECONDS", () => {
     expect(config.BROWSER_SESSION_TTL_SECONDS).toBeGreaterThan(0);
   });
 });
+
+describe("config BROWSER_AUDIO_MAX_MINUTES", () => {
+  it("caps at 1440 so the max-duration setTimeout cannot overflow", async () => {
+    const { configSchema } = await import("../src/config");
+    expect(configSchema.shape.BROWSER_AUDIO_MAX_MINUTES.safeParse("1440").success).toBe(true);
+    expect(configSchema.shape.BROWSER_AUDIO_MAX_MINUTES.safeParse("1441").success).toBe(false);
+    expect(configSchema.shape.BROWSER_AUDIO_MAX_MINUTES.safeParse("0").success).toBe(false);
+  });
+});

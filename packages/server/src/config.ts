@@ -10,7 +10,7 @@ export function parseAdminEmails(raw: string): string[] {
     .filter((e) => e.length > 0);
 }
 
-const configSchema = z.object({
+export const configSchema = z.object({
   PORT: z.string().default("3000"),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   ENCRYPTION_KEY: z.string().length(64).default(
@@ -69,7 +69,7 @@ const configSchema = z.object({
     .transform((v) => v === "true" || v === "1"),
   // Hard cap on one audio session, so a forgotten uplink cannot hold a
   // chromium and two child processes forever.
-  BROWSER_AUDIO_MAX_MINUTES: z.coerce.number().int().positive().default(120),
+  BROWSER_AUDIO_MAX_MINUTES: z.coerce.number().int().positive().max(1440).default(120),
   JOTS_DIR: z.string().optional(),
   JOTS_MAX_BYTES: z.coerce.number().int().positive().default(5_242_880),
   JOTS_MAX_FILES: z.coerce.number().int().positive().default(1000),

@@ -131,6 +131,38 @@ describe("GET stream (SSE)", () => {
   });
 });
 
+describe("GET stream hygiene", () => {
+  it("HEAD does not subscribe and does not replace the live reader", async () => {
+    const a = await fetch(`${base}/api/browser/tabs/T1/audio/stream`, { headers: H });
+    const aEvents = readSse(a, (e) => e.some((x) => x.event === "ended"));
+    await new Promise((r) => setTimeout(r, 20));
+    const head = await fetch(`${base}/api/browser/tabs/T1/audio/stream`, { method: "HEAD", headers: H });
+    expect([404, 405]).toContain(head.status);
+    cap.stdout.emit("data", Buffer.alloc(1920, 1));
+    session.end("stopped");
+    const events = await aEvents;
+    expect(events.map((e) => e.event)).toEqual(["audio", "ended"]);
+    expect(events.at(-1)!.data.reason).toBe("stopped");
+  });
+
+  it("a client that disconnects is unsubscribed: frames do not throw and a new reader works", async () => {
+    const req = httpRequest(`${base}/api/browser/tabs/T1/audio/stream`, { headers: H });
+    const gotHeaders = new Promise<import("node:http").IncomingMessage>((r) => req.on("response", r));
+    req.end();
+    const res = await gotHeaders;
+    res.resume();
+    res.destroy();
+    req.destroy();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(session.attached).toBe(false);
+    expect(() => cap.stdout.emit("data", Buffer.alloc(1920, 1))).not.toThrow();
+    const b = await fetch(`${base}/api/browser/tabs/T1/audio/stream`, { headers: H });
+    setTimeout(() => cap.stdout.emit("data", Buffer.alloc(1920, 2)), 20);
+    const events = await readSse(b, (e) => e.some((x) => x.event === "audio"));
+    expect(events[0].event).toBe("audio");
+  });
+});
+
 describe("POST stream (uplink)", () => {
   it("415 for a non-PCM content type", async () => {
     const r = await fetch(`${base}/api/browser/tabs/T1/audio/stream`, {

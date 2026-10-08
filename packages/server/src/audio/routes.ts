@@ -66,7 +66,7 @@ export async function registerAudioRoutes(app: FastifyInstance, overrides: Parti
 
     const base = "/api/browser/tabs/:session_id/audio";
 
-    scope.get<Params>(`${base}/stream`, async (request, reply) => {
+    scope.get<Params>(`${base}/stream`, { exposeHeadRoute: false }, async (request, reply) => {
       const userId = await authenticate(request, reply);
       if (!userId) return reply;
       const s = await resolve(userId, request, reply);

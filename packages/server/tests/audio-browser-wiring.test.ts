@@ -129,6 +129,17 @@ describe("chromium spawn with audio", () => {
     await closeBrowserSession("user-5");
   });
 
+  it("emits tab-closed when the tab's CDP socket drops (external close)", async () => {
+    const s = await ensureSession("user-8");
+    const closed = vi.fn();
+    browserEvents.on("tab-closed", closed);
+    (s.tabs.get("T0")!.cdp as any).ws.emit("close");
+    expect(closed).toHaveBeenCalledWith("user-8", "T0");
+    expect(s.tabs.has("T0")).toBe(false);
+    browserEvents.off("tab-closed", closed);
+    await closeBrowserSession("user-8");
+  });
+
   it("a stale exit handler releases only its own manager after a re-spawn", async () => {
     const oldProc = proc;
     await ensureSession("user-7");
