@@ -48,6 +48,8 @@ export interface AudioSessionOpts {
   io: AudioIO;
   maxMs: number;
   onEnd?: (reason: EndReason) => void;
+  /** Monotonic clock for pacing (defaults to performance.now). */
+  now?: () => number;
 }
 
 export interface Uplink {
@@ -88,11 +90,13 @@ export class AudioSession {
   private wasBuffered = false;
   private roomWaiters: Array<() => void> = [];
   private drainWaiters: Array<() => void> = [];
+  private now: () => number;
 
   constructor(private readonly opts: AudioSessionOpts) {
     this.userId = opts.userId;
     this.tabId = opts.tabId;
     this.rate = opts.rate;
+    this.now = opts.now ?? (() => performance.now());
     this.whenEnded = new Promise((r) => { this.resolveEnded = r; });
   }
 
@@ -115,7 +119,7 @@ export class AudioSession {
     this.playback.stdin?.on("error", () => { /* the exit handler reports it */ });
     this.playback.on("exit", () => { if (!this.ended) this.end("playback_failed"); });
 
-    this.pacerStart = Date.now();
+    this.pacerStart = this.now();
     this.pacer = setInterval(() => this.tick(), TICK_MS);
     this.pacer.unref?.();
 
@@ -204,7 +208,7 @@ export class AudioSession {
    */
   private tick(): void {
     if (this.ended) return;
-    const elapsedTicks = Math.floor((Date.now() - this.pacerStart) / TICK_MS);
+    const elapsedTicks = Math.floor((this.now() - this.pacerStart) / TICK_MS);
     let due = elapsedTicks - this.ticksWritten;
     if (due > MAX_CATCHUP_TICKS) {
       this.ticksWritten = elapsedTicks - MAX_CATCHUP_TICKS;
@@ -220,10 +224,12 @@ export class AudioSession {
   private takeFrame(): Buffer {
     const n = this.tickBytes;
     const out = Buffer.alloc(n); // zero = silence
+    // Take only whole samples: limit to even bytes to avoid mid-sample breaks.
+    const maxBytes = Math.min(this.queuedBytes & ~1, n);
     let off = 0;
-    while (off < n && this.queue.length) {
+    while (off < maxBytes && this.queue.length) {
       const head = this.queue[0];
-      const take = Math.min(head.length, n - off);
+      const take = Math.min(head.length, maxBytes - off);
       head.copy(out, off, 0, take);
       off += take;
       if (take === head.length) this.queue.shift();
@@ -276,6 +282,10 @@ export class AudioSession {
         return new Promise<void>((r) => this.roomWaiters.push(r));
       },
       end: async () => {
+        // C2: drop a lone trailing byte to prevent permanent stall
+        if (mine() && this.queuedBytes === 1) {
+          this.dropQueue();
+        }
         if (mine() && !this.ended && this.queuedBytes > 0) {
           await new Promise<void>((r) => this.drainWaiters.push(r));
         }

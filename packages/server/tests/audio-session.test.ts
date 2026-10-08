@@ -19,7 +19,7 @@ let cap: any;
 let play: any;
 let io: AudioIO;
 
-function makeSession(over: Partial<{ rate: number; maxMs: number; onEnd: any }> = {}) {
+function makeSession(over: Partial<{ rate: number; maxMs: number; onEnd: any; now?: () => number }> = {}) {
   const s = new AudioSession({
     userId: "user-1",
     tabId: "T1",
@@ -28,6 +28,7 @@ function makeSession(over: Partial<{ rate: number; maxMs: number; onEnd: any }> 
     io,
     maxMs: over.maxMs ?? 60 * 60_000,
     onEnd: over.onEnd,
+    now: over.now,
   });
   s.start();
   return s;
@@ -179,6 +180,55 @@ describe("AudioSession end", () => {
 
 describe("AudioSession uplink pacing", () => {
   // 24 kHz: 20 ms tick = 960 bytes, 1 ms = 48 bytes.
+  it("preserves sample boundaries: takes only whole samples, never odd bytes", async () => {
+    // C1: write 301 bytes (150 samples + 1 stray byte) → tick → write rest → tick.
+    // If takeFrame() took odd bytes, later samples shift by 1 byte, breaking alignment.
+    const s = makeSession();
+    const up = s.openUplink() as any;
+    const pcm = Buffer.alloc(960);
+    for (let i = 0; i < pcm.length; i += 2) pcm.writeInt16LE(1000, i);
+    await up.write(pcm.subarray(0, 301)); // 150 samples + 1 stray byte
+    vi.advanceTimersByTime(20); // tick drains 300 bytes (150 samples), leaves 1 byte
+    await up.write(pcm.subarray(301)); // now have 1 + 659 = 660 bytes total
+    vi.advanceTimersByTime(20); // tick drains all 660 bytes
+    // Verify the 660 bytes we output have correct sample alignment (all 1000, not misaligned noise).
+    // The 660 bytes come from: 1 stray byte + 659 from second write = 330 samples total.
+    const out: Buffer = play.written.at(-1);
+    for (let i = 0; i < 660; i += 2) { // check the 330 samples we output
+      expect(out.readInt16LE(i)).toBe(1000);
+    }
+  });
+
+  it("resolves end() even with a lone trailing byte in the queue", async () => {
+    // C2: write 961 bytes (480.5 samples) → ticks drain 960 bytes (480 samples).
+    // Lone byte must not block drain.
+    const s = makeSession();
+    const up = s.openUplink() as any;
+    await up.write(Buffer.alloc(961, 0));
+    vi.advanceTimersByTime(20);
+    expect(play.written).toHaveLength(1); // first tick drained 960 bytes
+    const r = up.end();
+    await expect(r).resolves.toEqual({ played_ms: 20 });
+  });
+
+  it("clock skew: backwards jump does not stall later ticks", async () => {
+    // I1: inject a controllable clock, jump it backwards, verify frames still flow when time moves forward.
+    let t = 0;
+    const s = makeSession({ now: () => t });
+    t += 40; // advance to 40ms (2 ticks due)
+    vi.advanceTimersByTime(20);
+    const after1 = play.written.length; // should be 2 frames
+    t -= 20; // jump backwards 20ms (clock correction: now at 20ms)
+    vi.advanceTimersByTime(20);
+    expect(play.written.length).toBe(after1); // no extra frames (due <= 0)
+    t += 60; // time moves forward again: now at 80ms (4 ticks)
+    vi.advanceTimersByTime(20);
+    // Caught up with at most MAX_CATCHUP_TICKS (5) new frames
+    expect(play.written.length - after1).toBeLessThanOrEqual(5 + 1);
+    expect(play.written.length).toBeGreaterThan(after1); // but at least some new frames
+  });
+
+  // 24 kHz: 20 ms tick = 960 bytes, 1 ms = 48 bytes.
   it("feeds pacat one 20 ms frame per tick, silence when the queue is empty", () => {
     makeSession();
     vi.advanceTimersByTime(60);
@@ -272,12 +322,15 @@ describe("AudioSession uplink pacing", () => {
   });
 
   it("catches up at most 5 ticks after an event-loop stall", () => {
-    makeSession();
+    let t = 0;
+    const s = makeSession({ now: () => t });
+    t += 20;
     vi.advanceTimersByTime(20);
     const before = play.written.length;
     // Simulate a 1 s stall: the clock jumps without the interval firing.
-    vi.setSystemTime(Date.now() + 1_000);
+    t += 1_000;
     vi.advanceTimersByTime(20);
+    // Should write at most 5 + 1 frames (5 catchup + 1 for the current tick).
     expect(play.written.length - before).toBeLessThanOrEqual(5 + 1);
   });
 });
