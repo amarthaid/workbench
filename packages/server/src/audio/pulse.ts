@@ -282,14 +282,37 @@ export class PulseManager extends EventEmitter {
     return proc;
   }
 
-  shutdown(): void {
+  /**
+   * Stop the daemon and remove its runtime dir. The dir goes only once the
+   * daemon has exited: pulseaudio writes into it (its HOME) while shutting
+   * down, so removing it under a live daemon fails with ENOTEMPTY and leaves
+   * the dir behind (measured in the audio e2e). Resolves when both are done;
+   * a daemon that ignores SIGTERM for 2 s is SIGKILLed.
+   */
+  shutdown(): Promise<void> {
     const d = this.daemon;
     this.daemon = undefined;
     this.daemonReady = false;
-    try { d?.kill("SIGTERM"); } catch { /* noop */ }
-    if (this.actualRuntimeDir && !this.runtimeDir) {
-      try { rmSync(this.actualRuntimeDir, { recursive: true, force: true }); } catch { /* noop */ }
+    const dir = this.runtimeDir ? undefined : this.actualRuntimeDir;
+    const removeDir = () => {
+      if (dir) { try { rmSync(dir, { recursive: true, force: true }); } catch { /* noop */ } }
+    };
+    if (!d || d.exitCode !== null || d.signalCode !== null) {
+      removeDir();
+      return Promise.resolve();
     }
+    return new Promise((resolve) => {
+      const done = () => { clearTimeout(t); removeDir(); resolve(); };
+      const t = setTimeout(() => {
+        try { d.kill("SIGKILL"); } catch { /* noop */ }
+        // SIGKILL cannot be ignored, but do not hang on an exit event that
+        // never comes.
+        setTimeout(done, 500).unref();
+      }, 2_000);
+      t.unref();
+      d.once("exit", done);
+      try { d.kill("SIGTERM"); } catch { /* noop */ }
+    });
   }
 }
 
@@ -303,17 +326,15 @@ export function pulseFor(key: string): PulseManager {
   return pm;
 }
 
-export function releasePulse(key: string): void {
+export function releasePulse(key: string): Promise<void> {
   const pm = managers.get(key);
-  if (pm) {
-    pm.shutdown();
-    managers.delete(key);
-  }
+  if (!pm) return Promise.resolve();
+  managers.delete(key);
+  return pm.shutdown();
 }
 
-export function shutdownAllPulse(): void {
-  for (const pm of managers.values()) {
-    pm.shutdown();
-  }
+export async function shutdownAllPulse(): Promise<void> {
+  const all = [...managers.values()];
   managers.clear();
+  await Promise.all(all.map((pm) => pm.shutdown()));
 }

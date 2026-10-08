@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
+import { existsSync } from "node:fs";
 
 vi.mock("../src/config", () => ({
   config: { SESSION_SECRET: "test-session-secret-32-chars-long!!" },
@@ -141,6 +142,55 @@ describe("PulseManager daemon", () => {
     daemon = fakeProc();
     await expect(pmFail.ensureDaemon()).rejects.toThrow(/pulseaudio did not start/);
     expect(exitFired).not.toHaveBeenCalled();
+  });
+});
+
+describe("PulseManager shutdown", () => {
+  // A daemon that, like pulseaudio, takes a moment to exit after SIGTERM.
+  function slowExitDaemon() {
+    const p = fakeProc();
+    p.signalCode = null;
+    p.kill = vi.fn(() => true);
+    return p;
+  }
+
+  it("removes the runtime dir only after the daemon has exited", async () => {
+    daemon = slowExitDaemon();
+    const { exec } = fakePactl();
+    const pm = new PulseManager({ key: "sd1", exec, spawn: spawnFn });
+    await pm.ensureDaemon();
+    const dir = pm.clientEnv().PULSE_SERVER!.replace(/^unix:/, "").replace(/\/native$/, "");
+    expect(existsSync(dir)).toBe(true);
+    let resolved = false;
+    const done = pm.shutdown().then(() => { resolved = true; });
+    expect(daemon.kill).toHaveBeenCalledWith("SIGTERM");
+    // pulseaudio writes into its HOME while exiting; the dir must outlive it.
+    await new Promise((r) => setImmediate(r));
+    expect(existsSync(dir)).toBe(true);
+    expect(resolved).toBe(false);
+    daemon.exitCode = 0;
+    daemon.emit("exit", 0, null);
+    await done;
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  it("SIGKILLs a daemon that ignores SIGTERM, then removes the dir", async () => {
+    vi.useFakeTimers();
+    try {
+      daemon = slowExitDaemon();
+      const { exec } = fakePactl();
+      const pm = new PulseManager({ key: "sd2", exec, spawn: spawnFn });
+      await pm.ensureDaemon();
+      const dir = pm.clientEnv().PULSE_SERVER!.replace(/^unix:/, "").replace(/\/native$/, "");
+      const done = pm.shutdown();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(daemon.kill).toHaveBeenCalledWith("SIGKILL");
+      await vi.advanceTimersByTimeAsync(500);
+      await done;
+      expect(existsSync(dir)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
