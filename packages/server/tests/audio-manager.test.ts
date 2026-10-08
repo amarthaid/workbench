@@ -1,0 +1,215 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+
+const cfg = vi.hoisted(() => ({ BROWSER_AUDIO_ENABLED: true, BROWSER_AUDIO_MAX_MINUTES: 120 }));
+const warm = new Map<string, any>();
+const tabs = new Map<string, any>();
+
+vi.mock("../src/config", () => ({ config: cfg }));
+// Factories import EventEmitter themselves: vi.hoisted runs before imports and
+// `require` does not exist in an ESM test file.
+vi.mock("../src/auth/browser-session", async () => {
+  const { EventEmitter } = await import("node:events");
+  return {
+    browserEvents: new EventEmitter(),
+    getWarmSession: vi.fn(),
+    getTab: vi.fn(),
+    touchTab: vi.fn(),
+    browserClient: vi.fn(),
+    closeBrowserSession: vi.fn(async () => undefined),
+    openTab: vi.fn(),
+    navigate: vi.fn(async () => ({})),
+  };
+});
+
+import { startAudio, stopAudio, getAudio, initBrowserAudio, KEEPALIVE_MS } from "../src/audio/manager";
+import * as bsModule from "../src/auth/browser-session";
+
+const bs = bsModule as any;
+
+function fakeProc() {
+  const p = new EventEmitter() as any;
+  p.stdout = new PassThrough();
+  p.stdin = new PassThrough();
+  p.kill = vi.fn(() => true);
+  return p;
+}
+
+function fakeTab(id: string) {
+  const cdp = new EventEmitter() as any;
+  cdp.send = vi.fn();
+  cdp.on = vi.fn((m: string, fn: any) => { EventEmitter.prototype.on.call(cdp, m, fn); return () => cdp.removeListener(m, fn); });
+  return { id, cdp };
+}
+
+let browser: { send: ReturnType<typeof vi.fn> };
+let fakePm: any;
+
+function warmWith(audio: any) {
+  return { userId: "user-1", audio };
+}
+function freshAudio() {
+  return { key: "abcd1234abcd1234", pm: fakePm, devices: { sink: "s", mic: "m", source: "src" }, epoch: 1 };
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  cfg.BROWSER_AUDIO_ENABLED = true;
+  fakePm = Object.assign(new EventEmitter(), {
+    epoch: 1,
+    ensureDaemon: vi.fn(async () => undefined),
+    capture: vi.fn(() => fakeProc()),
+    playback: vi.fn(() => fakeProc()),
+  });
+  warm.clear();
+  tabs.clear();
+  warm.set("user-1", warmWith(freshAudio()));
+  tabs.set("T1", fakeTab("T1"));
+  tabs.set("T2", fakeTab("T2"));
+  bs.getWarmSession.mockImplementation((u: string) => warm.get(u));
+  bs.getTab.mockImplementation((_u: string, id: string) => tabs.get(id));
+  browser = { send: vi.fn(async (method: string) => method === "Target.getTargetInfo"
+    ? { targetInfo: { url: "https://meet.example.com/abc-defg" } }
+    : {}) };
+  bs.browserClient.mockResolvedValue(browser);
+  bs.touchTab.mockClear();
+  bs.closeBrowserSession.mockClear();
+  bs.navigate.mockClear();
+  initBrowserAudio();
+});
+
+afterEach(() => {
+  for (const u of ["user-1"]) { const s = getAudio(u); if (s) stopAudio(u, s.tabId); }
+  vi.useRealTimers();
+});
+
+describe("startAudio", () => {
+  it("binds the tab, starts the session, grants the mic to the tab's origin", async () => {
+    const r = await startAudio("user-1", "T1", 24000);
+    expect(r).toMatchObject({ ok: true, session_id: "T1", restarted: false });
+    expect(getAudio("user-1")?.tabId).toBe("T1");
+    expect(browser.send).toHaveBeenCalledWith("Browser.setPermission", {
+      permission: { name: "microphone" }, setting: "granted", origin: "https://meet.example.com",
+    });
+  });
+
+  it("is refused when the flag is off", async () => {
+    cfg.BROWSER_AUDIO_ENABLED = false;
+    expect(await startAudio("user-1", "T1", 24000)).toMatchObject({ ok: false, error: "AUDIO_DISABLED" });
+  });
+
+  it("refuses an unknown tab", async () => {
+    expect(await startAudio("user-1", "nope", 24000)).toMatchObject({ ok: false, error: "BROWSER_TAB_NOT_FOUND" });
+  });
+
+  it("refuses a second tab while one is bound, naming the bound tab", async () => {
+    await startAudio("user-1", "T1", 24000);
+    expect(await startAudio("user-1", "T2", 24000)).toMatchObject({ ok: false, error: "AUDIO_BUSY", session_id: "T1" });
+  });
+
+  it("returns the existing session for the same tab and rate", async () => {
+    const a = await startAudio("user-1", "T1", 24000);
+    const b = await startAudio("user-1", "T1", 24000);
+    expect((b as any).session).toBe((a as any).session);
+  });
+
+  it("restarts a dead daemon before checking the epoch", async () => {
+    await startAudio("user-1", "T1", 24000);
+    expect(fakePm.ensureDaemon).toHaveBeenCalled();
+  });
+
+  it("asks for a restart when chromium has no devices or an old epoch", async () => {
+    warm.get("user-1").audio.epoch = 0;
+    expect(await startAudio("user-1", "T1", 24000)).toMatchObject({ ok: false, error: "BROWSER_RESTART_REQUIRED" });
+    warm.get("user-1").audio = undefined;
+    expect(await startAudio("user-1", "T1", 24000)).toMatchObject({ ok: false, error: "BROWSER_RESTART_REQUIRED" });
+  });
+
+  it("with restart: true restarts chromium, reopens the url in a new tab, binds that tab", async () => {
+    warm.get("user-1").audio = undefined;
+    const fresh = fakeTab("T9");
+    bs.closeBrowserSession.mockImplementation(async () => { warm.set("user-1", warmWith(freshAudio())); });
+    bs.openTab.mockImplementation(async () => { tabs.set("T9", fresh); return { ok: true, tab: fresh }; });
+    const r = await startAudio("user-1", "T1", 24000, { restart: true });
+    expect(bs.closeBrowserSession).toHaveBeenCalledWith("user-1");
+    expect(bs.navigate).toHaveBeenCalledWith(fresh, "https://meet.example.com/abc-defg");
+    expect(r).toMatchObject({ ok: true, session_id: "T9", restarted: true });
+  });
+});
+
+describe("mic permission follows navigation", () => {
+  it("re-grants on a main-frame navigation to a new origin, ignores subframes", async () => {
+    await startAudio("user-1", "T1", 24000);
+    browser.send.mockClear();
+    const cdp = tabs.get("T1").cdp;
+    cdp.emit("Page.frameNavigated", { frame: { id: "sub", parentId: "main", url: "https://ads.example.net/x" } });
+    cdp.emit("Page.frameNavigated", { frame: { id: "main", url: "https://app.example.com/wc/123" } });
+    await vi.waitFor(() => expect(browser.send).toHaveBeenCalledWith("Browser.setPermission", {
+      permission: { name: "microphone" }, setting: "granted", origin: "https://app.example.com",
+    }));
+    expect(browser.send).not.toHaveBeenCalledWith("Browser.setPermission", expect.objectContaining({ origin: "https://ads.example.net" }));
+  });
+
+  it("revokes every granted origin when the session ends", async () => {
+    await startAudio("user-1", "T1", 24000);
+    tabs.get("T1").cdp.emit("Page.frameNavigated", { frame: { id: "main", url: "https://app.example.com/wc/123" } });
+    await vi.waitFor(() => expect(browser.send).toHaveBeenCalledTimes(3));
+    stopAudio("user-1", "T1");
+    await vi.waitFor(() => {
+      for (const origin of ["https://meet.example.com", "https://app.example.com"]) {
+        expect(browser.send).toHaveBeenCalledWith("Browser.setPermission", {
+          permission: { name: "microphone" }, setting: "prompt", origin,
+        });
+      }
+    });
+  });
+});
+
+describe("lifecycle", () => {
+  it("keeps the tab alive while audio runs", async () => {
+    await startAudio("user-1", "T1", 24000);
+    vi.advanceTimersByTime(KEEPALIVE_MS);
+    expect(bs.touchTab).toHaveBeenCalledWith("user-1", "T1");
+  });
+
+  it("stopAudio ends and reports; stop on an unbound tab returns zeros", async () => {
+    await startAudio("user-1", "T1", 24000);
+    expect(stopAudio("user-1", "T2")).toEqual({ played_ms: 0, duration_ms: 0 });
+    const r = stopAudio("user-1", "T1");
+    expect(r.played_ms).toBe(0);
+    expect(getAudio("user-1")).toBeUndefined();
+  });
+
+  it("closing the bound tab ends with tab_closed; another tab does not", async () => {
+    const r = (await startAudio("user-1", "T1", 24000)) as any;
+    bs.browserEvents.emit("tab-closed", "user-1", "T2");
+    expect(r.session.ended).toBeUndefined();
+    bs.browserEvents.emit("tab-closed", "user-1", "T1");
+    expect(r.session.ended).toBe("tab_closed");
+    expect(getAudio("user-1")).toBeUndefined();
+  });
+
+  it("chromium exit ends with browser_exit", async () => {
+    const r = (await startAudio("user-1", "T1", 24000)) as any;
+    bs.browserEvents.emit("session-exit", "user-1");
+    expect(r.session.ended).toBe("browser_exit");
+  });
+
+  it("daemon exit ends the session with audio_daemon_exit and unsubscribes", async () => {
+    const r = (await startAudio("user-1", "T1", 24000)) as any;
+    expect(fakePm.listenerCount("daemon-exit")).toBe(1);
+    fakePm.emit("daemon-exit");
+    expect(r.session.ended).toBe("audio_daemon_exit");
+    expect(fakePm.listenerCount("daemon-exit")).toBe(0);
+  });
+
+  it("initBrowserAudio is idempotent (one end per event)", async () => {
+    initBrowserAudio();
+    initBrowserAudio();
+    const r = (await startAudio("user-1", "T1", 24000)) as any;
+    const onEnd = vi.spyOn(r.session, "end");
+    bs.browserEvents.emit("session-exit", "user-1");
+    expect(onEnd).toHaveBeenCalledTimes(1);
+  });
+});
