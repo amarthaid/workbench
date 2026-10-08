@@ -29,7 +29,15 @@ export async function forwardAudioStream(opts: {
   const inbound = request.headers[SESSION_HEADER];
   if (verifySessionKey(Array.isArray(inbound) ? inbound[0] : inbound, userId)) return false;
 
-  const target = new URL(request.url, internal);
+  // Only the path and query come from the client; the origin is always ours.
+  // `new URL(request.url, internal)` would let an absolute-form target or a
+  // `//host/...` path pick the upstream and receive the caller's credentials.
+  const base = new URL(internal);
+  const u = new URL(request.raw.url ?? "/", "http://placeholder.invalid");
+  const target = new URL(base.origin);
+  target.pathname = u.pathname;
+  target.search = u.search;
+  if (target.origin !== base.origin) return false;
   const headers: Record<string, string> = { [SESSION_HEADER]: mintSessionKey(userId) };
   for (const h of PASS_THROUGH) {
     const v = request.headers[h];

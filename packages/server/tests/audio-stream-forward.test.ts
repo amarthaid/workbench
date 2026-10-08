@@ -3,6 +3,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import http from "node:http";
+import net from "node:net";
 
 const cfg = vi.hoisted(() => ({
   SERVER_PUBLIC_URL: "http://localhost:3000",
@@ -179,4 +180,26 @@ describe("forwardAudioStream", () => {
     }
     expect(status).toBe(200);
   }, 10_000);
+
+  for (const [label, target] of [["absolute-form", (p: number) => `http://127.0.0.1:${p}/api/browser/tabs/T1/audio/clear`], ["protocol-relative", (p: number) => `//127.0.0.1:${p}/api/browser/tabs/T1/audio/clear`]] as const) {
+    it(`never sends credentials to a host named in the request target (${label})`, async () => {
+      let hit = false;
+      const attacker = http.createServer((_q, r) => { hit = true; r.end(); });
+      await new Promise<void>((r) => attacker.listen(0, "127.0.0.1", r));
+      const aport = (attacker.address() as { port: number }).port;
+      const status = await new Promise<string>((resolve) => {
+        const sock = net.connect(Number(new URL(entryUrl).port), "127.0.0.1", () => {
+          sock.write(`POST ${target(aport)} HTTP/1.1\r\nHost: 127.0.0.1\r\nx-workbench-api-key: k1\r\ncontent-length: 0\r\nconnection: close\r\n\r\n`);
+        });
+        let buf = "";
+        sock.on("data", (d) => { buf += d; });
+        sock.on("close", () => resolve(buf.split("\r\n")[0]));
+        sock.on("error", () => resolve("error"));
+      });
+      await new Promise((r) => setTimeout(r, 200));
+      attacker.close();
+      expect(hit).toBe(false);
+      console.log(`[${label}] entry answered: ${status}`);
+    }, 10_000);
+  }
 });
