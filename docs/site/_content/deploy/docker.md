@@ -303,6 +303,17 @@ must not buffer or compress that stream: the server sends
 other proxies may need response buffering disabled explicitly. Read
 timeouts should exceed the 15s keepalive comment the stream emits.
 
+Browser audio (`BROWSER_AUDIO_ENABLED`) adds one long upload and one long
+download per call on `/api/browser/tabs/*/audio/*`. For those paths allow an
+unbounded request body (nginx `client_max_body_size 0;`, since the default 1m
+cuts the upload after about 22 s at 24 kHz), turn off request and response
+buffering (`proxy_request_buffering off;`, `proxy_buffering off;`), use
+`proxy_http_version 1.1;`, and set read and send timeouts at least as long as
+your longest call. On ingress-nginx: `proxy-body-size: "0"`,
+`proxy-request-buffering: "off"`, `proxy-buffering: "off"`, `proxy-read-timeout`
+and `proxy-send-timeout`, all under `nginx.ingress.kubernetes.io/`. Details in
+the [browser audio guide](../guides/browser-audio.md#reverse-proxy-settings).
+
 ### Multiple replicas
 
 A browser session is process-local, so a user's browser traffic has to reach the

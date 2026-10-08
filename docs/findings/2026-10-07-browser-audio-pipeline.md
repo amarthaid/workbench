@@ -52,8 +52,9 @@ Headless chromium has no audio devices.
   image's user, no extra flags beyond the documented spawn env): downlink tone
   440 Hz measured 440 to 442.5 Hz, uplink tone 880 Hz measured 877.5 Hz.
   Start-up was 0.4 to 2.75 s typical (one 9.9 s outlier). Dropouts after first
-  audio were 0 to 0.2 of 40 ms blocks (one run at 0.33). The downlink
-  measurement is retried once in the test. **Native Linux has not been measured;
+  audio were 0 to 0.2 of 40 ms blocks (one run at 0.33). A one-retry wrapper
+  for the downlink measurement is pending: the change is not yet verified in a
+  real run, so the numbers above are single attempts. **Native Linux has not been measured;
   that is a release gate.**
 - Operational lessons from getting that run: macOS has no `timeout` binary (an
   unbounded `docker exec` hung an agent for an hour; use a perl `alarm` shim). A

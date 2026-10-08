@@ -91,6 +91,26 @@ proxy can route inside a worker pool. Details in
 [Docker: multiple replicas](../deploy/docker.md#multiple-replicas) and
 [browser session pod affinity](../field-notes/2026-09-10-browser-session-pod-affinity.md).
 
+## Reverse proxy settings
+
+The uplink is a long request body and the downlink a long response, so a proxy
+tuned for short requests cuts calls off. In front of the audio endpoints
+(`/api/browser/tabs/*/audio/*`) set:
+
+```nginx
+client_max_body_size 0;        # default 1m cuts the uplink after ~22 s at 24 kHz
+proxy_request_buffering off;   # stream the body through
+proxy_buffering off;           # SSE downlink
+proxy_http_version 1.1;
+proxy_read_timeout 7200s;      # at least the longest call
+proxy_send_timeout 7200s;
+```
+
+ingress-nginx equivalents: `nginx.ingress.kubernetes.io/proxy-body-size: "0"`,
+`proxy-request-buffering: "off"`, `proxy-buffering: "off"`,
+`proxy-read-timeout: "7200"`, `proxy-send-timeout: "7200"`. Also see
+[Docker: reverse proxy](../deploy/docker.md#behind-a-reverse-proxy).
+
 ## Isolation
 
 Each user gets their own PulseAudio daemon, so a page in your browser can only
@@ -103,6 +123,6 @@ main-frame navigation. See the
 
 - One call per user at a time (`AUDIO_BUSY` names the tab that has it).
 - Audio from your other tabs is mixed into the stream.
-- A pod restart drops the connection with no `ended` event; reconnect and call `browser_audio_start` again. `ended{browser_exit}` means chromium itself exited.
+- A pod restart drops the connection with no `ended` event, and the old tab is gone with the browser. Call `browser_start` (or `browser_tabs`) for a new `session_id`, navigate or rejoin the call, then call `browser_audio_start` again. `ended{browser_exit}` means chromium itself exited.
 - Tell the people in the call they are talking to an agent. Recording and
   consent rules where you operate are yours to follow.
