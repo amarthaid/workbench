@@ -50,6 +50,16 @@ export interface AudioSessionOpts {
   onEnd?: (reason: EndReason) => void;
 }
 
+export interface Uplink {
+  /** Queue agent PCM. Resolves once the queue is under QUEUE_CAP_MS — the caller awaits it before reading more of the request body, which is the backpressure. */
+  write(chunk: Buffer): Promise<void>;
+  /** The agent finished sending: resolves when the queue has played out, or at once if the session ended. */
+  end(): Promise<{ played_ms: number }>;
+  /** The agent went away: drop what is queued and free the slot. */
+  abort(): void;
+  readonly sessionEnded: Promise<EndReason>;
+}
+
 export class AudioSession {
   readonly userId: string;
   readonly tabId: string;
@@ -66,6 +76,18 @@ export class AudioSession {
   private capBuf: Buffer = Buffer.alloc(0);
   private maxTimer?: ReturnType<typeof setTimeout>;
   protected totalPlayedBytes = 0;
+
+  private pacer?: ReturnType<typeof setInterval>;
+  private pacerStart = 0;
+  private ticksWritten = 0;
+  private queue: Buffer[] = [];
+  private queuedBytes = 0;
+  private uplink?: object;
+  private uplinkPlayedBytes = 0;
+  private lastMark = 0;
+  private wasBuffered = false;
+  private roomWaiters: Array<() => void> = [];
+  private drainWaiters: Array<() => void> = [];
 
   constructor(private readonly opts: AudioSessionOpts) {
     this.userId = opts.userId;
@@ -92,6 +114,10 @@ export class AudioSession {
     this.playback = io.playback(devices.mic, rate);
     this.playback.stdin?.on("error", () => { /* the exit handler reports it */ });
     this.playback.on("exit", () => { if (!this.ended) this.end("playback_failed"); });
+
+    this.pacerStart = Date.now();
+    this.pacer = setInterval(() => this.tick(), TICK_MS);
+    this.pacer.unref?.();
 
     this.maxTimer = setTimeout(() => this.end("max_duration"), this.opts.maxMs);
     this.maxTimer.unref?.();
@@ -143,6 +169,142 @@ export class AudioSession {
     try { this.opts.onEnd?.(reason); } catch { /* noop */ }
   }
 
-  /** Hook for the uplink half (Task 3) to release its waiters. */
-  protected onEnded(): void { /* overridden in Task 3 by direct edit */ }
+  protected onEnded(): void {
+    if (this.pacer) clearInterval(this.pacer);
+    this.dropQueue();
+    this.uplink = undefined;
+    this.wake(this.drainWaiters);
+  }
+
+  private get capBytes(): number {
+    return Math.round(this.bytesPerMs * QUEUE_CAP_MS);
+  }
+
+  private get tickBytes(): number {
+    return Math.round(this.bytesPerMs * TICK_MS);
+  }
+
+  private wake(list: Array<() => void>): void {
+    for (const w of list.splice(0)) w();
+  }
+
+  private dropQueue(): number {
+    const dropped = this.queuedBytes;
+    this.queue = [];
+    this.queuedBytes = 0;
+    this.wake(this.roomWaiters);
+    return dropped;
+  }
+
+  /**
+   * Hand pacat the frames real time says are due. Pacing lives here and not in
+   * pacat so the queue — and therefore clear() — stays in this process, where
+   * it can be emptied instantly. A stalled event loop catches up by at most
+   * MAX_CATCHUP_TICKS; the rest is skipped rather than burst into the mic.
+   */
+  private tick(): void {
+    if (this.ended) return;
+    const elapsedTicks = Math.floor((Date.now() - this.pacerStart) / TICK_MS);
+    let due = elapsedTicks - this.ticksWritten;
+    if (due > MAX_CATCHUP_TICKS) {
+      this.ticksWritten = elapsedTicks - MAX_CATCHUP_TICKS;
+      due = MAX_CATCHUP_TICKS;
+    }
+    for (let i = 0; i < due; i++) {
+      try { this.playback?.stdin?.write(this.takeFrame()); } catch { /* exit handler reports it */ }
+      this.ticksWritten += 1;
+    }
+    if (due > 0) this.afterPlay();
+  }
+
+  private takeFrame(): Buffer {
+    const n = this.tickBytes;
+    const out = Buffer.alloc(n); // zero = silence
+    let off = 0;
+    while (off < n && this.queue.length) {
+      const head = this.queue[0];
+      const take = Math.min(head.length, n - off);
+      head.copy(out, off, 0, take);
+      off += take;
+      if (take === head.length) this.queue.shift();
+      else this.queue[0] = head.subarray(take);
+    }
+    this.queuedBytes -= off;
+    this.uplinkPlayedBytes += off;
+    this.totalPlayedBytes += off;
+    return out;
+  }
+
+  private mark(): void {
+    this.lastMark = Date.now();
+    this.emit({
+      event: "playback",
+      data: {
+        played_ms: Math.round(this.uplinkPlayedBytes / this.bytesPerMs),
+        buffered_ms: Math.round(this.queuedBytes / this.bytesPerMs),
+      },
+    });
+  }
+
+  private afterPlay(): void {
+    if (this.queuedBytes < this.capBytes) this.wake(this.roomWaiters);
+    if (this.queuedBytes > 0) {
+      if (Date.now() - this.lastMark >= PLAYBACK_EVENT_MS) this.mark();
+    } else if (this.wasBuffered) {
+      this.mark();
+      this.wake(this.drainWaiters);
+    }
+    this.wasBuffered = this.queuedBytes > 0;
+  }
+
+  openUplink(): Uplink | "busy" | "ended" {
+    if (this.ended) return "ended";
+    if (this.uplink) return "busy";
+    const token = {};
+    this.uplink = token;
+    this.uplinkPlayedBytes = 0;
+    const mine = () => this.uplink === token;
+    const result = () => ({ played_ms: Math.round(this.uplinkPlayedBytes / this.bytesPerMs) });
+    return {
+      sessionEnded: this.whenEnded,
+      write: (chunk) => {
+        if (!mine() || this.ended || chunk.length === 0) return Promise.resolve();
+        this.queue.push(Buffer.from(chunk)); // copy: the caller may reuse its buffer
+        this.queuedBytes += chunk.length;
+        this.wasBuffered = true;
+        if (this.queuedBytes < this.capBytes) return Promise.resolve();
+        return new Promise<void>((r) => this.roomWaiters.push(r));
+      },
+      end: async () => {
+        if (mine() && !this.ended && this.queuedBytes > 0) {
+          await new Promise<void>((r) => this.drainWaiters.push(r));
+        }
+        const r = result();
+        if (mine()) this.uplink = undefined;
+        return r;
+      },
+      abort: () => {
+        if (!mine()) return;
+        this.dropQueue();
+        this.uplink = undefined;
+        this.wake(this.drainWaiters);
+      },
+    };
+  }
+
+  /** Interrupt: drop everything not yet played. */
+  clear(): { played_ms: number; cleared_ms: number } {
+    if (!this.uplink) return { played_ms: 0, cleared_ms: 0 };
+    const cleared = this.dropQueue();
+    const out = {
+      played_ms: Math.round(this.uplinkPlayedBytes / this.bytesPerMs),
+      cleared_ms: Math.round(cleared / this.bytesPerMs),
+    };
+    if (this.wasBuffered) {
+      this.wasBuffered = false;
+      this.mark();
+      this.wake(this.drainWaiters);
+    }
+    return out;
+  }
 }

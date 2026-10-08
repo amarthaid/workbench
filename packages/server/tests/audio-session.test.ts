@@ -176,3 +176,163 @@ describe("AudioSession end", () => {
     expect(s.ended).toBe("stopped");
   });
 });
+
+describe("AudioSession uplink pacing", () => {
+  // 24 kHz: 20 ms tick = 960 bytes, 1 ms = 48 bytes.
+  it("feeds pacat one 20 ms frame per tick, silence when the queue is empty", () => {
+    makeSession();
+    vi.advanceTimersByTime(60);
+    expect(play.written).toHaveLength(3);
+    for (const b of play.written) {
+      expect(b).toHaveLength(960);
+      expect(b.every((x: number) => x === 0)).toBe(true);
+    }
+  });
+
+  it("plays queued audio in order and counts played_ms", async () => {
+    const s = makeSession();
+    const up = s.openUplink();
+    if (typeof up === "string") throw new Error(up);
+    await up.write(Buffer.alloc(960 * 2, 7)); // 40 ms
+    vi.advanceTimersByTime(20);
+    expect(play.written.at(-1).every((x: number) => x === 7)).toBe(true);
+    vi.advanceTimersByTime(20);
+    vi.advanceTimersByTime(20);
+    expect(play.written.at(-1).every((x: number) => x === 0)).toBe(true);
+    const r = up.end();
+    await expect(r).resolves.toEqual({ played_ms: 40 });
+  });
+
+  it("joins chunks that split a sample without shifting the stream", async () => {
+    const s = makeSession();
+    const up = s.openUplink() as any;
+    const pcm = Buffer.alloc(960);
+    for (let i = 0; i < pcm.length; i += 2) pcm.writeInt16LE(1000, i);
+    await up.write(pcm.subarray(0, 301)); // odd split
+    await up.write(pcm.subarray(301));
+    vi.advanceTimersByTime(20);
+    const out: Buffer = play.written.at(-1);
+    for (let i = 0; i < out.length; i += 2) expect(out.readInt16LE(i)).toBe(1000);
+  });
+
+  it("end() waits for the queue to drain, then resolves", async () => {
+    const s = makeSession();
+    const up = s.openUplink() as any;
+    await up.write(Buffer.alloc(960 * 5)); // 100 ms
+    let done = false;
+    up.end().then(() => { done = true; });
+    vi.advanceTimersByTime(80);
+    await Promise.resolve();
+    expect(done).toBe(false);
+    vi.advanceTimersByTime(20);
+    await vi.waitFor(() => expect(done).toBe(true));
+  });
+
+  it("refuses a second uplink while one is open, accepts after it ends", async () => {
+    const s = makeSession();
+    const up = s.openUplink() as any;
+    expect(s.openUplink()).toBe("busy");
+    await up.end();
+    expect(typeof s.openUplink()).toBe("object");
+  });
+
+  it("abort() drops the queue and frees the slot", async () => {
+    const s = makeSession();
+    const up = s.openUplink() as any;
+    await up.write(Buffer.alloc(960 * 10));
+    up.abort();
+    vi.advanceTimersByTime(20);
+    expect(play.written.at(-1).every((x: number) => x === 0)).toBe(true);
+    expect(typeof s.openUplink()).toBe("object");
+  });
+
+  it("applies backpressure at the 120 s cap and releases it as audio plays", async () => {
+    const s = makeSession({ rate: 16000 }); // 32 bytes/ms; cap = 3_840_000 bytes
+    const up = s.openUplink() as any;
+    await up.write(Buffer.alloc(3_840_000 - 640));
+    let released = false;
+    up.write(Buffer.alloc(640 * 2)).then(() => { released = true; });
+    await Promise.resolve();
+    expect(released).toBe(false);
+    vi.advanceTimersByTime(40); // two ticks play 1280 bytes → under the cap
+    await vi.waitFor(() => expect(released).toBe(true));
+  });
+
+  it("emits playback marks every 200 ms while queued and once on drain", async () => {
+    const s = makeSession();
+    const got: AudioEvent[] = [];
+    s.subscribe((e) => got.push(e));
+    const up = s.openUplink() as any;
+    await up.write(Buffer.alloc(48 * 300)); // 300 ms
+    vi.advanceTimersByTime(400);
+    const marks = got.filter((e) => e.event === "playback") as any[];
+    expect(marks.length).toBeGreaterThanOrEqual(2);
+    expect(marks.at(-1).data).toEqual({ played_ms: 300, buffered_ms: 0 });
+    expect(marks.filter((m) => m.data.buffered_ms === 0)).toHaveLength(1);
+  });
+
+  it("catches up at most 5 ticks after an event-loop stall", () => {
+    makeSession();
+    vi.advanceTimersByTime(20);
+    const before = play.written.length;
+    // Simulate a 1 s stall: the clock jumps without the interval firing.
+    vi.setSystemTime(Date.now() + 1_000);
+    vi.advanceTimersByTime(20);
+    expect(play.written.length - before).toBeLessThanOrEqual(5 + 1);
+  });
+});
+
+describe("AudioSession clear", () => {
+  it("empties the queue at once and reports played and cleared ms", async () => {
+    const s = makeSession();
+    const up = s.openUplink() as any;
+    await up.write(Buffer.alloc(48 * 1000)); // 1 s
+    vi.advanceTimersByTime(200);
+    expect(s.clear()).toEqual({ played_ms: 200, cleared_ms: 800 });
+    vi.advanceTimersByTime(20);
+    expect(play.written.at(-1).every((x: number) => x === 0)).toBe(true);
+    await expect(up.end()).resolves.toEqual({ played_ms: 200 });
+  });
+
+  it("is a no-op with no uplink", () => {
+    const s = makeSession();
+    expect(s.clear()).toEqual({ played_ms: 0, cleared_ms: 0 });
+  });
+
+  it("played_ms restarts per uplink, totalPlayedMs does not", async () => {
+    const s = makeSession();
+    const a = s.openUplink() as any;
+    await a.write(Buffer.alloc(48 * 40));
+    vi.advanceTimersByTime(40);
+    await a.end();
+    const b = s.openUplink() as any;
+    await b.write(Buffer.alloc(48 * 20));
+    vi.advanceTimersByTime(20);
+    await expect(b.end()).resolves.toEqual({ played_ms: 20 });
+    expect(s.totalPlayedMs).toBe(60);
+  });
+});
+
+describe("AudioSession end with an open uplink", () => {
+  it("resolves a pending end(), a blocked write(), and sessionEnded", async () => {
+    const s = makeSession({ rate: 16000 });
+    const up = s.openUplink() as any;
+    await up.write(Buffer.alloc(3_840_000 - 32)); // just under the cap
+    const blocked = up.write(Buffer.alloc(64));    // crosses it: waits for room
+    const ending = up.end();
+    s.end("tab_closed");
+    await expect(blocked).resolves.toBeUndefined();
+    await expect(ending).resolves.toEqual({ played_ms: 0 });
+    await expect(up.sessionEnded).resolves.toBe("tab_closed");
+    expect(s.openUplink()).toBe("ended");
+  });
+
+  it("stops the pacer", () => {
+    const s = makeSession();
+    s.end("stopped");
+    const n = play.written.length;
+    vi.advanceTimersByTime(100);
+    expect(play.written.length).toBe(n);
+  });
+});
+
