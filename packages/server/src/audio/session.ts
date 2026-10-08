@@ -254,6 +254,12 @@ export class AudioSession {
 
   private afterPlay(): void {
     if (this.queuedBytes < this.capBytes) this.wake(this.roomWaiters);
+    // Treat lone trailing byte as drained if transitioning from buffered to empty/stray.
+    // Only drop if we have drain waiters (end() waiting) or after becoming too small to fill samples.
+    const isStray = this.queuedBytes < 2;
+    if (isStray && this.wasBuffered && this.drainWaiters.length > 0) {
+      if (this.queuedBytes === 1) this.dropQueue();
+    }
     if (this.queuedBytes > 0) {
       if (Date.now() - this.lastMark >= PLAYBACK_EVENT_MS) this.mark();
     } else if (this.wasBuffered) {

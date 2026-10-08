@@ -211,6 +211,21 @@ describe("AudioSession uplink pacing", () => {
     await expect(r).resolves.toEqual({ played_ms: 20 });
   });
 
+  it("end() resolves when called before ticks, even with odd-byte writes (C2 corner case)", async () => {
+    // C2 corner case: write(961) then end() immediately (before any tick fires).
+    // end() must not wait forever; after tick drains 960 bytes, the lone byte should
+    // trigger drain completion, not stall waiting for more data.
+    const s = makeSession();
+    const up = s.openUplink() as any;
+    await up.write(Buffer.alloc(961, 0));
+    const endPromise = up.end();
+    expect(play.written).toHaveLength(0); // no frames yet
+    vi.advanceTimersByTime(20); // tick drains 960 bytes, leaves 1 (should trigger drain path)
+    const result = await endPromise;
+    expect(result).toEqual({ played_ms: 20 });
+    expect(play.written).toHaveLength(1); // one frame played
+  });
+
   it("clock skew: backwards jump does not stall later ticks", async () => {
     // I1: inject a controllable clock, jump it backwards, verify frames still flow when time moves forward.
     let t = 0;
