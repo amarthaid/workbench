@@ -66,7 +66,7 @@ describe("chromium spawn with audio", () => {
   it("creates devices first and passes PULSE_SINK/PULSE_SOURCE + autoplay flag", async () => {
     const s = await ensureSession("user-1");
     expect(pmMock.createDevices).toHaveBeenCalledWith(KEY);
-    const [, opts] = spawnMock.mock.calls.at(-1);
+    const [, opts] = spawnMock.mock.calls.at(-1)!;
     expect(opts.env.PULSE_SINK).toBe(`wb_sink_${KEY}`);
     expect(opts.env.PULSE_SOURCE).toBe(`wb_src_${KEY}`);
     expect(opts.env.PULSE_SERVER).toBe("unix:/tmp/wb-pulse-test/native");
@@ -83,7 +83,7 @@ describe("chromium spawn with audio", () => {
   it("spawns without audio when the flag is off", async () => {
     cfg.BROWSER_AUDIO_ENABLED = false;
     const s = await ensureSession("user-2");
-    const [, opts] = spawnMock.mock.calls.at(-1);
+    const [, opts] = spawnMock.mock.calls.at(-1)!;
     expect(opts.env).toBeUndefined();
     expect(s.audio).toBeUndefined();
     expect(pulseFns.pulseFor).not.toHaveBeenCalled();
@@ -95,7 +95,7 @@ describe("chromium spawn with audio", () => {
     const s = await ensureSession("user-3");
     expect(s.audio).toBeUndefined();
     expect(pulseFns.releasePulse).toHaveBeenCalledWith(KEY, pmMock);
-    const [, opts] = spawnMock.mock.calls.at(-1);
+    const [, opts] = spawnMock.mock.calls.at(-1)!;
     expect(opts.env).toBeUndefined();
     await closeBrowserSession("user-3");
   });

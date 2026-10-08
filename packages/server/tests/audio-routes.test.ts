@@ -30,7 +30,7 @@ let app: FastifyInstance;
 let base: string;
 let session: AudioSession;
 let cap: any;
-const forward = vi.fn(async () => false);
+const forward = vi.fn(async (_o?: any) => false);
 
 beforeEach(async () => {
   cap = fakeProc();

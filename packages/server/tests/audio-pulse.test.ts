@@ -277,7 +277,7 @@ describe("PulseManager clients", () => {
     const captureProc = pm.capture("wb_sink_abcd1234abcd1234", 24000);
     const exitCalled = vi.fn();
     captureProc.on("exit", exitCalled);
-    captureProc.exitCode = -2; // Node.js sets exitCode before emitting error
+    (captureProc as any).exitCode = -2; // Node.js sets exitCode before emitting error
     captureProc.emit("error", new Error("ENOENT"));
     expect(exitCalled).toHaveBeenCalledTimes(1);
   });
@@ -288,7 +288,7 @@ describe("PulseManager clients", () => {
     const captureProc = pm.capture("wb_sink_abcd1234abcd1234", 24000);
     const exitCalled = vi.fn();
     captureProc.on("exit", exitCalled);
-    captureProc.exitCode = -2;
+    (captureProc as any).exitCode = -2;
     captureProc.emit("error", new Error("ENOENT"));
     expect(exitCalled).toHaveBeenCalledTimes(1);
     // Real exit follows error
