@@ -108,6 +108,8 @@ export interface IntegrationSummary {
   instance?: InstanceConfig;
   // Present for apikey integrations: the connect-time form field spec.
   apikeyFields?: ApiKeyField[];
+  // Custom headers apps: the configured header names (never the values).
+  headerNames?: string[];
 }
 
 export interface IntegrationDetail extends IntegrationSummary {
@@ -148,15 +150,38 @@ export async function fetchKeycloakAuthUrl(ticket?: string): Promise<{ url: stri
   return res.json();
 }
 
-export async function createCustomApp(name: string, baseUrl: string): Promise<{ app: { id: string; name: string; baseUrl: string; integration: string } }> {
+export interface HeaderRow { name: string; value: string }
+
+export async function createCustomApp(
+  name: string,
+  baseUrl: string,
+  headers?: HeaderRow[]
+): Promise<{ app: { id: string; name: string; baseUrl: string; integration: string; authType?: string; headerNames?: string[] } }> {
   const res = await fetch(`${API_URL}/api/custom-apps`, {
     method: "POST",
     headers: getHeaders(),
-    body: JSON.stringify({ name, baseUrl }),
+    body: JSON.stringify(headers ? { name, baseUrl, authType: "headers", headers } : { name, baseUrl }),
   });
   if (!res.ok) {
     const detail = (await res.json().catch(() => ({}))) as { error?: string };
     throw new Error(detail.error || "Failed to register custom app");
+  }
+  return res.json();
+}
+
+// A blank or omitted value keeps the stored one; header names left out are removed.
+export async function updateCustomAppHeaders(
+  id: string,
+  headers: { name: string; value?: string }[]
+): Promise<{ app: { id: string; name: string; headerNames: string[] } }> {
+  const res = await fetch(`${API_URL}/api/custom-apps/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: getHeaders(),
+    body: JSON.stringify({ headers }),
+  });
+  if (!res.ok) {
+    const detail = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(detail.error || "Failed to update headers");
   }
   return res.json();
 }

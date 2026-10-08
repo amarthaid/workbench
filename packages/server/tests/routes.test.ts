@@ -1,9 +1,11 @@
-import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 import Fastify from "fastify";
 import { registerApiRoutes } from "../src/api/routes";
 import { db } from "../src/db";
 import { registry } from "../src/plugins/registry";
 import { signConnectToken } from "../src/auth/connect-token";
+import { createCustomApp } from "../src/custom-apps/store";
+import { buildCustomAppAuthUrl } from "../src/custom-apps/oauth";
 import { stopReaper, createPending, getPending, _clearAll } from "../src/auth/connections";
 
 vi.mock("../src/config", () => ({
@@ -24,6 +26,23 @@ vi.mock("../src/config", () => ({
   },
 }));
 
+// No network discovery in route-shape tests: every custom app indexes to zero tools.
+vi.mock("../src/custom-apps/index", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/custom-apps/index")>()),
+  ensureIndex: vi.fn(async () => []),
+}));
+
+// Header-app verify goes through discoverTools; never touch the network.
+vi.mock("../src/custom-apps/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/custom-apps/client")>()),
+  discoverTools: vi.fn(async () => []),
+}));
+
+vi.mock("../src/custom-apps/oauth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/custom-apps/oauth")>()),
+  buildCustomAppAuthUrl: vi.fn(async () => "https://idp.example.com/authorize"),
+}));
+
 vi.mock("../src/auth/google", () => ({
   buildAuthUrl: vi.fn(() => "https://accounts.google.com/oauth?test=1"),
   handleCallback: vi.fn(),
@@ -35,7 +54,8 @@ vi.mock("../src/auth/keycloak", () => ({
   handleCallback: vi.fn(),
 }));
 
-vi.mock("../src/auth/plugin-oauth", () => ({
+vi.mock("../src/auth/plugin-oauth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/auth/plugin-oauth")>()),
   buildPluginAuthUrl: vi.fn(() => "https://example.com/oauth?plugin=1"),
   handlePluginCallback: vi.fn(),
   getPluginOAuthCreds: vi.fn(() => ({ clientId: "id", clientSecret: "secret" })),
@@ -1722,6 +1742,139 @@ describe("API routes", () => {
       await withPolicy({ mode: "allowlist", user_ids: ["user-1"] }, async () => {
         const res = await create(await buildApp());
         expect(res.statusCode).toBe(400); // missing name and baseUrl, not 403
+      });
+    });
+  });
+
+  describe("custom app integration shape", () => {
+    const SECRET = "tok-abc-secret-value";
+    async function seed() {
+      await db.run("DELETE FROM custom_apps");
+      const h = await createCustomApp({
+        userId: "user-1", name: "keyed", baseUrl: "https://mcp.example.com/mcp",
+        metadata: { authType: "headers" }, headers: [{ name: "X-Api-Key", value: SECRET }],
+      });
+      const o = await createCustomApp({
+        userId: "user-1", name: "oa", baseUrl: "https://o.example.com/mcp", metadata: {}, clientId: "c",
+      });
+      return { h, o };
+    }
+    const auth = { authorization: "Bearer valid-jwt" };
+
+    // All test files share one SQLite DB: leave no custom_apps rows for others.
+    afterEach(async () => {
+      await db.run("DELETE FROM custom_apps");
+      await db.run("DELETE FROM connections");
+    });
+
+    it("list route: headers app is apikey with header names and no values; OAuth app has none", async () => {
+      vi.spyOn(registry, "listIntegrations").mockReturnValue([]);
+      const { h, o } = await seed();
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/integrations", headers: auth });
+      expect(res.statusCode).toBe(200);
+      expect(res.body).not.toContain(SECRET);
+      const list = JSON.parse(res.body).integrations;
+      const hi = list.find((i: { name: string }) => i.name === `custom:${h.id}`);
+      const oi = list.find((i: { name: string }) => i.name === `custom:${o.id}`);
+      expect(hi).toMatchObject({ authType: "apikey", headerNames: ["X-Api-Key"], custom: true });
+      expect(oi.authType).toBe("oauth2");
+      expect(oi).not.toHaveProperty("headerNames");
+    });
+
+    it("detail route: same shape for both kinds", async () => {
+      const { h, o } = await seed();
+      const app = await buildApp();
+      const hr = await app.inject({ method: "GET", url: `/api/integrations/custom:${h.id}`, headers: auth });
+      expect(hr.statusCode).toBe(200);
+      expect(hr.body).not.toContain(SECRET);
+      expect(JSON.parse(hr.body)).toMatchObject({ authType: "apikey", headerNames: ["X-Api-Key"] });
+      const or = await app.inject({ method: "GET", url: `/api/integrations/custom:${o.id}`, headers: auth });
+      const ob = JSON.parse(or.body);
+      expect(ob.authType).toBe("oauth2");
+      expect(ob).not.toHaveProperty("headerNames");
+    });
+
+    it("auth route: refuses a headers app before any OAuth discovery; OAuth app unchanged", async () => {
+      const { h, o } = await seed();
+      vi.mocked(buildCustomAppAuthUrl).mockClear();
+      const app = await buildApp();
+      const hr = await app.inject({ method: "GET", url: `/api/auth/custom:${h.id}`, headers: auth });
+      expect(hr.statusCode).toBe(400);
+      expect(JSON.parse(hr.body).error).toBe("This app uses static headers; there is nothing to connect");
+      expect(buildCustomAppAuthUrl).not.toHaveBeenCalled();
+      const or = await app.inject({ method: "GET", url: `/api/auth/custom:${o.id}`, headers: auth });
+      expect(or.statusCode).toBe(200);
+      expect(JSON.parse(or.body)).toEqual({ type: "oauth2", url: "https://idp.example.com/authorize" });
+    });
+
+    it("disconnect route: refuses a headers app; OAuth app still disconnects", async () => {
+      const { h, o } = await seed();
+      const app = await buildApp();
+      const hr = await app.inject({ method: "DELETE", url: `/api/connections/custom:${h.id}`, headers: auth });
+      expect(hr.statusCode).toBe(400);
+      expect(JSON.parse(hr.body).error).toBe("Headers apps have no connection to disconnect — delete the app instead");
+      const or = await app.inject({ method: "DELETE", url: `/api/connections/custom:${o.id}`, headers: auth });
+      expect(or.statusCode).toBe(200);
+    });
+    describe("headers app create/update routes", () => {
+      const post = (app: Awaited<ReturnType<typeof buildApp>>, payload: unknown) =>
+        app.inject({ method: "POST", url: "/api/custom-apps", headers: auth, payload: payload as object });
+
+      it("POST creates a headers app: names only, never the value", async () => {
+        const res = await post(await buildApp(), {
+          name: "hdr", baseUrl: "https://mcp.example.com/mcp", authType: "headers",
+          headers: [{ name: "X-Api-Key", value: SECRET }],
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.body).not.toContain(SECRET);
+        expect(JSON.parse(res.body).app).toMatchObject({ name: "hdr", authType: "headers", headerNames: ["X-Api-Key"] });
+      });
+
+      it("POST with a bad header is 400", async () => {
+        const res = await post(await buildApp(), {
+          name: "hdr", baseUrl: "https://mcp.example.com/mcp", authType: "headers",
+          headers: [{ name: "Host", value: SECRET }],
+        });
+        expect(res.statusCode).toBe(400);
+        expect(res.body).not.toContain(SECRET);
+      });
+
+      it("PUT happy path returns names only", async () => {
+        const { h } = await seed();
+        const res = await (await buildApp()).inject({
+          method: "PUT", url: `/api/custom-apps/${h.id}`, headers: auth,
+          payload: { headers: [{ name: "X-Api-Key", value: "tok-rotated-value" }] },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.body).not.toContain("tok-rotated-value");
+        expect(JSON.parse(res.body).app).toEqual({ id: h.id, name: "keyed", headerNames: ["X-Api-Key"] });
+      });
+
+      it("PUT is 403 custom_apps_disabled when the policy is none", async () => {
+        const { h } = await seed();
+        const { saveSetting, resetSettingsForTest } = await import("../src/settings/instance-settings");
+        await saveSetting("custom_apps_policy", { mode: "none", user_ids: [] }, "u-admin");
+        try {
+          const res = await (await buildApp()).inject({
+            method: "PUT", url: `/api/custom-apps/${h.id}`, headers: auth,
+            payload: { headers: [{ name: "X-Api-Key", value: "x" }] },
+          });
+          expect(res.statusCode).toBe(403);
+          expect(JSON.parse(res.body)).toEqual({ error: "custom_apps_disabled" });
+        } finally {
+          await db.exec("DELETE FROM instance_settings");
+          resetSettingsForTest();
+        }
+      });
+
+      it("PUT on another user's app is 404", async () => {
+        const { h } = await seed();
+        const res = await (await buildApp()).inject({
+          method: "PUT", url: `/api/custom-apps/${h.id}`, headers: { authorization: "Bearer other-jwt" },
+          payload: { headers: [{ name: "X-Api-Key", value: "x" }] },
+        });
+        expect(res.statusCode).toBe(404);
       });
     });
   });

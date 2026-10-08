@@ -243,6 +243,7 @@ async function initSqliteSchema(db: DbAdapter): Promise<void> {
     "ALTER TABLE users ADD COLUMN api_key_sha TEXT",
     "ALTER TABLE pending_auth ADD COLUMN nonce TEXT",
     "ALTER TABLE users ADD COLUMN disabled_at INTEGER",
+    "ALTER TABLE custom_apps ADD COLUMN headers_enc BLOB",
   ]) {
     try {
       await db.exec(stmt);
@@ -280,6 +281,7 @@ async function initPostgresSchema(db: DbAdapter): Promise<void> {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS api_key_sha TEXT;
     ALTER TABLE pending_auth ADD COLUMN IF NOT EXISTS nonce TEXT;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled_at INTEGER;
+    ALTER TABLE custom_apps ADD COLUMN IF NOT EXISTS headers_enc BYTEA;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_keycloak_sub ON users(keycloak_sub) WHERE keycloak_sub IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_users_api_key_sha ON users(api_key_sha) WHERE api_key_sha IS NOT NULL;
   `);

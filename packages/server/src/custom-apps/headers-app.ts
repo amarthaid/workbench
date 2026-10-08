@@ -1,0 +1,94 @@
+import { randomUUID } from "node:crypto";
+import { normalizeBaseUrl } from "./ssrf";
+import { isOwnResource } from "./loop-guard";
+import { discoverTools, evictSession } from "./client";
+import { withTimeout, TimeoutError } from "./timeout";
+import { validateHeaders, headersToRecord } from "./headers";
+import {
+  createCustomApp, getCustomApp, listCustomApps, getCustomAppByName, isHeadersApp,
+  setCustomAppHeaders, type CustomApp,
+} from "./store";
+
+export class HeadersAppError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+  }
+}
+
+export type Verify = (userId: string, baseUrl: string, headers: Record<string, string>) => Promise<void>;
+
+const defaultVerify: Verify = async (userId, baseUrl, headers) => {
+  await discoverTools(userId, baseUrl, headers);
+};
+
+/** Add/edit verify is interactive; don't let the SDK's 60s-per-request default stall it. */
+export const VERIFY_TIMEOUT_MS = 15_000;
+
+/** Status-only: upstream error text can echo request details, so never forward it. */
+export function verifyFailureMessage(e: unknown): string {
+  if (e instanceof TimeoutError) return "Could not connect to the server with these headers";
+  const code = (e as { code?: unknown } | null)?.code;
+  if (typeof code === "number" && code >= 400 && code < 600) return `Server rejected the headers (HTTP ${code})`;
+  return "Could not connect to the server with these headers";
+}
+
+export async function createHeadersApp(
+  args: { userId: string; name: string; baseUrl: string; headers: unknown },
+  verify: Verify = defaultVerify
+): Promise<CustomApp> {
+  const name = args.name.trim();
+  if (!name || !args.baseUrl.trim()) throw new HeadersAppError(400, "name and baseUrl are required");
+  if (name.length > 64) throw new HeadersAppError(400, "name too long");
+  if (await getCustomAppByName(args.userId, name)) throw new HeadersAppError(409, `An app named "${name}" already exists`);
+
+  const baseUrl = normalizeBaseUrl(args.baseUrl.trim());
+  if (!baseUrl) throw new HeadersAppError(400, "Invalid or blocked URL");
+  if (isOwnResource(baseUrl)) throw new HeadersAppError(400, "This URL points back at this workbench");
+
+  const v = validateHeaders(args.headers);
+  if (!v.ok) throw new HeadersAppError(400, v.error);
+
+  try {
+    await withTimeout(VERIFY_TIMEOUT_MS, () => verify(args.userId, baseUrl, headersToRecord(v.headers)), "verify");
+  } catch (e) {
+    evictSession(args.userId, baseUrl);
+    throw new HeadersAppError(400, verifyFailureMessage(e));
+  }
+  try {
+    return await createCustomApp({
+      id: randomUUID(), userId: args.userId, name, baseUrl,
+      metadata: { authType: "headers" }, headers: v.headers,
+    });
+  } catch (e) {
+    if (!isUniqueViolation(e)) throw e;
+    // verify left a cached session with no row; drop it unless another app shares the URL
+    const others = await listCustomApps(args.userId);
+    if (!others.some((a) => a.baseUrl === baseUrl)) evictSession(args.userId, baseUrl);
+    throw new HeadersAppError(409, `An app named "${name}" already exists`);
+  }
+}
+
+function isUniqueViolation(e: unknown): boolean {
+  const err = e as { code?: unknown; message?: unknown } | null;
+  return err?.code === "23505" || (typeof err?.message === "string" && err.message.includes("UNIQUE constraint failed"));
+}
+
+export async function updateHeadersApp(
+  args: { userId: string; id: string; headers: unknown },
+  verify: Verify = defaultVerify
+): Promise<CustomApp> {
+  const app = await getCustomApp(args.userId, args.id);
+  if (!app) throw new HeadersAppError(404, "Custom app not found");
+  if (!isHeadersApp(app)) throw new HeadersAppError(400, "This app uses OAuth, not headers");
+
+  const v = validateHeaders(args.headers, app.headers);
+  if (!v.ok) throw new HeadersAppError(400, v.error);
+  try {
+    await withTimeout(VERIFY_TIMEOUT_MS, () => verify(args.userId, app.baseUrl, headersToRecord(v.headers)), "verify");
+  } catch (e) {
+    evictSession(args.userId, app.baseUrl);
+    throw new HeadersAppError(400, verifyFailureMessage(e));
+  }
+  const saved = await setCustomAppHeaders(args.userId, args.id, v.headers);
+  return saved!;
+}

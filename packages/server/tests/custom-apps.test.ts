@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { db } from "../src/db";
 import { normalizeBaseUrl, isBlockedHost } from "../src/custom-apps/ssrf";
 import { namespacedName } from "../src/custom-apps/index";
@@ -10,6 +10,9 @@ import {
   deleteCustomApp,
   integrationKey,
   idFromIntegrationKey,
+  isHeadersApp,
+  setCustomAppHeaders,
+  isCustomAppConnected,
 } from "../src/custom-apps/store";
 
 describe("app naming", () => {
@@ -65,6 +68,9 @@ describe("app URL guard", () => {
 });
 
 describe("app store", () => {
+  afterEach(async () => {
+    await db.run("DELETE FROM custom_apps");
+  });
   beforeEach(async () => {
     await db.run("DELETE FROM custom_apps");
   });
@@ -94,5 +100,102 @@ describe("app store", () => {
 
     await deleteCustomApp("u1", c.id);
     expect(await listCustomApps("u1")).toHaveLength(0);
+  });
+});
+
+describe("app store: header auth", () => {
+  afterEach(async () => {
+    await db.run("DELETE FROM custom_apps");
+  });
+  beforeEach(async () => {
+    await db.run("DELETE FROM custom_apps");
+  });
+
+  it("round-trips encrypted headers and flags the app as a headers app", async () => {
+    const c = await createCustomApp({
+      userId: "u1",
+      name: "keyed",
+      baseUrl: "https://mcp.example.com/mcp",
+      metadata: { authType: "headers" },
+      headers: [{ name: "X-Api-Key", value: "tok-abc" }],
+    });
+    expect(isHeadersApp(c)).toBe(true);
+    expect(c.headers).toEqual([{ name: "X-Api-Key", value: "tok-abc" }]);
+
+    // value is not stored in plaintext
+    const raw = await db.get<{ headers_enc: Buffer }>("SELECT headers_enc FROM custom_apps WHERE id = ?", [c.id]);
+    expect(Buffer.from(raw!.headers_enc).toString("utf8")).not.toContain("tok-abc");
+  });
+
+  it("loads a legacy row (no headers_enc, no authType) as an OAuth app", async () => {
+    const c = await createCustomApp({
+      userId: "u1",
+      name: "legacy",
+      baseUrl: "https://mcp.example.com/mcp",
+      metadata: { tokenEndpoint: "https://mcp.example.com/token" },
+      clientId: "cid",
+      clientSecret: "csecret",
+    });
+    expect(isHeadersApp(c)).toBe(false);
+    expect(c.headers).toBeUndefined();
+  });
+
+  it("replaces headers with setCustomAppHeaders and scopes by user", async () => {
+    const c = await createCustomApp({
+      userId: "u1",
+      name: "keyed",
+      baseUrl: "https://mcp.example.com/mcp",
+      metadata: { authType: "headers" },
+      headers: [{ name: "X-Api-Key", value: "tok-abc" }],
+    });
+    expect(await setCustomAppHeaders("u2", c.id, [{ name: "X-Api-Key", value: "evil" }])).toBeNull();
+    const updated = await setCustomAppHeaders("u1", c.id, [{ name: "X-Api-Key", value: "tok-new" }]);
+    expect(updated?.headers).toEqual([{ name: "X-Api-Key", value: "tok-new" }]);
+  });
+
+  it("degrades to no headers when the ciphertext is corrupt instead of throwing", async () => {
+    const c = await createCustomApp({
+      userId: "u1",
+      name: "keyed",
+      baseUrl: "https://mcp.example.com/mcp",
+      metadata: { authType: "headers" },
+      headers: [{ name: "X-Api-Key", value: "tok-abc" }],
+    });
+    await db.run("UPDATE custom_apps SET headers_enc = ? WHERE id = ?", [Buffer.from("garbage"), c.id]);
+    const again = await getCustomApp("u1", c.id);
+    expect(again).not.toBeNull();
+    expect(again!.headers).toEqual([]);
+  });
+});
+
+describe("isCustomAppConnected", () => {
+  beforeEach(async () => { await db.run("DELETE FROM custom_apps"); });
+  afterEach(async () => { await db.run("DELETE FROM custom_apps"); });
+
+  it("treats a headers app as connected without any connections row", async () => {
+    const c = await createCustomApp({
+      userId: "u1", name: "keyed", baseUrl: "https://mcp.example.com/mcp",
+      metadata: { authType: "headers" }, headers: [{ name: "X-Api-Key", value: "tok-abc" }],
+    });
+    expect(await isCustomAppConnected("u1", c)).toBe(true);
+  });
+
+  it("an OAuth app is connected only when a token row exists", async () => {
+    const c = await createCustomApp({ userId: "u1", name: "oa", baseUrl: "https://o.example.com/mcp", metadata: {}, clientId: "c" });
+    expect(await isCustomAppConnected("u1", c)).toBe(false);
+  });
+});
+
+describe("isCustomAppConnected with unreadable headers", () => {
+  afterEach(async () => { await db.run("DELETE FROM custom_apps"); });
+
+  it("a headers app whose ciphertext is corrupt reports NOT connected", async () => {
+    const c = await createCustomApp({
+      userId: "u1", name: "keyed", baseUrl: "https://mcp.example.com/mcp",
+      metadata: { authType: "headers" }, headers: [{ name: "X-Api-Key", value: "tok-abc" }],
+    });
+    await db.run("UPDATE custom_apps SET headers_enc = ? WHERE id = ?", [Buffer.from("garbage"), c.id]);
+    const again = (await getCustomApp("u1", c.id))!;
+    expect(await isCustomAppConnected("u1", again)).toBe(false);
   });
 });

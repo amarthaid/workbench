@@ -7,6 +7,7 @@ import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { safeFetch } from "./ssrf";
 import { withVia } from "./loop-guard";
 import { readVersion } from "../version";
+import { fingerprint } from "./headers";
 
 export interface RemoteTool {
   name: string;
@@ -30,27 +31,24 @@ const viaFetch = withVia(safeFetch);
 const TOOL_TIMEOUT_MS = 120_000;
 const TOOL_MAX_TOTAL_MS = 600_000;
 
-function authHeaders(token: string): { Authorization: string } {
-  return { Authorization: `Bearer ${token}` };
-}
-
 // Session cache: stateful MCP servers keep state in a session (Mcp-Session-Id),
 // so a fresh Client + initialize per call would lose it. Keyed by user:server;
-// a token change (refresh) closes the old session — its token is invalid for
-// the server anyway.
-const sessions = new Map<string, { client: Client; token: string }>();
+// a header change (token refresh, edited key) closes the old session — its
+// credentials are stale for the server anyway.
+const sessions = new Map<string, { client: Client; fp: string }>();
 
-async function getSession(userId: string, baseUrl: string, token: string): Promise<Client> {
+async function getSession(userId: string, baseUrl: string, headers: Record<string, string>): Promise<Client> {
   const key = `${userId}::${baseUrl}`;
+  const fp = fingerprint(headers);
   const existing = sessions.get(key);
-  if (existing && existing.token === token) return existing.client;
+  if (existing && existing.fp === fp) return existing.client;
   if (existing) await existing.client.close().catch(() => undefined);
 
   const client = new Client(CLIENT_INFO);
   try {
     await client.connect(
       new StreamableHTTPClientTransport(new URL(baseUrl), {
-        requestInit: { headers: authHeaders(token) },
+        requestInit: { headers },
         fetch: viaFetch,
       })
     );
@@ -64,16 +62,16 @@ async function getSession(userId: string, baseUrl: string, token: string): Promi
       const sse = new Client(CLIENT_INFO);
       await sse.connect(
         new SSEClientTransport(new URL(baseUrl), {
-          requestInit: { headers: authHeaders(token) },
+          requestInit: { headers },
           fetch: viaFetch,
         })
       );
-      sessions.set(key, { client: sse, token });
+      sessions.set(key, { client: sse, fp });
       return sse;
     }
     throw e;
   }
-  sessions.set(key, { client, token });
+  sessions.set(key, { client, fp });
   return client;
 }
 
@@ -88,7 +86,7 @@ export function evictSession(userId: string, baseUrl: string): void {
 }
 
 // A 404/410 means the server killed the session — evict so the next call
-// reconnects instead of reusing a dead client until the token changes.
+// reconnects instead of reusing a dead client until the headers change.
 async function withEviction<T>(userId: string, baseUrl: string, fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
@@ -100,8 +98,8 @@ async function withEviction<T>(userId: string, baseUrl: string, fn: () => Promis
   }
 }
 
-export async function discoverTools(userId: string, baseUrl: string, token: string): Promise<RemoteTool[]> {
-  const client = await getSession(userId, baseUrl, token);
+export async function discoverTools(userId: string, baseUrl: string, headers: Record<string, string>): Promise<RemoteTool[]> {
+  const client = await getSession(userId, baseUrl, headers);
   return withEviction(userId, baseUrl, async () => {
     const { tools } = await client.listTools();
     return tools.map((t) => {
@@ -120,11 +118,11 @@ export async function discoverTools(userId: string, baseUrl: string, token: stri
 export async function callRemoteTool(
   userId: string,
   baseUrl: string,
-  token: string,
+  headers: Record<string, string>,
   remoteName: string,
   args: Record<string, unknown>
 ): Promise<unknown> {
-  const client = await getSession(userId, baseUrl, token);
+  const client = await getSession(userId, baseUrl, headers);
   return withEviction(userId, baseUrl, async () => {
     const result = (await client.callTool(
       { name: remoteName, arguments: args },

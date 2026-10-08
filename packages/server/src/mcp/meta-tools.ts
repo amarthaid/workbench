@@ -6,8 +6,8 @@ import { auditLogger } from "../audit/logger";
 import { getToken } from "../auth/tokens";
 import { ensureIndex, getToolForUser, type IndexedTool } from "../custom-apps/index";
 import { rankTools } from "../plugins/search";
-import { getCustomApp, listCustomApps, integrationKey } from "../custom-apps/store";
-import { ensureCustomAppToken } from "../custom-apps/oauth";
+import { getCustomApp, listCustomApps, integrationKey, isCustomAppConnected } from "../custom-apps/store";
+import { resolveAuthHeaders, upstreamAuthHint, redactHeaderValues } from "../custom-apps/auth";
 import { callRemoteTool } from "../custom-apps/client";
 import { getUserById } from "../auth/users";
 import { hasValidCookies } from "../auth/cookie";
@@ -581,9 +581,9 @@ export async function executeCustomAppSingle(
         return { error: "CustomApp not found" };
       }
 
-      let accessToken: string;
+      let authHeaders: Record<string, string>;
       try {
-        accessToken = await ensureCustomAppToken(userId, app);
+        authHeaders = await resolveAuthHeaders(userId, app);
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         await auditLogger.log({
@@ -631,7 +631,7 @@ export async function executeCustomAppSingle(
 
       try {
         const result = scrubVaultValues(
-          await callRemoteTool(userId, app.baseUrl, accessToken, tool.remoteName, effectiveArgs),
+          await callRemoteTool(userId, app.baseUrl, authHeaders, tool.remoteName, effectiveArgs),
           scrubEntries,
           substringOk
         ) as { content?: Array<{ type?: string; text?: string }>; isError?: boolean };
@@ -640,11 +640,11 @@ export async function executeCustomAppSingle(
         if (result.isError) {
           // The remote MCP server reported a failed tool call — audit, metrics
           // and REST status must reflect that, not a 200 "success".
-          const errText = (result.content ?? [])
+          const errText = redactHeaderValues(app, (result.content ?? [])
             .filter((b) => b.type === "text")
             .map((b) => b.text ?? "")
             .join("\n")
-            .slice(0, 500) || "Remote tool returned isError";
+            .slice(0, 500)) || "Remote tool returned isError";
           await auditLogger.log({
             user_id: userId,
             integration: tool.integration,
@@ -673,7 +673,11 @@ export async function executeCustomAppSingle(
         toolExecutionDuration.observe({ integration: tool.integration, tool: tool.name, success: "true" }, durationS);
         return { result };
       } catch (e) {
-        const err = scrubString(e instanceof Error ? e.message : String(e), scrubEntries, substringOk);
+        const err = scrubString(
+          redactHeaderValues(app, upstreamAuthHint(app, e) ?? (e instanceof Error ? e.message : String(e))),
+          scrubEntries,
+          substringOk
+        );
         const duration_ms = Date.now() - start;
         await auditLogger.log({
           user_id: userId,
@@ -835,7 +839,7 @@ export const metaTools = [
           // see one consistent identifier.
           name: integrationKey(c.id),
           version: "MCP",
-          connected: !!(await getToken(ctx.userId, integrationKey(c.id))),
+          connected: await isCustomAppConnected(ctx.userId, c),
         }))
       );
       return { integrations: [...items, ...customAppItems] };
