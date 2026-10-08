@@ -37,6 +37,7 @@ export async function forwardAudioStream(opts: {
   const target = new URL(base.origin);
   target.pathname = u.pathname;
   target.search = u.search;
+  // Defensive: target is built from base.origin, so this should never trip.
   if (target.origin !== base.origin) return false;
   const headers: Record<string, string> = { [SESSION_HEADER]: mintSessionKey(userId) };
   for (const h of PASS_THROUGH) {

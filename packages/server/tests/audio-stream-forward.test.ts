@@ -199,7 +199,10 @@ describe("forwardAudioStream", () => {
       await new Promise((r) => setTimeout(r, 200));
       attacker.close();
       expect(hit).toBe(false);
-      console.log(`[${label}] entry answered: ${status}`);
+      // Absolute-form: Fastify routes the path, so 200 proves the forward ran and
+      // the owner answered (a router change cannot make this a silent no-op).
+      // A `//host/...` target matches no route and 404s before any forward.
+      expect(status).toBe(label === "absolute-form" ? "HTTP/1.1 200 OK" : "HTTP/1.1 404 Not Found");
     }, 10_000);
   }
 });
