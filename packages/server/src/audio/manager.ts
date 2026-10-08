@@ -116,7 +116,10 @@ async function doStart(
     return {
       ok: false,
       error: "AUDIO_BUSY",
-      detail: "audio is already running in another tab; call browser_audio_stop on it first",
+      detail:
+        existing.tabId === tabId
+          ? `audio is already running on session_id ${tabId} at ${existing.rate} Hz; call browser_audio_stop first`
+          : "audio is already running in another tab; call browser_audio_stop on it first",
       session_id: existing.tabId,
     };
   }
@@ -202,7 +205,9 @@ async function doStart(
     const frame = (p as { frame?: { parentId?: string; url?: string } }).frame;
     if (frame && !frame.parentId && frame.url) grant(originOf(frame.url));
   });
-  const keepAlive = setInterval(() => touchTab(userId, tabId), KEEPALIVE_MS);
+  const keepAlive = setInterval(() => {
+    if (session.attached) touchTab(userId, tabId);
+  }, KEEPALIVE_MS);
   keepAlive.unref?.();
   audio.pm.on("daemon-exit", onDaemonExit);
 

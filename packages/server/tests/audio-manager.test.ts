@@ -110,6 +110,19 @@ describe("startAudio", () => {
     expect(await startAudio("user-1", "T2", 24000)).toMatchObject({ ok: false, error: "AUDIO_BUSY", session_id: "T1" });
   });
 
+  it("says which rate is running when the same tab is asked for another", async () => {
+    await startAudio("user-1", "T1", 24000);
+    const r = (await startAudio("user-1", "T1", 16000)) as any;
+    expect(r).toMatchObject({ ok: false, error: "AUDIO_BUSY", session_id: "T1" });
+    expect(r.detail).toBe("audio is already running on session_id T1 at 24000 Hz; call browser_audio_stop first");
+  });
+
+  it("keeps the other-tab wording for a different tab", async () => {
+    await startAudio("user-1", "T1", 24000);
+    const r = (await startAudio("user-1", "T2", 24000)) as any;
+    expect(r.detail).toBe("audio is already running in another tab; call browser_audio_stop on it first");
+  });
+
   it("returns the existing session for the same tab and rate", async () => {
     const a = await startAudio("user-1", "T1", 24000);
     const b = await startAudio("user-1", "T1", 24000);
@@ -247,10 +260,20 @@ describe("races and failures", () => {
 });
 
 describe("lifecycle", () => {
-  it("keeps the tab alive while audio runs", async () => {
-    await startAudio("user-1", "T1", 24000);
+  it("keeps the tab alive only while a reader or an uplink is attached", async () => {
+    const r = (await startAudio("user-1", "T1", 24000)) as any;
+    vi.advanceTimersByTime(KEEPALIVE_MS * 3);
+    expect(bs.touchTab).not.toHaveBeenCalled();
+    const off = r.session.subscribe(() => undefined);
     vi.advanceTimersByTime(KEEPALIVE_MS);
     expect(bs.touchTab).toHaveBeenCalledWith("user-1", "T1");
+    bs.touchTab.mockClear();
+    off();
+    vi.advanceTimersByTime(KEEPALIVE_MS);
+    expect(bs.touchTab).not.toHaveBeenCalled();
+    r.session.openUplink();
+    vi.advanceTimersByTime(KEEPALIVE_MS);
+    expect(bs.touchTab).toHaveBeenCalledTimes(1);
   });
 
   it("stopAudio ends and reports; stop on an unbound tab returns zeros", async () => {

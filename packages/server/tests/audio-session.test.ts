@@ -404,3 +404,34 @@ describe("AudioSession end with an open uplink", () => {
   });
 });
 
+describe("attached", () => {
+  it("is true only while an SSE reader or an uplink is present", () => {
+    const s = makeSession();
+    expect(s.attached).toBe(false);
+    const off = s.subscribe(() => undefined);
+    expect(s.attached).toBe(true);
+    off();
+    expect(s.attached).toBe(false);
+    const up = s.openUplink() as any;
+    expect(s.attached).toBe(true);
+    up.abort();
+    expect(s.attached).toBe(false);
+  });
+
+  it("is false once the session ended", () => {
+    const s = makeSession();
+    s.subscribe(() => undefined);
+    s.end("stopped");
+    expect(s.attached).toBe(false);
+  });
+});
+
+describe("capture stream errors", () => {
+  it("an error on the capture stdout ends the session with capture_failed instead of crashing", () => {
+    const onEnd = vi.fn();
+    const s = makeSession({ onEnd });
+    expect(() => cap.stdout.emit("error", new Error("EPIPE"))).not.toThrow();
+    expect(s.ended).toBe("capture_failed");
+    expect(onEnd).toHaveBeenCalledWith("capture_failed");
+  });
+});

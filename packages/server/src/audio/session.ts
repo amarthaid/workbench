@@ -105,6 +105,11 @@ export class AudioSession {
     return (this.rate * 2) / 1000;
   }
 
+  /** An SSE reader or an uplink is attached: someone is on the call, so the tab counts as in use. */
+  get attached(): boolean {
+    return !this.ended && (this.subscriber !== undefined || this.uplink !== undefined);
+  }
+
   get totalPlayedMs(): number {
     return Math.round(this.totalPlayedBytes / this.bytesPerMs);
   }
@@ -113,6 +118,7 @@ export class AudioSession {
     const { io, devices, rate } = this.opts;
     this.capture = io.capture(devices.sink, rate);
     this.capture.stdout?.on("data", (c: Buffer) => this.onCapture(c));
+    this.capture.stdout?.on("error", () => this.end("capture_failed"));
     this.capture.on("exit", () => { if (!this.ended) this.end("capture_failed"); });
 
     this.playback = io.playback(devices.mic, rate);
