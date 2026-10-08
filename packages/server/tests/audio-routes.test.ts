@@ -190,6 +190,31 @@ describe("POST stream (uplink)", () => {
     await vi.waitFor(() => expect(typeof session.openUplink()).toBe("object"), { timeout: 2000 });
     expect(session.ended).toBeUndefined();
   });
+  it("frees the uplink slot when the client aborts after the body ended", { timeout: 10_000 }, async () => {
+    const req = httpRequest(`${base}/api/browser/tabs/T1/audio/stream`, {
+      method: "POST", headers: { ...H, "content-type": "audio/pcm", "transfer-encoding": "chunked" },
+    });
+    req.on("error", () => undefined);
+    req.end(Buffer.alloc(48 * 3000)); // ~3 s, still playing out when we hang up
+    await new Promise((r) => setTimeout(r, 300));
+    req.destroy();
+    await vi.waitFor(() => expect(typeof session.openUplink()).toBe("object"), { timeout: 1500 });
+    expect(session.ended).toBeUndefined();
+  });
+
+  it("accepts a parameterised, mixed-case media type", { timeout: 10_000 }, async () => {
+    const r = await fetch(`${base}/api/browser/tabs/T1/audio/stream`, {
+      method: "POST", headers: { ...H, "content-type": "Audio/PCM; rate=24000" }, body: Buffer.alloc(48 * 10),
+    });
+    expect(r.status).toBe(200);
+  });
+
+  it("415 for a media type that only starts with audio/pcm", async () => {
+    const r = await fetch(`${base}/api/browser/tabs/T1/audio/stream`, {
+      method: "POST", headers: { ...H, "content-type": "audio/pcmfoo" }, body: Buffer.alloc(10),
+    });
+    expect(r.status).toBe(415);
+  });
 });
 
 describe("POST clear", () => {

@@ -111,8 +111,8 @@ export async function registerAudioRoutes(app: FastifyInstance, overrides: Parti
     scope.post<Params>(`${base}/stream`, async (request, reply) => {
       const userId = await authenticate(request, reply);
       if (!userId) return reply;
-      const ct = String(request.headers["content-type"] ?? "");
-      if (!ct.startsWith("audio/pcm")) {
+      const mediaType = String(request.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase();
+      if (mediaType !== "audio/pcm") {
         return reply.code(415).send({ error: "unsupported_media_type", detail: "send Content-Type: audio/pcm (raw s16le mono)" });
       }
       const s = await resolve(userId, request, reply);
@@ -120,6 +120,10 @@ export async function registerAudioRoutes(app: FastifyInstance, overrides: Parti
       const up = s.openUplink();
       if (up === "busy") return reply.code(409).send({ error: "uplink_busy", detail: "another audio POST is open for this call" });
       if (up === "ended") return reply.code(404).send({ error: "audio_not_started" });
+
+      // The response's 'close', not the request's: IncomingMessage closes once
+      // the body is consumed, long before the queued audio has played out.
+      reply.raw.on("close", () => { if (!reply.raw.writableFinished) up.abort(); });
 
       const pump = (async () => {
         for await (const chunk of request.raw) {
@@ -132,6 +136,7 @@ export async function registerAudioRoutes(app: FastifyInstance, overrides: Parti
       ]);
       if (outcome === "aborted") {
         up.abort();
+        reply.hijack();
         return reply;
       }
       const result = await up.end();
