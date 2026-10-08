@@ -1,4 +1,5 @@
 import { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import WebSocket from "ws";
 import { config } from "../config";
@@ -6,7 +7,18 @@ import { activeProfiles, spawnProfileChromium, cdpCall, userProfileDir } from ".
 import { trimProfileCaches } from "./profile-disk";
 import { startProxyAuth, filterCookies } from "./cookie";
 import { configureDownloads, cancelDownloads } from "./browser-downloads";
+import { deviceKey, pulseFor, releasePulse, type PulseDevices, type PulseManager } from "../audio/pulse";
 import type { CookieData, RawCookie } from "./cookie";
+
+/**
+ * Tab and process lifecycle, for subsystems that hang state off a tab (the
+ * audio pipeline). An emitter rather than an import of those subsystems keeps
+ * this module free of cycles.
+ *   "tab-closed"   (userId, tabId)
+ *   "session-exit" (userId)
+ */
+export const browserEvents = new EventEmitter();
+browserEvents.setMaxListeners(50);
 
 // Persistent CDP client: one long-lived socket to a page target, many
 // request/response commands multiplexed by auto-incrementing id.
@@ -145,7 +157,10 @@ async function attachTab(s: WarmSession, targetId: string, wsUrl: string): Promi
     // Only this tab is gone. Never tear the session down from here: chromium
     // is still up and the other tabs are still driveable.
     const cur = s.tabs.get(targetId);
-    if (cur && cur.cdp === cdp) s.tabs.delete(targetId);
+    if (cur && cur.cdp === cdp) {
+      s.tabs.delete(targetId);
+      browserEvents.emit("tab-closed", s.userId, targetId);
+    }
   });
   await cdp.ready;
   const now = Date.now();
@@ -192,6 +207,13 @@ export interface WarmSession {
    * by anything that actually needs a download to land in the right place.
    */
   downloadRouting?: Promise<void>;
+  /**
+   * Virtual speaker/mic this chromium was spawned onto, when BROWSER_AUDIO_ENABLED.
+   * `pm` is this user's own PulseAudio daemon. `epoch` is the generation of
+   * THIS USER's daemon at spawn: a chromium from an older epoch is wired to a
+   * dead daemon and must restart before audio works.
+   */
+  audio?: { key: string; pm: PulseManager; devices: PulseDevices; epoch: number };
 }
 
 const warmSessions = new Map<string, WarmSession>();
@@ -224,8 +246,30 @@ async function startSession(userId: string): Promise<WarmSession> {
     throw new Error("BROWSER_SESSION_BUSY: a browser session is already active for this user");
   }
   activeProfiles.add(userId);
+  let audio: WarmSession["audio"];
   try {
-    const spawned = await spawnProfileChromium(userId, {});
+    // Devices must exist before spawn: chromium reads PULSE_SINK/PULSE_SOURCE
+    // once, at startup. A failure here costs the user audio, not the browser.
+    if (config.BROWSER_AUDIO_ENABLED) {
+      const key = deviceKey(userId);
+      const pm = pulseFor(key);
+      try {
+        const devices = await pm.createDevices(key);
+        audio = { key, pm, devices, epoch: pm.epoch };
+      } catch (e) {
+        console.warn(`[browser] audio devices unavailable:`, (e as Error).message);
+        void releasePulse(key).catch(() => undefined);
+      }
+    }
+    const spawned = await spawnProfileChromium(
+      userId,
+      audio
+        ? {
+            env: { ...audio.pm.clientEnv(), PULSE_SINK: audio.devices.sink, PULSE_SOURCE: audio.devices.source },
+            extraArgs: ["--autoplay-policy=no-user-gesture-required"],
+          }
+        : {}
+    );
     const proxyUser = process.env.CAPTURE_PROXY_USERNAME;
     const proxyPass = process.env.CAPTURE_PROXY_PASSWORD;
     const authWs =
@@ -243,6 +287,7 @@ async function startSession(userId: string): Promise<WarmSession> {
       defaultTabId: spawned.cdpPageTargetId,
       pendingOpens: 0,
       authWs,
+      audio,
     };
     await attachTab(session, spawned.cdpPageTargetId, spawned.cdpPageWsUrl);
     warmSessions.set(userId, session);
@@ -259,6 +304,9 @@ async function startSession(userId: string): Promise<WarmSession> {
       session.tabs.clear();
       try { session.browserCdp?.close(); } catch { /* noop */ }
       try { session.authWs?.close(); } catch { /* noop */ }
+      // Releases the whole per-user daemon; its devices die with it.
+      if (session.audio) void releasePulse(session.audio.key).catch(() => undefined);
+      browserEvents.emit("session-exit", userId);
       // The profile outlives the process on purpose — that's what keeps the user
       // logged in. Its caches don't: reclaim them here so disk cost tracks the
       // number of users, not the number of sessions they've ever run. Hooked on
@@ -270,6 +318,7 @@ async function startSession(userId: string): Promise<WarmSession> {
     return session;
   } catch (e) {
     activeProfiles.delete(userId);
+    if (audio) void releasePulse(audio.key).catch(() => undefined);
     throw e;
   }
 }
@@ -404,6 +453,7 @@ export async function closeTab(userId: string, tabId: string): Promise<boolean> 
   const tab = s?.tabs.get(tabId);
   if (!s || !tab) return false;
   s.tabs.delete(tabId);
+  browserEvents.emit("tab-closed", userId, tabId);
   try { tab.cdp.close(); } catch { /* noop */ }
   try {
     const browser = await browserClient(s);
@@ -453,6 +503,8 @@ export async function closeBrowserSession(userId: string): Promise<void> {
   warmSessions.delete(userId);
   activeProfiles.delete(userId);
   cancelDownloads(userId);
+  // The process exit handler emits again; listeners must be idempotent.
+  browserEvents.emit("session-exit", userId);
   for (const t of s.tabs.values()) { try { t.cdp.close(); } catch { /* noop */ } }
   s.tabs.clear();
   try { s.browserCdp?.close(); } catch { /* noop */ }
