@@ -1,15 +1,15 @@
 ---
 title: What is workbench?
-description: A self-hosted MCP server that puts 194 SaaS tools behind 9 meta-tools, with per-user OAuth for every integration.
+description: A self-hosted MCP server that puts 214 SaaS tools behind 9 meta-tools, with per-user OAuth for every integration.
 ---
 
 workbench is a self-hosted MCP server that sits between your agent and the SaaS
-tools it needs. It ships 16 integrations and 194 tools, holds a separate OAuth
+tools it needs. It ships 18 integrations and 214 tools, holds a separate OAuth
 connection per user per provider, and exposes all of it through **9 meta-tools** —
 so the agent's tool list stays the same size whether you have loaded one
 integration or all of them.
 
-The alternative is running one MCP server per service: sixteen processes, sixteen
+The alternative is running one MCP server per service: eighteen processes, eighteen
 credential setups, and every tool from every one of them flattened into the
 agent's context on connect.
 
@@ -20,7 +20,7 @@ flowchart TB
   Agent["Agent<br/>(Claude Code, any MCP client)"]
   MCP["POST /mcp<br/>one endpoint"]
   Meta["9 meta-tools<br/>search · schema · execute"]
-  Reg["Plugin registry<br/>16 integrations · 194 tools"]
+  Reg["Plugin registry<br/>18 integrations · 214 tools"]
   Portal["Portal<br/>connect · API keys · revoke"]
   Store[("Token store<br/>AES-256-GCM<br/>SQLite or PostgreSQL")]
   APIs["Third-party APIs<br/>Jira · GitHub · Slack · …"]
@@ -63,7 +63,7 @@ a half-response as complete.
 - [Quickstart](start/quickstart.md) — Local server, API key, connected agent, one pass.
 - [How it works](start/how-it-works.md) — Packages, request path, where tokens live.
 - [Core concepts](start/concepts.md) — Integration, plugin, tool, connection, registry.
-- [Integrations](integrations/index.md) — All 16, their scopes and their tools.
+- [Integrations](integrations/index.md) — All 18, their scopes and their tools.
 - [Build plugins](plugins/index.md) — The manifest, the context API, the four auth modes.
 - [Deploy](deploy/install.md) — Docker, Postgres, SSO, security, observability.
 :::
@@ -72,8 +72,8 @@ a half-response as complete.
 
 | | |
 |---|---|
-| Integrations | 16 on disk, plus 2 internal (`browser`, `jots`) |
-| Tools | 194 plugin tools, behind 9 meta-tools |
+| Integrations | 18 on disk, plus 2 internal (`browser`, `jots`) |
+| Tools | 214 plugin tools, behind 9 meta-tools |
 | Auth modes | `oauth2`, `apikey`, `cookie`, `none` |
 | Agent auth | Workbench API key, OAuth 2.1 (DCR + PKCE), or portal session |
 | Portal login | Google, Keycloak, or both (the agent OAuth flow is Google-only) |

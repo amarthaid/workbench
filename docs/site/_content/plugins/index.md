@@ -4,7 +4,7 @@ description: A plugin is a directory with a manifest and a set of tools. This se
 ---
 
 A plugin adds an integration to your workbench: a name, an auth method, and a set
-of tools an agent can call. The 16 shipped integrations are plugins, and yours
+of tools an agent can call. The 18 shipped integrations are plugins, and yours
 loads through exactly the same path — no fork, no PR, no rebuild.
 
 ## The two-file contract
