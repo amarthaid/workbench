@@ -1,9 +1,9 @@
 ---
 title: Tool catalog
-description: Every tool a stock install loads — 214 plugin tools across 18 integrations, plus 12 built-in tools.
+description: Every tool a stock install loads — 215 plugin tools across 18 integrations, plus 12 built-in tools.
 ---
 
-A stock install registers **226 tools**: 214 from the 18 built-in plugins, plus 9
+A stock install registers **227 tools**: 215 from the 18 built-in plugins, plus 9
 browser tools and 3 jots tools from the two internal plugins.
 
 None of them appear in MCP `tools/list` — that returns only the
@@ -28,7 +28,7 @@ arguments with `get_tool_schema`, and run it with `execute_tools`.
 | `httpbin-cookie` | cookie | no | 3 |
 | [`newrelic`](../integrations/newrelic.md) | apikey | yes | 13 |
 | [`slack`](../integrations/slack.md) | oauth2 | yes | 18 |
-| [`storybooks`](../integrations/storybooks.md) | apikey | no | 16 |
+| [`storybooks`](../integrations/storybooks.md) | apikey | no | 17 |
 | [`browser`](../integrations/browser.md) | none (internal) | no | 9 |
 | [`jots`](../integrations/jots.md) | none (internal) | no | 3 |
 
@@ -343,6 +343,7 @@ Reads a connected Storybook 8 static build. The credential stays on that origin.
 | `storybooks_preview_story` | Iframe URL on the connected origin |
 | `storybooks_get_catalog_summary` | Compact catalog |
 | `storybooks_get_design_tokens` | CSS custom properties from iframe stylesheets |
+| `storybooks_map_figma_component` | Match a Figma component name or node id to a Storybook component |
 | `storybooks_compare_versions` | Index diff against another public Storybook URL |
 | `storybooks_get_story_instructions` | CSF3 notes from the common title prefix |
 

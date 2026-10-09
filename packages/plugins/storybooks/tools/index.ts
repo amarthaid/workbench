@@ -11,6 +11,9 @@ import {
 import {
   componentName,
   encodeStoryArgs,
+  figmaLookup,
+  mapFigmaComponent,
+  parseFigmaMappings,
   extractArgTypes,
   extractCssVariables,
   extractPlainText,
@@ -542,6 +545,39 @@ export const compareVersions = {
         otherVariants: target.get(title) ?? [],
       }));
     return { connected: session.baseUrl, other: args.otherUrl, added, removed, changed };
+  },
+};
+
+export const mapFigma = {
+  name: "storybooks_map_figma_component",
+  description:
+    "Map a Figma component onto a Storybook component before writing UI. Pass figmaName (Button or Button / Primary), figmaNodeId, or a figmaUrl with node-id. An exact row in the connection's figmaMappings wins; otherwise the name is matched against story titles. Does not call the Figma API. Use the returned storyId with storybooks_get_component_config.",
+  integration: INTEGRATION,
+  inputSchema: z
+    .object({
+      figmaName: z.string().min(1).max(500).optional(),
+      figmaNodeId: z.string().min(1).max(200).optional(),
+      figmaUrl: z.string().url().max(1000).optional(),
+    })
+    .refine((value) => value.figmaName || value.figmaNodeId || value.figmaUrl, {
+      message: "Pass figmaName, figmaNodeId, or figmaUrl",
+    }),
+  handler: async (ctx: any, args: any) => {
+    const { entries } = await connectedEntries(ctx);
+    const raw = ctx.getConfig?.().figmaMappings;
+    const mappings = typeof raw === "string" && raw.trim() ? parseFigmaMappings(raw) : [];
+    const lookup = figmaLookup(args);
+    const mapped = mapFigmaComponent(entries, lookup, mappings);
+    return {
+      query: lookup,
+      match: mapped.match,
+      alternatives: mapped.alternatives,
+      note: mapped.match
+        ? undefined
+        : lookup.nodeId && !lookup.name
+          ? "No figmaMappings row for this node id. Add one on the Storybooks connection, or pass figmaName."
+          : "No Storybook component matched this Figma name. Add a figmaMappings row or rename the Figma component to the Storybook name.",
+    };
   },
 };
 

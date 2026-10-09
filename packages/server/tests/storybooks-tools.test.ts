@@ -12,6 +12,7 @@ import {
   compareVersions,
   getComponentConfig,
   listStories,
+  mapFigma,
   previewStory,
 } from "../../plugins/storybooks/tools/index";
 
@@ -144,6 +145,38 @@ describe("storybooks", () => {
     expect(connected?.headers.get("cookie")).toBe("session=abc");
     expect(other?.headers.get("cookie")).toBeNull();
     expect(other?.headers.get("authorization")).toBeNull();
+  });
+
+  it("maps a Figma name onto the Storybook component and prefers an explicit node mapping", async () => {
+    const byName = await mapFigma.handler(
+      ctx({ baseUrl: "https://sb.example.com/storybook", authType: "none" }),
+      { figmaName: "Button / Primary" }
+    );
+    expect(byName.match).toMatchObject({
+      source: "name",
+      storybookComponent: "Components/Button",
+      storyId: "components-button--primary",
+      suggestedProps: { variant: "primary" },
+    });
+
+    const mappings = JSON.stringify([
+      {
+        figmaNodeId: "12:34",
+        storybookComponent: "Components/Button",
+        storyId: "components-button--primary",
+        props: { variant: "secondary" },
+      },
+    ]);
+    const byNode = await mapFigma.handler(
+      ctx({ baseUrl: "https://sb.example.com/storybook", authType: "none", figmaMappings: mappings }),
+      { figmaUrl: "https://www.figma.com/design/abc/File?node-id=12-34" }
+    );
+    expect(byNode.match).toMatchObject({
+      source: "mapping",
+      confidence: "exact",
+      storyId: "components-button--primary",
+      suggestedProps: { variant: "secondary" },
+    });
   });
 
   it("refuses a path that leaves the Storybook base", () => {

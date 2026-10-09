@@ -3,7 +3,7 @@ export default {
   version: "1.0.0",
   displayName: "Storybooks",
   description:
-    "Browse a deployed Storybook 8 — stories, components, props, usage, and design tokens.",
+    "Browse a deployed Storybook 8 — stories, components, props, design tokens, and Figma component mapping.",
   logo: "logo.svg",
   categories: ["dev", "design"],
   auth: {
@@ -34,6 +34,22 @@ export default {
         description: "Required when auth type is basic. Ignored otherwise.",
         placeholder: "reader",
         optional: true,
+      },
+      {
+        key: "figmaMappings",
+        label: "Figma mappings",
+        description:
+          "Optional JSON array that pins a Figma component to a Storybook component. Each row needs storybookComponent plus figmaName, figmaNodeId, or figmaUrl. Used by storybooks_map_figma_component.",
+        placeholder: `[
+  {
+    "figmaName": "Button",
+    "figmaNodeId": "12:34",
+    "storybookComponent": "Components/Button",
+    "props": { "variant": "primary" }
+  }
+]`,
+        optional: true,
+        multiline: true,
       },
       {
         key: "credential",

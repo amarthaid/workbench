@@ -1,10 +1,10 @@
 ---
 title: What is workbench?
-description: A self-hosted MCP server that puts 214 SaaS tools behind 9 meta-tools, with per-user OAuth for every integration.
+description: A self-hosted MCP server that puts 215 SaaS tools behind 9 meta-tools, with per-user OAuth for every integration.
 ---
 
 workbench is a self-hosted MCP server that sits between your agent and the SaaS
-tools it needs. It ships 18 integrations and 214 tools, holds a separate OAuth
+tools it needs. It ships 18 integrations and 215 tools, holds a separate OAuth
 connection per user per provider, and exposes all of it through **9 meta-tools** —
 so the agent's tool list stays the same size whether you have loaded one
 integration or all of them.
@@ -20,7 +20,7 @@ flowchart TB
   Agent["Agent<br/>(Claude Code, any MCP client)"]
   MCP["POST /mcp<br/>one endpoint"]
   Meta["9 meta-tools<br/>search · schema · execute"]
-  Reg["Plugin registry<br/>18 integrations · 214 tools"]
+  Reg["Plugin registry<br/>18 integrations · 215 tools"]
   Portal["Portal<br/>connect · API keys · revoke"]
   Store[("Token store<br/>AES-256-GCM<br/>SQLite or PostgreSQL")]
   APIs["Third-party APIs<br/>Jira · GitHub · Slack · …"]
@@ -73,7 +73,7 @@ a half-response as complete.
 | | |
 |---|---|
 | Integrations | 18 on disk, plus 2 internal (`browser`, `jots`) |
-| Tools | 214 plugin tools, behind 9 meta-tools |
+| Tools | 215 plugin tools, behind 9 meta-tools |
 | Auth modes | `oauth2`, `apikey`, `cookie`, `none` |
 | Agent auth | Workbench API key, OAuth 2.1 (DCR + PKCE), or portal session |
 | Portal login | Google, Keycloak, or both (the agent OAuth flow is Google-only) |

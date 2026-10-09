@@ -3,7 +3,7 @@ title: Integrations
 description: Every integration workbench ships with, how connecting works, and the conventions every provider setup follows.
 ---
 
-An integration is a plugin: a manifest that declares how to authenticate, plus a set of tools your agent can call. A stock install loads **18 plugins from disk (214 tools)**. It adds **two internal plugins built into the server**: `browser` (9 tools) and `jots` (5 tools). That is 228 tools behind one MCP endpoint. An agent reaches them through `execute_tools` rather than a list: `tools/list` on `/mcp` returns only the 9 meta-tools.
+An integration is a plugin: a manifest that declares how to authenticate, plus a set of tools your agent can call. A stock install loads **18 plugins from disk (215 tools)**. It adds **two internal plugins built into the server**: `browser` (9 tools) and `jots` (5 tools). That is 229 tools behind one MCP endpoint. An agent reaches them through `execute_tools` rather than a list: `tools/list` on `/mcp` returns only the 9 meta-tools.
 
 Credentials are per user. As the operator, you register one OAuth app per integration. Each user then grants their own access. The server stores each user's tokens encrypted against their own account.
 
@@ -20,7 +20,7 @@ Credentials are per user. As the operator, you register one OAuth app per integr
 | `asana` | OAuth 2.0 | 8 | [Asana](asana.md) |
 | `newrelic` | API key | 13 | [New Relic](newrelic.md) |
 | `clevertap` | API key (multi-project) | 19 | [CleverTap](clevertap.md) |
-| `storybooks` | API key (Storybook URL) | 16 | [Storybooks](storybooks.md) |
+| `storybooks` | API key (Storybook URL) | 17 | [Storybooks](storybooks.md) |
 | `google-gmail` | OAuth 2.0 | 8 | [Google tools](google-tools.md) |
 | `google-drive` | OAuth 2.0 | 8 | [Google tools](google-tools.md) |
 | `google-docs` | OAuth 2.0 | 5 | [Google tools](google-tools.md) |

@@ -3,7 +3,7 @@ title: Discovering tools
 description: How an agent finds the right tool among hundreds without loading every schema into its context.
 ---
 
-A stock workbench install loads 18 plugins with 214 tools, plus 12 more from the two
+A stock workbench install loads 18 plugins with 215 tools, plus 12 more from the two
 built-in integrations. If the MCP endpoint listed all of them, every conversation would
 start by burning tens of thousands of tokens on schemas the agent will never call — and
 most clients degrade badly once a tool list gets long.

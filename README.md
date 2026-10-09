@@ -3,7 +3,7 @@
 <img src="docs/assets/brand/lockup-light.svg#gh-light-mode-only" alt="workbench" height="40">
 <img src="docs/assets/brand/lockup-dark.svg#gh-dark-mode-only" alt="workbench" height="40">
 
-**Self-hosted MCP tool aggregator.** One endpoint, per-user OAuth, 214 tools across 18 integrations — behind 9 meta-tools.
+**Self-hosted MCP tool aggregator.** One endpoint, per-user OAuth, 215 tools across 18 integrations — behind 9 meta-tools.
 
 [**Website**](https://barockok.github.io/workbench/) ·
 [**Documentation**](docs/site/_content/index.md) ·
@@ -30,7 +30,7 @@ flowchart LR
   Agent["Agent"] -->|JSON-RPC| MCP["POST /mcp"]
   Script["Script / cron"] -->|plain JSON| REST["POST /rest/:integration"]
   MCP --> Meta["9 meta-tools"]
-  Meta --> Reg["Plugin registry<br/>18 integrations · 214 tools"]
+  Meta --> Reg["Plugin registry<br/>18 integrations · 215 tools"]
   REST --> Reg
   Reg -->|credential injected| APIs["Jira · GitHub · Slack · Google · …"]
   Portal["Portal"] --> Store[("Encrypted tokens")]
@@ -79,7 +79,7 @@ The docs are the product surface — start there, not here.
 | | |
 |---|---|
 | Integrations | 18 on disk, plus 2 internal (`browser`, `jots`) |
-| Tools | 214 plugin tools, reached through 9 meta-tools |
+| Tools | 215 plugin tools, reached through 9 meta-tools |
 | Auth modes | `oauth2`, `apikey`, `cookie`, `none` |
 | Agent auth | Workbench API key or OAuth 2.1 (dynamic registration + PKCE) |
 | Portal SSO | Google, Keycloak, or both |
