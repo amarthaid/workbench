@@ -40,7 +40,7 @@ the jots filesystem.
 ## Step 2 — built-ins by hardcoded list
 
 There is no directory scan for built-ins. The loader iterates a literal array of
-16 names:
+18 names:
 
 ```
 google-gmail        atlassian-jira          asana
@@ -49,7 +49,8 @@ google-sheets       atlassian-bitbucket     gitlab
 google-calendar                             slack
 google-gemini                               newrelic
 google-docs                                 httpbin-cookie
-google-slides
+google-slides                               clevertap
+                                            storybooks
 ```
 
 Adding a directory under `packages/plugins/` without adding its name to that
@@ -139,7 +140,7 @@ collision check, no warning.
   plugins load *after* built-ins, yours would win, silently breaking GitHub.
 
 Prefix every tool name with your integration's identity, and keep the prefix
-distinct from the 16 shipped ones.
+distinct from the 18 shipped ones.
 
 ## There is no hot reload
 

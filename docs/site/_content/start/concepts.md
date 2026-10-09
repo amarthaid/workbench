@@ -37,7 +37,7 @@ and mount. See [Build plugins](../plugins/index.md).
 
 One callable operation, with a globally unique slug, a description, its owning
 integration, a Zod input schema, and a handler. `jira_create_issue`,
-`github_list_prs`, `slack_send_message`. 194 ship across the 16 plugins.
+`github_list_prs`, `slack_send_message`. 215 ship across the 18 plugins.
 
 Tool names are a flat global namespace across all loaded plugins, and registration
 overwrites by name — a later plugin silently wins a collision. Prefix your tools
