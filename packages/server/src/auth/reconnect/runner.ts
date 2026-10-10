@@ -30,12 +30,52 @@ export const __deps = {
   GOTO_SETTLE_MS: 500,
 };
 
-/** False inside the cooldown that follows a failed attempt. */
+/**
+ * False inside the cooldown that follows a recipe run that failed, or that
+ * succeeded but is being asked to run again (its session died within the
+ * window, so the "success" predicted nothing). A fast-path success holds
+ * nothing: it typed no credential. A portal-session clear after the run lifts it.
+ */
 export function canAttemptReconnect(state: ReconnectState, now = Date.now()): boolean {
-  return !(state.last && !state.last.ok && now - state.last.at < RECONNECT_COOLDOWN_MS);
+  const last = state.last;
+  if (!last) return true;
+  if (state.clearedAt !== undefined && state.clearedAt >= last.at) return true;
+  if (now - last.at >= RECONNECT_COOLDOWN_MS) return true;
+  return last.ok && !last.recipe;
 }
 
 const locks = new Map<string, Promise<ReconnectOutcome>>();
+
+/**
+ * The last recipe run per user+integration, kept in this process as well as
+ * in connections.config. The DB copy dies with the row, and DELETE
+ * /api/connections/:i plus session import both take an API key, so an agent
+ * could otherwise drop the row and re-import to reset the cooldown (or delete
+ * it mid-run so the failure is never written). Recipes only run on the
+ * process that owns the user's chromium (affinity.ts), so this copy is
+ * consulted wherever a run can start.
+ */
+const lastRuns = new Map<string, NonNullable<ReconnectState["last"]>>();
+
+function rememberRun(key: string, last: NonNullable<ReconnectState["last"]>): void {
+  const now = Date.now();
+  for (const [k, v] of lastRuns) if (now - v.at >= RECONNECT_COOLDOWN_MS) lastRuns.delete(k);
+  lastRuns.set(key, last);
+}
+
+/** DB state, with this process's newer run in `last` unless a portal clear came after it. */
+function withRemembered(key: string, state: ReconnectState): ReconnectState {
+  const mem = lastRuns.get(key);
+  if (!mem) return state;
+  if (state.clearedAt !== undefined && state.clearedAt >= mem.at) return state;
+  if (state.last && state.last.at >= mem.at) return state;
+  return { ...state, last: mem };
+}
+
+/** Test seam: forget this process's record of recent recipe runs. */
+export function __resetRunMemory(): void {
+  lastRuns.clear();
+}
 
 export async function reconnectSession(userId: string, integration: string): Promise<ReconnectOutcome> {
   const auth = registry.getIntegration(integration)?.auth;
@@ -142,8 +182,13 @@ function warn(what: string, code: string): void {
 }
 
 async function attempt(userId: string, integration: string, auth: RecipeAuth): Promise<ReconnectOutcome> {
+  const key = `${userId}:${integration}`;
   const state = await getReconnectState(userId, integration);
-  if (!canAttemptReconnect(state)) return { ok: false, reason: "COOLDOWN" };
+  if (!canAttemptReconnect(withRemembered(key, state))) {
+    // Only ever asked on a dead or expired session: keep it marked dead.
+    await updateReconnectState(userId, integration, { deadAt: Date.now() });
+    return { ok: false, reason: "COOLDOWN" };
+  }
   // A human mid-connect owns the browser. `activeProfiles` is not this signal:
   // a warm chromium holds it for its whole life.
   if (isConnectInProgress(userId)) return { ok: false, reason: "BUSY" };
@@ -228,7 +273,7 @@ async function attempt(userId: string, integration: string, auth: RecipeAuth): P
       if (!href || href.startsWith(auth.loginUrl)) throw new StepError("PROBE_FAILED");
     }
     if (usedNames.length) await touchUsed(userId, usedNames).catch(() => warn("vault touchUsed", "TOUCH_FAILED"));
-    return await commit(userId, integration, data, started);
+    return await commit(userId, integration, data, started, key);
   } catch (e) {
     // Stop every orphaned step from acting, and take the page away from it,
     // before spending time on the state and audit writes.
@@ -237,7 +282,9 @@ async function attempt(userId: string, integration: string, auth: RecipeAuth): P
     if (e instanceof RunBusy) return { ok: false, reason: "BUSY" };
     const reason: ReconnectReason = e instanceof StepError ? e.reason : "BROWSER_ERROR";
     const now = Date.now();
-    await updateReconnectState(userId, integration, { deadAt: now, last: { at: now, ok: false, error: `${phase}: ${reason}` } });
+    const last = { at: now, ok: false, error: `${phase}: ${reason}` };
+    rememberRun(key, last); // first: the DB write below may write nothing (row gone) or throw
+    await updateReconnectState(userId, integration, { deadAt: now, last });
     await auditLogger
       .log({ user_id: userId, integration, action: "REFRESH", success: false, error: reason, duration_ms: now - started })
       .catch(() => warn("audit log REFRESH", reason));
@@ -251,9 +298,18 @@ function stepTimeout(step: ReconnectStep): number {
   return ("timeoutMs" in step && step.timeoutMs) || DEFAULT_STEP_MS;
 }
 
-async function commit(userId: string, integration: string, data: CookieData, started: number): Promise<ReconnectOutcome> {
+/** `recipeKey` is set when the recipe ran (credentials typed): that success holds the cooldown too. */
+async function commit(
+  userId: string,
+  integration: string,
+  data: CookieData,
+  started: number,
+  recipeKey?: string
+): Promise<ReconnectOutcome> {
+  const last = { at: Date.now(), ok: true, ...(recipeKey ? { recipe: true } : {}) };
+  if (recipeKey) rememberRun(recipeKey, last);
   await storeCookies(userId, integration, data); // clears deadAt
-  await updateReconnectState(userId, integration, { last: { at: Date.now(), ok: true } });
+  await updateReconnectState(userId, integration, { last });
   await auditLogger
     .log({ user_id: userId, integration, action: "REFRESH", success: true, duration_ms: Date.now() - started })
     .catch(() => warn("audit log REFRESH", "OK"));

@@ -9,7 +9,14 @@ export interface ReconnectState {
   bindings?: Record<string, string>;
   /** epoch ms when the session was found dead and not recovered */
   deadAt?: number;
-  last?: { at: number; ok: boolean; error?: string };
+  /** `recipe`: the success came from running the recipe (it typed credentials), not the fast path. */
+  last?: { at: number; ok: boolean; error?: string; recipe?: boolean };
+  /**
+   * epoch ms of the last portal-session clear (a human reconnected by hand or
+   * changed the bindings). Recipe runs before it no longer hold a cooldown.
+   * Only portal-session paths write it.
+   */
+  clearedAt?: number;
 }
 
 type ConfigRead =

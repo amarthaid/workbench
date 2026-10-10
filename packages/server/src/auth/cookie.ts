@@ -124,13 +124,18 @@ export async function storeCookies(userId: string, integration: string, data: Co
 }
 
 /**
- * Drop a failed attempt (and so its cooldown), keeping a success. Call only
- * on a path a signed-in human drove (portal session): a manual reconnect
- * there means the stale "Auto-reconnect failed" no longer applies.
+ * Drop a failed attempt (and so its cooldown), keeping a success, and stamp
+ * `clearedAt` so a run the runner only remembers in memory (the row was
+ * deleted and re-imported since) stops holding too. Call only on a path a
+ * signed-in human drove (portal session): a manual reconnect there means the
+ * stale "Auto-reconnect failed" no longer applies.
  */
 export async function clearReconnectFailure(userId: string, integration: string): Promise<void> {
   const { last } = await getReconnectState(userId, integration);
-  if (last && !last.ok) await updateReconnectState(userId, integration, { last: undefined });
+  await updateReconnectState(userId, integration, {
+    clearedAt: Date.now(),
+    ...(last && !last.ok ? { last: undefined } : {}),
+  });
 }
 
 export async function getCookies(userId: string, integration: string): Promise<CookieData | null> {

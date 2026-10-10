@@ -214,6 +214,29 @@ describe("auto-reconnect bindings API", () => {
       expect((await getReconnectState(USER, "acme")).last).toBeUndefined();
     });
 
+    it("DELETE via API key inside the cooldown is refused and keeps the row (no delete + import reset)", async () => {
+      const r = await app.inject({
+        method: "DELETE", url: "/api/connections/acme", headers: { "x-workbench-api-key": "valid-api-key" },
+      });
+      expect(r.statusCode).toBe(409);
+      expect(r.json().error).toBe("RECONNECT_COOLDOWN");
+      expect((await getReconnectState(USER, "acme")).last).toEqual(failed);
+    });
+
+    it("DELETE via API key is allowed once the cooldown is over", async () => {
+      await updateReconnectState(USER, "acme", { last: { ...failed, at: Date.now() - 600_001 } });
+      const r = await app.inject({
+        method: "DELETE", url: "/api/connections/acme", headers: { "x-workbench-api-key": "valid-api-key" },
+      });
+      expect(r.statusCode).toBe(200);
+      expect(await db.get("SELECT 1 AS one FROM connections WHERE user_id = ? AND integration = 'acme'", [USER])).toBeUndefined();
+    });
+
+    it("DELETE via portal session inside the cooldown is allowed", async () => {
+      const r = await app.inject({ method: "DELETE", url: "/api/connections/acme", headers: auth });
+      expect(r.statusCode).toBe(200);
+    });
+
     it("capture via API key keeps the failure", async () => {
       const r = await app.inject({
         method: "POST", url: "/api/auth/cookie/acme/capture", headers: { "x-workbench-api-key": "valid-api-key" },

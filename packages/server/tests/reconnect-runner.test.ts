@@ -85,12 +85,12 @@ import { db } from "../src/db";
 import { config } from "../src/config";
 import { registry } from "../src/plugins/registry";
 import { activeProfiles } from "../src/auth/profile-chromium";
-import { storeCookies } from "../src/auth/cookie";
+import { storeCookies, clearReconnectFailure } from "../src/auth/cookie";
 import { closePrivateTab, openPrivateTab } from "../src/auth/browser-session";
 import { touchUsed } from "../src/vault/store";
 import { getReconnectState, updateReconnectState } from "../src/auth/reconnect/state";
 import { markConnectStarted, markConnectEnded } from "../src/auth/reconnect/connect-lock";
-import { reconnectSession, canAttemptReconnect, ensureCookieSession, __deps, RECONNECT_COOLDOWN_MS } from "../src/auth/reconnect/runner";
+import { reconnectSession, canAttemptReconnect, ensureCookieSession, __deps, __resetRunMemory, RECONNECT_COOLDOWN_MS } from "../src/auth/reconnect/runner";
 import { runWithBrowserAffinity, mayOwnBrowser } from "../src/auth/reconnect/affinity";
 
 const { pageState, sent, live, vault } = h;
@@ -139,6 +139,7 @@ beforeEach(async () => {
   __deps.probe = vi.fn(async () => probeStatus);
   Object.assign(vault, { acme_user: "dev@example.com", acme_pw: "pw-abc" });
   activeProfiles.clear();
+  __resetRunMemory();
   config.INTERNAL_MCP_URL = undefined;
   vi.spyOn(registry, "getIntegration").mockReturnValue({ name: I, version: "1", auth } as any);
   await db.run("DELETE FROM connections WHERE user_id = ?", [U]);
@@ -415,6 +416,91 @@ describe("reconnectSession", () => {
   });
 });
 
+describe("the cooldown cannot be dodged", () => {
+  const navigations = () => sent.filter(([m]) => m === "Page.navigate");
+  const deleteAndImport = async () => {
+    // What DELETE /api/connections/:i then POST .../session/import (both
+    // API-key reachable) do to the row: drop it, then upsert a fresh one.
+    await db.run("DELETE FROM connections WHERE user_id = ? AND integration = ?", [U, I]);
+    await storeCookies(U, I, { domain: "app.example.com", cookies: [{ ...goodCookie, value: "tok-old" }], capturedAt: 1 });
+  };
+
+  it("a failure survives the connection row being deleted and re-imported", async () => {
+    pageState.afterLogin = () => {};
+    expect(await reconnectSession(U, I)).toMatchObject({ ok: false, reason: "NO_COOKIES" });
+    await deleteAndImport();
+    expect((await getReconnectState(U, I)).last).toBeUndefined(); // the DB record is gone with the row
+    sent.length = 0;
+    expect(await reconnectSession(U, I)).toMatchObject({ ok: false, reason: "COOLDOWN" });
+    expect(navigations()).toHaveLength(0);
+  });
+
+  it("a failure made while the row was deleted mid-run still holds", async () => {
+    pageState.afterLogin = () => {};
+    __deps.probe = vi.fn(async () => {
+      await db.run("DELETE FROM connections WHERE user_id = ? AND integration = ?", [U, I]);
+      return 401;
+    });
+    live.cookies = [goodCookie]; // reaches the probe, which deletes the row and fails
+    expect((await reconnectSession(U, I)).ok).toBe(false);
+    await deleteAndImport();
+    sent.length = 0;
+    expect(await reconnectSession(U, I)).toMatchObject({ ok: false, reason: "COOLDOWN" });
+    expect(navigations()).toHaveLength(0);
+  });
+
+  it("a failure holds even when the state cannot be written (config not a JSON object)", async () => {
+    await db.run("UPDATE connections SET config = '[]' WHERE user_id = ? AND integration = ?", [U, I]);
+    expect((await reconnectSession(U, I)).ok).toBe(false); // bindings unreadable -> CREDENTIAL_UNBOUND
+    sent.length = 0;
+    expect(await reconnectSession(U, I)).toMatchObject({ ok: false, reason: "COOLDOWN" });
+    expect(navigations()).toHaveLength(0);
+  });
+
+  it("a portal-session clear after the delete lifts the hold", async () => {
+    pageState.afterLogin = () => {};
+    expect((await reconnectSession(U, I)).ok).toBe(false);
+    await deleteAndImport();
+    await clearReconnectFailure(U, I); // what only a portal-session capture/import calls
+    await updateReconnectState(U, I, { bindings: { username: "acme_user", password: "acme_pw" } });
+    pageState.afterLogin = () => { live.cookies = [goodCookie]; probeStatus = 200; };
+    sent.length = 0;
+    expect(await reconnectSession(U, I)).toEqual({ ok: true });
+    expect(deliveries()).toHaveLength(1);
+  });
+
+  it("a recipe success that dies again inside the cooldown does not rerun the recipe", async () => {
+    vi.spyOn(registry, "getIntegration").mockReturnValue({
+      name: I, version: "1", auth: { ...auth, session: { dead: { status: [401] } } },
+    } as any);
+    pageState.afterLogin = () => { live.cookies = [goodCookie]; pageState.url = "https://app.example.com/home"; };
+    expect(await reconnectSession(U, I)).toEqual({ ok: true }); // probe-less: "left the login URL"
+    sent.length = 0;
+    expect(await reconnectSession(U, I)).toMatchObject({ ok: false, reason: "COOLDOWN" });
+    expect(await reconnectSession(U, I)).toMatchObject({ ok: false, reason: "COOLDOWN" });
+    expect(deliveries()).toHaveLength(0);
+    expect((await getReconnectState(U, I)).deadAt).toBeTypeOf("number");
+  });
+
+  it("a recipe success holds the recipe even after delete + import", async () => {
+    expect(await reconnectSession(U, I)).toEqual({ ok: true });
+    await deleteAndImport();
+    sent.length = 0;
+    expect(await reconnectSession(U, I)).toMatchObject({ ok: false, reason: "COOLDOWN" });
+    expect(navigations()).toHaveLength(0);
+  });
+
+  it("a fast-path success does not hold the recipe", async () => {
+    live.cookies = [goodCookie];
+    probeStatus = 200;
+    expect(await reconnectSession(U, I)).toEqual({ ok: true });
+    live.cookies = [];
+    probeStatus = 401;
+    expect(await reconnectSession(U, I)).toEqual({ ok: true });
+    expect(deliveries()).toHaveLength(1);
+  });
+});
+
 describe("affinity + cooldown helpers", () => {
   it("mayOwnBrowser is true unclustered or inside runWithBrowserAffinity", () => {
     expect(mayOwnBrowser()).toBe(true);
@@ -429,6 +515,14 @@ describe("affinity + cooldown helpers", () => {
     expect(canAttemptReconnect({ last: { at: now - 1000, ok: true } }, now)).toBe(true);
     expect(canAttemptReconnect({ last: { at: now - 1000, ok: false } }, now)).toBe(false);
     expect(canAttemptReconnect({ last: { at: now - RECONNECT_COOLDOWN_MS, ok: false } }, now)).toBe(true);
+  });
+
+  it("canAttemptReconnect: a recipe success holds too; a later portal clear lifts either", () => {
+    const now = 1_000_000_000;
+    expect(canAttemptReconnect({ last: { at: now - 1000, ok: true, recipe: true } }, now)).toBe(false);
+    expect(canAttemptReconnect({ last: { at: now - RECONNECT_COOLDOWN_MS, ok: true, recipe: true } }, now)).toBe(true);
+    expect(canAttemptReconnect({ last: { at: now - 1000, ok: false }, clearedAt: now - 500 }, now)).toBe(true);
+    expect(canAttemptReconnect({ last: { at: now - 1000, ok: false }, clearedAt: now - 2000 }, now)).toBe(false);
   });
 });
 

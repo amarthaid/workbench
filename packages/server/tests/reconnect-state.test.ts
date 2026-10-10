@@ -61,14 +61,14 @@ describe("reconnect state", () => {
     expect(await getReconnectState(U, I)).toEqual({ last: failed });
   });
 
-  it("clearReconnectFailure drops a failed attempt and keeps a success", async () => {
+  it("clearReconnectFailure drops a failed attempt, keeps a success, and stamps clearedAt", async () => {
     await storeCookies(U, I, cookies);
     await updateReconnectState(U, I, { last: { at: 5, ok: false, error: "verify: NO_COOKIES" } });
     await clearReconnectFailure(U, I);
-    expect(await getReconnectState(U, I)).toEqual({});
+    expect(await getReconnectState(U, I)).toEqual({ clearedAt: expect.any(Number) });
     await updateReconnectState(U, I, { last: { at: 6, ok: true } });
     await clearReconnectFailure(U, I);
-    expect(await getReconnectState(U, I)).toEqual({ last: { at: 6, ok: true } });
+    expect(await getReconnectState(U, I)).toEqual({ last: { at: 6, ok: true }, clearedAt: expect.any(Number) });
   });
 
   it("tolerates a non-JSON config", async () => {

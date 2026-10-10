@@ -26,6 +26,7 @@ import {
 import { verifyConnectToken } from "../auth/connect-token";
 import { markConnectStarted, markConnectEnded } from "../auth/reconnect/connect-lock";
 import { getReconnectState, updateReconnectState } from "../auth/reconnect/state";
+import { canAttemptReconnect } from "../auth/reconnect/runner";
 import { db } from "../db";
 import { listSecrets } from "../vault/store";
 import { authenticatePortal } from "../auth/portal-session";
@@ -986,6 +987,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       const changed = JSON.stringify(prev.bindings ?? {}) !== JSON.stringify(next);
       await updateReconnectState(userId, integration, {
         bindings: next,
+        ...(changed ? { clearedAt: Date.now() } : {}),
         ...(changed && prev.last && !prev.last.ok ? { last: undefined } : {}),
       });
       return { success: true };
@@ -1023,6 +1025,20 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       }
       // Both delete the same connections row; branch by auth type for clarity.
       if (integ.auth.type === "cookie") {
+        // The row carries the reconnect cooldown, and import takes an API key:
+        // an agent deleting then re-importing would reset it. Only a portal
+        // session may clear a cooldown (the runner also remembers the run
+        // in-process: auth/reconnect/runner.ts).
+        if (
+          recipeOf(integration) &&
+          !canAttemptReconnect(await getReconnectState(user.userId, integration)) &&
+          !(await isPortalSessionFor(request, user.userId))
+        ) {
+          return reply.status(409).send({
+            error: "RECONNECT_COOLDOWN",
+            message: "Auto-reconnect is cooling down after an attempt. Disconnect from the portal, or retry later.",
+          });
+        }
         await deleteCookies(user.userId, integration);
       } else {
         await deleteToken(user.userId, integration);
