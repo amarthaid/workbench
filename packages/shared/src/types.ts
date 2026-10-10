@@ -96,11 +96,42 @@ export interface ApiKeyField {
   multiline?: boolean;
 }
 
+export type ReconnectStep =
+  | { goto: string }
+  | { click: string; optional?: boolean; timeoutMs?: number }
+  | { fill: string; value: string; timeoutMs?: number }
+  | { press: string }
+  | { waitFor: string; timeoutMs?: number }
+  | { waitUrl: string; timeoutMs?: number };
+
+export interface ReconnectCredentialSlot {
+  key: string;
+  label: string;
+  secret?: boolean;
+}
+
+export interface CookieSessionConfig {
+  /** GET path on targetDomain that proves the session is alive. */
+  probe?: { path: string; alive: number[] };
+  /** A ctx.http response matching this means the session is dead. */
+  dead: { status: number[]; redirectTo?: string };
+}
+
+export interface CookieReconnectConfig {
+  credentials?: ReconnectCredentialSlot[];
+  /** Hosts outside cookieDomains the recipe may visit (the identity provider). */
+  allowHosts?: string[];
+  steps: ReconnectStep[];
+  timeoutMs?: number;
+}
+
 export interface CookieConfig {
   type: "cookie";
   loginUrl: string;
   targetDomain: string;
   cookieDomains?: string[];
+  session?: CookieSessionConfig;
+  reconnect?: CookieReconnectConfig;
 }
 
 export interface NoneConfig {

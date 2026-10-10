@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as fs from "fs";
-import { loadPlugins } from "../src/plugins/loader";
+import { loadPlugins, stripInvalidRecipe } from "../src/plugins/loader";
 import { registry } from "../src/plugins/registry";
 
 vi.mock("fs", async (importOriginal) => {
@@ -99,5 +99,22 @@ describe("loadPlugins", () => {
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     await loadPlugins();
     consoleSpy.mockRestore();
+  });
+});
+
+describe("stripInvalidRecipe", () => {
+  it("strips an invalid reconnect recipe but keeps the integration", () => {
+    const m = { name: "acme", auth: { type: "cookie", loginUrl: "https://app.example.com/l", targetDomain: "app.example.com", reconnect: { steps: [{ goto: "loginUrl" }] } } } as any;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    stripInvalidRecipe(m);
+    warn.mockRestore();
+    expect(m.auth.reconnect).toBeUndefined();
+    expect(m.auth.loginUrl).toBe("https://app.example.com/l");
+  });
+
+  it("leaves a valid recipe alone", () => {
+    const m = { name: "acme", auth: { type: "cookie", loginUrl: "https://app.example.com/l", targetDomain: "app.example.com", session: { dead: { status: [401] } }, reconnect: { steps: [{ goto: "loginUrl" }] } } } as any;
+    stripInvalidRecipe(m);
+    expect(m.auth.reconnect).toBeDefined();
   });
 });

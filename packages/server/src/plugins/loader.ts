@@ -1,6 +1,8 @@
 import fs from "fs";
 import path from "path";
 import { z } from "zod";
+import { validateCookieRecipe } from "@a-workbench/shared";
+import type { CookieConfig } from "@a-workbench/shared";
 import { config } from "../config";
 import { registry, PluginTool } from "./registry";
 import { browserPlugin } from "./internal/browser";
@@ -73,10 +75,24 @@ export function filterTools(module: Record<string, unknown>): PluginTool[] {
   return Array.from(found.values());
 }
 
-function unwrapDefault<T>(mod: Record<string, unknown>): T {
+// Manifests are not schema-validated at load; a broken recipe would otherwise
+// surface as a confusing failure on the first dead session. Drop it loudly and
+// keep the integration (manual reconnect still works).
+export function stripInvalidRecipe(manifest: { name: string; auth: { type: string } }): void {
+  if (manifest.auth?.type !== "cookie") return;
+  const auth = manifest.auth as CookieConfig;
+  const errs = validateCookieRecipe(auth);
+  if (errs.length) {
+    console.warn(`[plugins] ${manifest.name}: reconnect recipe disabled — ${errs.join("; ")}`);
+    delete auth.reconnect;
+  }
+}
+
+function unwrapDefault<T extends { name: string; auth: { type: string } }>(mod: Record<string, unknown>): T {
   const d = mod.default as Record<string, unknown> | undefined;
-  if (d && "default" in d) return d.default as T;
-  return mod.default as T;
+  const manifest = (d && "default" in d ? d.default : mod.default) as T;
+  if (manifest) stripInvalidRecipe(manifest);
+  return manifest;
 }
 
 async function loadBuiltin(pluginName: string, basePath: string): Promise<void> {
