@@ -37,4 +37,16 @@ describe("schemas", () => {
     });
     expect(result.success).toBe(false);
   });
+
+  it("rejects a cookie recipe with an undeclared credential", () => {
+    const r = integrationSchema.safeParse({
+      name: "acme", version: "1.0.0",
+      auth: {
+        type: "cookie", loginUrl: "https://app.example.com/login", targetDomain: "app.example.com",
+        session: { dead: { status: [401] } },
+        reconnect: { steps: [{ fill: "#p", value: "{{cred:password}}" }] },
+      },
+    });
+    expect(r.success).toBe(false);
+  });
 });

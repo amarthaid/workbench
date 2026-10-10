@@ -4,7 +4,10 @@ import { createHash } from "node:crypto";
 import WebSocket from "ws";
 import { config } from "../config";
 import { activeProfiles, spawnProfileChromium, cdpCall, userProfileDir } from "./profile-chromium";
+import { CDP_ORIGIN } from "./cdp-origin";
 import { trimProfileCaches } from "./profile-disk";
+import { installBrowserNetGuard, type BrowserNetGuard } from "./agent-net-guard";
+import { registerDebugPort, unregisterDebugPort } from "./browser-url";
 import { startProxyAuth, filterCookies } from "./cookie";
 import { configureDownloads, cancelDownloads } from "./browser-downloads";
 import { deviceKey, pulseFor, releasePulse, type PulseDevices, type PulseManager } from "../audio/pulse";
@@ -34,12 +37,12 @@ export class CdpClient {
   private pending = new Map<number, { resolve: (v: Record<string, unknown>) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private gone = false;
   private onGone?: () => void;
-  private listeners = new Map<string, Set<(p: Record<string, unknown>) => void>>();
+  private listeners = new Map<string, Set<(p: Record<string, unknown>, sessionId?: string) => void>>();
   readonly ready: Promise<void>;
 
   constructor(wsUrl: string, onGone?: () => void) {
     this.onGone = onGone;
-    this.ws = new WebSocket(wsUrl, { perMessageDeflate: false, origin: "http://127.0.0.1" });
+    this.ws = new WebSocket(wsUrl, { perMessageDeflate: false, origin: CDP_ORIGIN });
     this.ready = new Promise((resolve, reject) => {
       this.ws.on("open", () => {
         // Fire-and-forget enables; we don't await their replies.
@@ -56,6 +59,7 @@ export class CdpClient {
         error?: { message: string };
         method?: string;
         params?: Record<string, unknown>;
+        sessionId?: string;
       };
       try { msg = JSON.parse(raw.toString()); } catch { return; }
       if (typeof msg.id !== "number") {
@@ -66,7 +70,7 @@ export class CdpClient {
         if (set) {
           for (const fn of [...set]) {
             // One misbehaving listener must not take the socket down with it.
-            try { fn(msg.params ?? {}); }
+            try { fn(msg.params ?? {}, msg.sessionId); }
             catch (e) { console.warn(`[cdp] listener for ${msg.method} threw:`, e); }
           }
         }
@@ -98,7 +102,7 @@ export class CdpClient {
    * a long-lived warm session would otherwise accumulate one handler per
    * download.
    */
-  on(method: string, fn: (p: Record<string, unknown>) => void): () => void {
+  on(method: string, fn: (p: Record<string, unknown>, sessionId?: string) => void): () => void {
     let set = this.listeners.get(method);
     if (!set) { set = new Set(); this.listeners.set(method, set); }
     set.add(fn);
@@ -122,14 +126,15 @@ export class CdpClient {
     this.onGone?.();
   }
 
-  send(method: string, params: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+  /** `sessionId` addresses a child target attached with flatten (Target.setAutoAttach). */
+  send(method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<Record<string, unknown>> {
     return new Promise((resolve, reject) => {
       const id = ++this.id;
       const timer = setTimeout(() => {
         if (this.pending.delete(id)) reject(new Error(`cdp ${method} timed out`));
       }, 10000);
       this.pending.set(id, { resolve, reject, timer });
-      try { this.ws.send(JSON.stringify({ id, method, params })); }
+      try { this.ws.send(JSON.stringify(sessionId ? { id, method, params, sessionId } : { id, method, params })); }
       catch (e) { clearTimeout(timer); this.pending.delete(id); reject(e instanceof Error ? e : new Error(String(e))); }
     });
   }
@@ -158,20 +163,25 @@ function pageWsUrl(remotePort: number, targetId: string): string {
   return `ws://127.0.0.1:${remotePort}/devtools/page/${targetId}`;
 }
 
-async function attachTab(s: WarmSession, targetId: string, wsUrl: string): Promise<Tab> {
+async function attachTab(
+  s: WarmSession,
+  targetId: string,
+  wsUrl: string,
+  map: Map<string, Tab> = s.tabs
+): Promise<Tab> {
   const cdp = new CdpClient(wsUrl, () => {
     // Only this tab is gone. Never tear the session down from here: chromium
     // is still up and the other tabs are still driveable.
-    const cur = s.tabs.get(targetId);
+    const cur = map.get(targetId);
     if (cur && cur.cdp === cdp) {
-      s.tabs.delete(targetId);
-      emitSafe("tab-closed", s.userId, targetId);
+      map.delete(targetId);
+      if (map === s.tabs) emitSafe("tab-closed", s.userId, targetId);
     }
   });
   await cdp.ready;
   const now = Date.now();
   const tab: Tab = { id: targetId, cdp, lastActivity: now, createdAt: now };
-  s.tabs.set(targetId, tab);
+  map.set(targetId, tab);
   return tab;
 }
 
@@ -189,6 +199,31 @@ export interface WarmSession {
    * agents holding the old routing key are mapped onto it.
    */
   tabs: Map<string, Tab>;
+  /**
+   * Tabs the server drives for itself (an auto-reconnect recipe delivering a
+   * vault credential). Never in `tabs`: no browser_* tool can resolve, list,
+   * close or adopt one, and the live view never lands on one. An agent with
+   * main-world evaluate on that page could otherwise listen for the input
+   * event that carries the credential.
+   */
+  privateTabs: Map<string, Tab>;
+  /**
+   * Private opens in flight. Between Target.createTarget and the target id
+   * landing in `privateIds` the new page is in no map, so enumerators hide
+   * every unregistered page while this is non-zero.
+   */
+  pendingPrivateOpens: number;
+  /**
+   * Every target id this chromium ever opened privately. Added in the same
+   * continuation that receives Target.createTarget's reply; never removed
+   * while this chromium lives (a tombstone), so a late Target.getTargets
+   * answer listing a dying private target still hides it. Chromium target ids
+   * are unique per browser, so a tombstone can never hide a later public tab.
+   * Dies with the session: a restarted chromium starts from an empty set.
+   */
+  privateIds: Set<string>;
+  /** Private ids already closed through closePrivateTab, so a second close is a no-op. */
+  closedPrivate: Set<string>;
   defaultTabId: string;
   /**
    * Tabs whose target is being created right now. openTab reserves its slot
@@ -205,6 +240,12 @@ export interface WarmSession {
    * downloads should not pay for a second socket.
    */
   browserCdp?: CdpClient;
+  /**
+   * Network guard on the browser client (agent-net-guard.ts): every target
+   * but the private recipe tabs fails its requests to loopback. Installed
+   * before the session is handed out.
+   */
+  netGuard?: BrowserNetGuard;
   /** In-flight browserClient() promise, so concurrent callers share one socket. */
   browserCdpStarting?: Promise<CdpClient>;
   /**
@@ -290,11 +331,29 @@ async function startSession(userId: string): Promise<WarmSession> {
       userId,
       lastActivity: Date.now(),
       tabs: new Map(),
+      privateTabs: new Map(),
       defaultTabId: spawned.cdpPageTargetId,
       pendingOpens: 0,
+      pendingPrivateOpens: 0,
+      privateIds: new Set(),
+      closedPrivate: new Set(),
       authWs,
       audio,
     };
+    // Refused to agent tabs even if BROWSER_LOOPBACK_ALLOW_PORTS lists it.
+    registerDebugPort(spawned.remotePort);
+    spawned.proc.on("exit", () => unregisterDebugPort(spawned.remotePort));
+    try {
+      const browser = await browserClient(session);
+      session.netGuard = await installBrowserNetGuard(browser, {
+        isPrivate: (id) => session.privateIds.has(id),
+        markPrivate: (id) => { session.privateIds.add(id); },
+      });
+    } catch (e) {
+      // No guard, no browser: an agent tab must never run unguarded.
+      try { spawned.proc.kill(); } catch { /* noop */ }
+      throw e;
+    }
     await attachTab(session, spawned.cdpPageTargetId, spawned.cdpPageWsUrl);
     warmSessions.set(userId, session);
     // Kick off download routing, but do not block on it: opening a browser
@@ -315,8 +374,11 @@ async function startSession(userId: string): Promise<WarmSession> {
         warmSessions.delete(userId);
         cancelDownloads(userId);
       }
-      for (const t of session.tabs.values()) { try { t.cdp.close(); } catch { /* noop */ } }
+      for (const t of [...session.tabs.values(), ...session.privateTabs.values()]) { try { t.cdp.close(); } catch { /* noop */ } }
       session.tabs.clear();
+      session.privateTabs.clear();
+      session.privateIds.clear();
+      session.closedPrivate.clear();
       try { session.browserCdp?.close(); } catch { /* noop */ }
       try { session.authWs?.close(); } catch { /* noop */ }
       // Releases the whole per-user daemon; its devices die with it. Guarded by
@@ -373,7 +435,11 @@ export function browserClient(s: WarmSession): Promise<CdpClient> {
   if (s.browserCdp) return Promise.resolve(s.browserCdp);
   if (!s.browserCdpStarting) {
     s.browserCdpStarting = (async () => {
-      const client = new CdpClient(s.cdpBrowserWsUrl);
+      // The browser socket carries the agent-tab network guard; if it drops
+      // unexpectedly the guard is gone, so the browser goes with it (fail closed).
+      const client = new CdpClient(s.cdpBrowserWsUrl, () => {
+        if (s.netGuard) { try { s.proc.kill(); } catch { /* already gone */ } }
+      });
       await client.ready;
       s.browserCdp = client;
       return client;
@@ -400,7 +466,34 @@ export function getWarmSession(userId: string): WarmSession | undefined {
 }
 
 export function getTab(userId: string, tabId: string): Tab | undefined {
-  return warmSessions.get(userId)?.tabs.get(tabId);
+  const s = warmSessions.get(userId);
+  if (!s || s.privateIds.has(tabId)) return undefined;
+  return s.tabs.get(tabId);
+}
+
+/** True when `targetId` was opened privately in this user's current chromium. */
+export function isPrivateTarget(userId: string, targetId: string): boolean {
+  return warmSessions.get(userId)?.privateIds.has(targetId) ?? false;
+}
+
+type TargetInfo = { targetId?: unknown; type?: unknown };
+
+/**
+ * Whether an agent or the live view may see this target. Fails closed: a
+ * target that is not a well-formed page, is private, or arrives while a
+ * private open is in flight (it may be the one being opened, not yet marked)
+ * is hidden, and so is anything the check itself cannot decide.
+ */
+function visiblePage(s: WarmSession, t: TargetInfo): boolean {
+  try {
+    if (t.type !== "page" || typeof t.targetId !== "string" || !t.targetId) return false;
+    if (s.privateIds.has(t.targetId)) return false;
+    // Any non-zero count, including a counter that went negative.
+    if (s.pendingPrivateOpens !== 0 && !s.tabs.has(t.targetId)) return false;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function touchTab(userId: string, tabId: string): void {
@@ -417,11 +510,43 @@ export type OpenTabResult =
   | { ok: false; error: "BROWSER_TAB_LIMIT"; limit: number };
 
 /** Open a fresh about:blank tab in this user's chromium and register it. */
-export async function openTab(userId: string): Promise<OpenTabResult> {
+export function openTab(userId: string): Promise<OpenTabResult> {
+  return openTabIn(userId, false);
+}
+
+/**
+ * Open a tab only the server can drive. It is kept out of `tabs`, so getTab,
+ * listTabs, closeTab and defaultTab never see it. Close it with closePrivateTab.
+ */
+export function openPrivateTab(userId: string): Promise<OpenTabResult> {
+  return openTabIn(userId, true);
+}
+
+/** Close a tab opened by openPrivateTab. False when it is not one of this user's. */
+export async function closePrivateTab(userId: string, tabId: string): Promise<boolean> {
+  const s = warmSessions.get(userId);
+  if (!s || !s.privateIds.has(tabId)) return false;
+  const tab = s.privateTabs.get(tabId);
+  if (!tab && s.closedPrivate.has(tabId)) return false; // already closed
+  s.privateTabs.delete(tabId);
+  s.closedPrivate.add(tabId);
+  try { tab?.cdp.close(); } catch { /* noop */ }
+  try {
+    const browser = await browserClient(s);
+    await browser.send("Target.closeTarget", { targetId: tabId });
+  } catch { /* target already gone */ }
+  // The id stays in privateIds: see WarmSession.privateIds.
+  return true;
+}
+
+async function openTabIn(userId: string, isPrivate: boolean): Promise<OpenTabResult> {
   const s = await ensureSession(userId);
   const limit = config.BROWSER_TAB_LIMIT;
-  if (s.tabs.size + s.pendingOpens >= limit) return { ok: false, error: "BROWSER_TAB_LIMIT", limit };
+  if (s.tabs.size + s.privateTabs.size + s.pendingOpens >= limit) return { ok: false, error: "BROWSER_TAB_LIMIT", limit };
   s.pendingOpens += 1;
+  // Reserved before the target exists, so no enumerator can see it unmarked.
+  if (isPrivate) s.pendingPrivateOpens += 1;
+  let created: string | undefined;
   try {
     const browser = await browserClient(s);
     // background: true — a foreground-created target backgrounds the default
@@ -431,11 +556,22 @@ export async function openTab(userId: string): Promise<OpenTabResult> {
       url: "about:blank",
       background: true,
     })) as { targetId: string };
-    const tab = await attachTab(s, targetId, pageWsUrl(s.remotePort, targetId));
+    created = targetId;
+    if (isPrivate) {
+      s.privateIds.add(targetId); // same continuation as the reply
+      // The guard may have attached before it could know: stop intercepting.
+      await s.netGuard?.release(targetId);
+    }
+    const tab = await attachTab(s, targetId, pageWsUrl(s.remotePort, targetId), isPrivate ? s.privateTabs : s.tabs);
     s.lastActivity = Date.now();
     return { ok: true, tab };
+  } catch (e) {
+    // A private target we could not attach to must not outlive the failure.
+    if (isPrivate && created) await closePrivateTab(userId, created).catch(() => false);
+    throw e;
   } finally {
     s.pendingOpens -= 1;
+    if (isPrivate) s.pendingPrivateOpens -= 1;
   }
 }
 
@@ -452,7 +588,9 @@ export async function defaultTab(userId: string): Promise<Tab> {
   const { targetInfos } = (await browser.send("Target.getTargets")) as {
     targetInfos?: Array<{ targetId: string; type: string }>;
   };
-  const pages = (targetInfos ?? []).filter((t) => t.type === "page");
+  // Never adopt a private (server-driven) tab: it would become the agent's
+  // compat default and the live view's target.
+  const pages = (targetInfos ?? []).filter((t) => visiblePage(s, t));
   // Prefer a page nothing is driving yet, so adopting a default does not hand
   // the live view a tab an agent is already working in.
   let targetId = (pages.find((t) => !s.tabs.has(t.targetId)) ?? pages[0])?.targetId;
@@ -468,7 +606,7 @@ export async function defaultTab(userId: string): Promise<Tab> {
 /** Close one tab. False when it is not a tab of this user's session. */
 export async function closeTab(userId: string, tabId: string): Promise<boolean> {
   const s = warmSessions.get(userId);
-  const tab = s?.tabs.get(tabId);
+  const tab = s?.privateIds.has(tabId) ? undefined : s?.tabs.get(tabId);
   if (!s || !tab) return false;
   s.tabs.delete(tabId);
   try { tab.cdp.close(); } catch { /* noop */ }
@@ -491,7 +629,7 @@ export async function listTabs(userId: string): Promise<TabInfo[]> {
     targetInfos?: Array<{ targetId: string; type: string; url: string; title: string }>;
   };
   return (targetInfos ?? [])
-    .filter((t) => t.type === "page")
+    .filter((t) => visiblePage(s, t))
     .map((t) => ({ id: t.targetId, url: t.url, title: t.title, active: s.tabs.has(t.targetId) }));
 }
 
@@ -524,8 +662,11 @@ export async function closeBrowserSession(userId: string): Promise<void> {
   // Release now, not on proc exit: a re-spawn before that exit must get a
   // fresh manager, and the stale exit handler is guarded by `pm` identity.
   if (s.audio) void releasePulse(s.audio.key, s.audio.pm).catch(() => undefined);
-  for (const t of s.tabs.values()) { try { t.cdp.close(); } catch { /* noop */ } }
+  for (const t of [...s.tabs.values(), ...s.privateTabs.values()]) { try { t.cdp.close(); } catch { /* noop */ } }
   s.tabs.clear();
+  s.privateTabs.clear();
+  s.privateIds.clear();
+  s.closedPrivate.clear();
   try { s.browserCdp?.close(); } catch { /* noop */ }
   try { s.authWs?.close(); } catch { /* noop */ }
   try { s.proc.kill("SIGKILL"); } catch { /* noop */ }
@@ -619,8 +760,10 @@ export async function typeText(s: PageHandle, text: string): Promise<void> {
 // Minimal key map for the common driving keys. Chords like "ctrl+a" parse the
 // trailing token as the key and the leading tokens as modifiers.
 const MODIFIERS: Record<string, number> = { alt: 1, ctrl: 2, control: 2, meta: 4, cmd: 4, shift: 8 };
-const KEYS: Record<string, { keyCode: number; key: string }> = {
-  enter: { keyCode: 13, key: "Enter" },
+const KEYS: Record<string, { keyCode: number; key: string; text?: string }> = {
+  // Enter carries text "\r": a rawKeyDown has no keypress, and form implicit
+  // submission runs on keypress, so a text-less Enter never submits a form.
+  enter: { keyCode: 13, key: "Enter", text: "\r" },
   tab: { keyCode: 9, key: "Tab" },
   escape: { keyCode: 27, key: "Escape" },
   esc: { keyCode: 27, key: "Escape" },
@@ -650,7 +793,10 @@ export async function pressKey(s: PageHandle, keys: string): Promise<void> {
   const base: Record<string, unknown> = mapped
     ? { windowsVirtualKeyCode: mapped.keyCode, key: mapped.key, modifiers }
     : { key: last, modifiers };
-  await s.cdp.send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base });
+  const typed = mapped?.text !== undefined && modifiers === 0;
+  await s.cdp.send("Input.dispatchKeyEvent", typed
+    ? { type: "keyDown", ...base, text: mapped!.text, unmodifiedText: mapped!.text }
+    : { type: "rawKeyDown", ...base });
   await s.cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
 }
 

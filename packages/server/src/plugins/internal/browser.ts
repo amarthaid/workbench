@@ -4,6 +4,7 @@
 // plugin ToolContext: a third-party plugin must never be able to drive the
 // user's logged-in capture browser (cookie/session exfiltration).
 import { z } from "zod";
+import { isAgentNavigableUrl } from "../../auth/browser-url";
 import { Plugin, PluginTool } from "../registry";
 import { config } from "../../config";
 import { signConnectToken } from "../../auth/connect-token";
@@ -88,8 +89,8 @@ const tools: PluginTool[] = [
     inputSchema: z.object({
       session_id: z.string().describe(SESSION_ID_DESC),
       url: z.string().url().refine(
-        (u) => /^https?:\/\//i.test(u),
-        { message: "Only http and https URLs are allowed" }
+        (u) => /^https?:\/\//i.test(u) && isAgentNavigableUrl(u),
+        { message: "Only http and https URLs to a non-loopback host are allowed" }
       ),
     }),
     handler: async (ctx: any, args: any) => {

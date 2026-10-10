@@ -1,4 +1,6 @@
 import { z } from "zod";
+import type { CookieConfig } from "./types";
+import { validateCookieRecipe } from "./reconnect";
 
 export const searchToolsSchema = z.object({
   query: z.string().min(1),
@@ -48,6 +50,31 @@ export const integrationSchema = z.object({
       loginUrl: z.string().url(),
       targetDomain: z.string(),
       cookieDomains: z.array(z.string()).optional(),
+      session: z.object({
+        probe: z.object({ path: z.string().startsWith("/"), alive: z.array(z.number().int()).min(1) }).optional(),
+        dead: z.object({ status: z.array(z.number().int()).min(1), redirectTo: z.string().optional() }),
+      }).optional(),
+      reconnect: z.object({
+        credentials: z.array(z.object({
+          key: z.string().regex(/^[a-z0-9_]+$/),
+          label: z.string(),
+          secret: z.boolean().optional(),
+        })).optional(),
+        allowHosts: z.array(z.string()).optional(),
+        steps: z.array(z.union([
+          z.object({ goto: z.string() }).strict(),
+          z.object({ click: z.string(), optional: z.boolean().optional(), timeoutMs: z.number().int().positive().optional() }).strict(),
+          z.object({ fill: z.string(), value: z.string(), timeoutMs: z.number().int().positive().optional() }).strict(),
+          z.object({ press: z.string() }).strict(),
+          z.object({ waitFor: z.string(), timeoutMs: z.number().int().positive().optional() }).strict(),
+          z.object({ waitUrl: z.string(), timeoutMs: z.number().int().positive().optional() }).strict(),
+        ])),
+        timeoutMs: z.number().int().positive().optional(),
+      }).optional(),
+    }).superRefine((auth, ctx) => {
+      for (const message of validateCookieRecipe(auth as CookieConfig)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message, path: ["reconnect"] });
+      }
     }),
     z.object({
       type: z.literal("none"),

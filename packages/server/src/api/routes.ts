@@ -16,6 +16,7 @@ import { config } from "../config";
 import { getToken, deleteToken, storeToken } from "../auth/tokens";
 import {
   storeCookies,
+  clearReconnectFailure,
   getCookies,
   hasValidCookies,
   deleteCookies,
@@ -23,6 +24,13 @@ import {
   CookieData,
 } from "../auth/cookie";
 import { verifyConnectToken } from "../auth/connect-token";
+import { markConnectStarted, markConnectEnded } from "../auth/reconnect/connect-lock";
+import { getReconnectState, updateReconnectState } from "../auth/reconnect/state";
+import { canAttemptReconnect } from "../auth/reconnect/runner";
+import { isAgentNavigableUrl } from "../auth/browser-url";
+import { db } from "../db";
+import { listSecrets } from "../vault/store";
+import { authenticatePortal } from "../auth/portal-session";
 import { signConnectToken } from "../auth/connect-token";
 import {
   createCustomApp,
@@ -121,6 +129,54 @@ async function authenticate(request: {
     }
   }
   return null;
+}
+
+/**
+ * True only when the request carries a portal-session JWT for `userId`.
+ * authenticate() also takes an API key (and prefers it), so a route that
+ * accepts both uses this to decide what only a human may do. A valid session
+ * for a different user than the authenticated one does not count.
+ */
+async function isPortalSessionFor(request: { headers: { authorization?: string } }, userId: string): Promise<boolean> {
+  const auth = request.headers.authorization;
+  if (!auth?.startsWith("Bearer ")) return false;
+  try {
+    return (await verifySession(auth.slice(7))).userId === userId;
+  } catch {
+    return false;
+  }
+}
+
+/** After a cookie write: a manual reconnect by a human ends the cooldown; an agent's never does. */
+async function clearFailureIfPortal(
+  request: { headers: { authorization?: string } },
+  userId: string,
+  integration: string
+): Promise<void> {
+  if (await isPortalSessionFor(request, userId)) await clearReconnectFailure(userId, integration);
+}
+
+function recipeOf(name: string) {
+  const a = registry.getIntegration(name)?.auth;
+  return a?.type === "cookie" && a.reconnect ? a.reconnect : null;
+}
+
+// Names only, never values: bindings hold vault entry names. Present only
+// when a connection row exists (bindings live on it), dead or not, so the
+// portal can tell "bindable" apart from "connected".
+async function autoReconnectStatus(userId: string, name: string) {
+  const r = recipeOf(name);
+  if (!r) return undefined;
+  const row = await db.get("SELECT 1 AS one FROM connections WHERE user_id = ? AND integration = ?", [userId, name]);
+  if (!row) return undefined;
+  const st = await getReconnectState(userId, name);
+  const bindings = st.bindings ?? {};
+  return {
+    bindings,
+    missing: (r.credentials ?? []).map((c) => c.key).filter((k) => !bindings[k]),
+    last: st.last,
+    dead: !!st.deadAt,
+  };
 }
 
 function accountDisabledUrl(): string {
@@ -371,6 +427,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       if (!integ) {
         return reply.status(404).send({ error: "Integration not found" });
       }
+      const detailRecipe = recipeOf(integ.name);
       return {
         name: integ.name,
         version: integ.version,
@@ -381,6 +438,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
         authType: integ.auth.type,
         instance: integ.auth.type === "oauth2" ? integ.auth.instance : undefined,
         apikeyFields: integ.auth.type === "apikey" ? integ.auth.fields : undefined,
+        autoReconnect: detailRecipe ? { credentials: detailRecipe.credentials ?? [] } : undefined,
         tools: registry.listToolsByIntegration(integration).map((t) => ({
           name: t.name,
           description: t.description,
@@ -446,8 +504,16 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     }
 
     if (integ.auth.type === "cookie") {
-      const session = await defaultTab(user.userId);
-      await navigate(session, integ.auth.loginUrl);
+      // A human is now driving this chromium: auto-reconnect stands down until
+      // capture, cancel or the lock's TTL (auth/reconnect/connect-lock.ts).
+      markConnectStarted(user.userId);
+      try {
+        const session = await defaultTab(user.userId);
+        await navigate(session, integ.auth.loginUrl);
+      } catch (err) {
+        markConnectEnded(user.userId);
+        throw err;
+      }
       return {
         type: "cookie",
         status: "login_required",
@@ -590,7 +656,9 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
         return reply.status(400).send({ error: "No cookies captured. Complete login before capturing." });
       }
       await storeCookies(user.userId, integration, data);
+      await clearFailureIfPortal(request, user.userId, integration);
       markConnected(user.userId, integration);
+      markConnectEnded(user.userId);
       return { success: true, cookieCount: data.cookies.length };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -648,7 +716,10 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
         capturedAt: session.capturedAt ?? Math.floor(Date.now() / 1000),
       };
       await storeCookies(user.userId, integration, data);
+      // Import accepts an API key: only a portal session ends the cooldown.
+      await clearFailureIfPortal(request, user.userId, integration);
       markConnected(user.userId, integration);
+      markConnectEnded(user.userId);
       return { success: true, cookieCount: data.cookies.length };
     }
   );
@@ -684,6 +755,10 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     if (url && !isUrl(url)) {
       return reply.status(400).send({ error: "url must be http(s)" });
     }
+    // Loopback is where chromium's debug endpoint lives (auth/browser-url.ts).
+    if (url && !isAgentNavigableUrl(url)) {
+      return reply.status(400).send({ error: "url must not point at a loopback host" });
+    }
     try {
       const s = await defaultTab(user.userId);
       if (url) await navigate(s, url);
@@ -715,6 +790,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     if (!user) return reply.status(401).send({ error: "Unauthorized" });
     // Capture shares the per-user browser session, which browser-use may also be
     // driving — do not kill it here. The idle reaper reclaims it on its own.
+    markConnectEnded(user.userId);
     return { success: true };
   });
 
@@ -771,6 +847,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     if (!integ) return reply.status(404).send({ error: "Integration not found" });
 
     if (integ.auth.type === "cookie") {
+      markConnectStarted(user.userId);
       try {
         const session = await defaultTab(user.userId);
         await navigate(session, integ.auth.loginUrl);
@@ -781,6 +858,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
           cdpProxyUrl: `/api/auth/cookie/${payload.integration}/cdp`,
         };
       } catch (err) {
+        markConnectEnded(user.userId);
         return reply.status(400).send({ error: err instanceof Error ? err.message : String(err) });
       }
     }
@@ -827,7 +905,9 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
         return reply.status(400).send({ error: "No cookies captured. Complete login before capturing." });
       }
       await storeCookies(user.userId, payload.integration, data);
+      await clearFailureIfPortal(request, user.userId, payload.integration);
       markConnected(user.userId, payload.integration);
+      markConnectEnded(user.userId);
       return { success: true, cookieCount: data.cookies.length };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -852,6 +932,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
             : i.auth.type === "cookie"
               ? await hasValidCookies(user.userId, i.name)
               : !!(await getToken(user.userId, i.name)),
+        autoReconnect: i.auth.type === "cookie" ? await autoReconnectStatus(user.userId, i.name) : undefined,
       }))
     );
     const customApps = await listCustomApps(user.userId);
@@ -863,6 +944,60 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     );
     return { connections: [...connections, ...customConnections] };
   });
+
+  // Bind vault entries to a recipe's credential slots. Portal session only:
+  // which vault secret gets typed into a login form is a credential-routing
+  // decision, so an API key / OAuth bearer (the agent's credential) is refused.
+  app.put<{ Params: { integration: string }; Body: { bindings?: unknown } }>(
+    "/api/connections/:integration/reconnect",
+    async (request, reply) => {
+      const userId = await authenticatePortal(
+        request,
+        reply,
+        "Reconnect bindings are changed from the portal only."
+      );
+      if (!userId) return;
+      const { integration } = request.params;
+      const r = recipeOf(integration);
+      if (!r) return reply.status(404).send({ error: "Integration has no auto-reconnect recipe" });
+      const raw = request.body?.bindings;
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        return reply.status(400).send({ error: "bindings must be an object" });
+      }
+      const declared = new Set((r.credentials ?? []).map((c) => c.key));
+      const owned = new Set((await listSecrets(userId)).map((s) => s.name));
+      const current = (await getReconnectState(userId, integration)).bindings ?? {};
+      const next: Record<string, string> = { ...current };
+      for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+        if (!declared.has(k)) return reply.status(400).send({ error: `Unknown credential: ${k}` });
+        if (v === "") {
+          delete next[k];
+          continue;
+        }
+        if (typeof v !== "string" || !owned.has(v)) {
+          return reply.status(400).send({ error: `No vault entry named ${String(v)}` });
+        }
+        next[k] = v;
+      }
+      const row = await db.get(
+        "SELECT 1 AS one FROM connections WHERE user_id = ? AND integration = ?",
+        [userId, integration]
+      );
+      if (!row) {
+        return reply.status(409).send({ error: "Connect the integration first" });
+      }
+      // New bindings deserve a try on the next call: a failure recorded under
+      // the old ones no longer predicts anything, so drop its cooldown.
+      const prev = await getReconnectState(userId, integration);
+      const changed = JSON.stringify(prev.bindings ?? {}) !== JSON.stringify(next);
+      await updateReconnectState(userId, integration, {
+        bindings: next,
+        ...(changed ? { clearedAt: Date.now() } : {}),
+        ...(changed && prev.last && !prev.last.ok ? { last: undefined } : {}),
+      });
+      return { success: true };
+    }
+  );
 
   // Disconnect: drop stored creds (OAuth tokens or cookies) for one integration.
   app.delete<{ Params: { integration: string } }>(
@@ -895,6 +1030,20 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       }
       // Both delete the same connections row; branch by auth type for clarity.
       if (integ.auth.type === "cookie") {
+        // The row carries the reconnect cooldown, and import takes an API key:
+        // an agent deleting then re-importing would reset it. Only a portal
+        // session may clear a cooldown (the runner also remembers the run
+        // in-process: auth/reconnect/runner.ts).
+        if (
+          recipeOf(integration) &&
+          !canAttemptReconnect(await getReconnectState(user.userId, integration)) &&
+          !(await isPortalSessionFor(request, user.userId))
+        ) {
+          return reply.status(409).send({
+            error: "RECONNECT_COOLDOWN",
+            message: "Auto-reconnect is cooling down after an attempt. Disconnect from the portal, or retry later.",
+          });
+        }
         await deleteCookies(user.userId, integration);
       } else {
         await deleteToken(user.userId, integration);

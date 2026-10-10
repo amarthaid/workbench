@@ -101,6 +101,15 @@ describe("browser actions", () => {
       expect.objectContaining({ type: "keyUp", modifiers: 2 }));
   });
 
+  it("pressKey Enter sends keyDown with text \\r so it submits forms", async () => {
+    const send = vi.fn(async () => ({}));
+    await pressKey(sessionWithCdp(send), "Enter");
+    expect(send).toHaveBeenNthCalledWith(1, "Input.dispatchKeyEvent",
+      expect.objectContaining({ type: "keyDown", key: "Enter", windowsVirtualKeyCode: 13, text: "\r" }));
+    expect(send).toHaveBeenNthCalledWith(2, "Input.dispatchKeyEvent",
+      expect.objectContaining({ type: "keyUp", key: "Enter" }));
+  });
+
   it("pressKey types a bare printable char via keyDown+text", async () => {
     const send = vi.fn(async () => ({}));
     await pressKey(sessionWithCdp(send), "a");

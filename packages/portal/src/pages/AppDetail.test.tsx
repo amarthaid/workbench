@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
-import { MemoryRouter, Routes, Route } from "react-router-dom";
+import { MemoryRouter, Routes, Route, Link } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import AppDetail from "./AppDetail";
 
@@ -15,6 +15,8 @@ vi.mock("../api", () => ({
   disconnectIntegration: vi.fn(),
   removeCustomApp: vi.fn(),
   updateCustomAppHeaders: vi.fn(),
+  fetchVaultSecrets: vi.fn().mockResolvedValue([]),
+  saveReconnectBindings: vi.fn(),
 }));
 
 vi.mock("../context/AuthContext", () => ({
@@ -24,7 +26,7 @@ vi.mock("../context/AuthContext", () => ({
 vi.mock("../components/CookieAuthPopup", () => ({ default: () => null }));
 vi.mock("../components/ApiKeyAuthModal", () => ({ default: () => null }));
 
-import { fetchIntegration, fetchConnections, startIntegrationAuth, disconnectIntegration, updateCustomAppHeaders } from "../api";
+import { fetchIntegration, fetchConnections, fetchVaultSecrets, startIntegrationAuth, disconnectIntegration, updateCustomAppHeaders } from "../api";
 
 const DETAIL = {
   name: "acme",
@@ -110,6 +112,63 @@ describe("AppDetail", () => {
     vi.mocked(fetchIntegration).mockResolvedValue({ ...DETAIL, authType: "cookie" });
     renderAt("acme");
     expect(await screen.findByRole("heading", { name: "Session transfer" })).toBeInTheDocument();
+  });
+
+  it("shows the auto-reconnect panel only for cookie apps with a recipe", async () => {
+    vi.mocked(fetchIntegration).mockResolvedValue({ ...DETAIL, authType: "cookie" });
+    renderAt("acme");
+    await screen.findByRole("heading", { name: "Session transfer" });
+    expect(screen.queryByRole("heading", { name: "Auto-reconnect" })).toBeNull();
+
+    vi.mocked(fetchIntegration).mockResolvedValue({
+      ...DETAIL,
+      authType: "cookie",
+      autoReconnect: { credentials: [{ key: "password", label: "Password", secret: true }] },
+    });
+    vi.mocked(fetchConnections).mockResolvedValue({
+      connections: [{ name: "acme", connected: true, autoReconnect: { bindings: {}, missing: ["password"], dead: false } }],
+    });
+    renderAt("acme");
+    expect(await screen.findByRole("heading", { name: "Auto-reconnect" })).toBeInTheDocument();
+    expect(await screen.findByText("Bind credentials to enable")).toBeInTheDocument();
+  });
+
+  it("does not carry panel edits from one app to another", async () => {
+    const detail = (name: string) => ({
+      ...DETAIL,
+      name,
+      displayName: name,
+      authType: "cookie",
+      autoReconnect: { credentials: [{ key: "password", label: "Password", secret: true }] },
+    });
+    vi.mocked(fetchIntegration).mockImplementation(async (n: string) => detail(n));
+    vi.mocked(fetchConnections).mockResolvedValue({
+      connections: [
+        { name: "alpha", connected: true, autoReconnect: { bindings: {}, missing: ["password"], dead: false } },
+        { name: "beta", connected: true, autoReconnect: { bindings: { password: "beta_pw" }, missing: [], dead: false } },
+      ],
+    });
+    vi.mocked(fetchVaultSecrets).mockResolvedValue([{ name: "alpha_pw" }, { name: "beta_pw" }] as never);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    // Beta is already cached, so navigating never passes through a loading state
+    // that would unmount the panel and hide a missing key.
+    qc.setQueryData(["integration", "beta"], detail("beta"));
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={["/apps/alpha"]}>
+          <Link to="/apps/beta">go beta</Link>
+          <Routes>
+            <Route path="/apps/:name" element={<AppDetail />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+    await screen.findAllByRole("option", { name: "alpha_pw" });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "alpha_pw" } });
+    expect(screen.getByLabelText("Password")).toHaveValue("alpha_pw");
+    fireEvent.click(screen.getByText("go beta"));
+    await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "beta" })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByLabelText("Password")).toHaveValue("beta_pw"));
   });
 
   it("shows browser controls only for the built-in browser", async () => {

@@ -5,6 +5,7 @@ import WebSocket from "ws";
 import { config } from "../config";
 import { verifySession } from "./session";
 import { defaultTab, getWarmSession } from "./browser-session";
+import { CDP_ORIGIN } from "./cdp-origin";
 
 // Browser-facing CDP transport: plain HTTP instead of a WebSocket, and
 // routable across replicas.
@@ -88,7 +89,7 @@ const wsDialer: Dialer = (target, handlers) => {
   // Chromium's CDP WebSocket gates Origin against --remote-allow-origins.
   // Send a known origin from our side and match it on the chromium args
   // (`http://127.0.0.1`).
-  const ws = new WebSocket(target, { perMessageDeflate: false, origin: "http://127.0.0.1" });
+  const ws = new WebSocket(target, { perMessageDeflate: false, origin: CDP_ORIGIN });
   const queue: string[] = [];
   let open = false;
   ws.on("open", () => {
@@ -215,7 +216,12 @@ export function sendCommands(channel: CdpChannel, body: unknown): number | null 
   if (list.length === 0 || list.length > MAX_BATCH) return null;
   for (const msg of list) {
     if (!msg || typeof msg !== "object" || Array.isArray(msg)) return null;
-    if (typeof (msg as { method?: unknown }).method !== "string") return null;
+    const method = (msg as { method?: unknown }).method;
+    if (typeof method !== "string") return null;
+    // The view drives its one page. The Target domain (getTargets,
+    // attachToTarget, ...) and a flattened `sessionId` would reach other
+    // targets, including a private reconnect tab delivering a credential.
+    if (method.startsWith("Target.") || "sessionId" in msg) return null;
   }
   for (const msg of list) channel.link?.send(JSON.stringify(msg));
   channel.lastActivity = Date.now();

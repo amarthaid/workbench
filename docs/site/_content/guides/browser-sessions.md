@@ -237,6 +237,12 @@ This wipes the user's entire profile directory — the same effect as a TTL expi
 demand. It returns 409 while a session is active. Use it when a profile is corrupted or
 a user wants their server-side browser state gone.
 
+## Auto-reconnect
+
+When a plugin declares a login recipe, the server re-logs in by itself in the
+user's profile when the session dies, instead of asking for a manual reconnect.
+Plugin authors: see [Auto-reconnect](../plugins/auth-modes.md#auto-reconnect).
+
 ## Related failures
 
 Cookie auth has the most operational sharp edges of any auth mode. Chromium refusing to

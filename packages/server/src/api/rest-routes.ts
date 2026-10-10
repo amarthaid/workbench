@@ -7,7 +7,9 @@ import { executeSingle, executeMany, type ExecResult } from "../mcp/meta-tools";
 import { resolveMcpUser } from "../auth/oauth-server/resolve";
 import { getToken } from "../auth/tokens";
 import { hasValidCookies } from "../auth/cookie";
-import { forwardForBrowserAffinity } from "../auth/affinity-forward";
+import { forwardForBrowserAffinity, FORWARD_TIMEOUT_MS, RECIPE_FORWARD_TIMEOUT_MS } from "../auth/affinity-forward";
+import { SESSION_HEADER, verifySessionKey } from "../auth/cdp-bridge";
+import { hasRecipe, runWithBrowserAffinity } from "../auth/reconnect/affinity";
 
 // Plain-REST alternative to `POST /mcp`: same credentials, same execution
 // engine (`executeSingle`/`executeMany` from the meta-tools module), same
@@ -176,90 +178,102 @@ export async function registerRestRoutes(app: FastifyInstance): Promise<void> {
           return reply.status(404).send({ error: `Integration not found: ${integration}` });
         }
 
-        // The browser integration is process-local: route it to the replica
-        // that owns this user's chromium, exactly as /mcp does. Same origin as
+        // The browser integration, and cookie integrations with a reconnect
+        // recipe, are process-local: route them to the replica that owns this
+        // user's chromium, exactly as /mcp does. Same origin as
         // INTERNAL_MCP_URL, this endpoint's own path.
-        if (integration === "browser" && config.INTERNAL_MCP_URL) {
-          const target = new URL("/rest/browser", config.INTERNAL_MCP_URL).toString();
+        if ((integration === "browser" || hasRecipe(integration)) && config.INTERNAL_MCP_URL) {
+          const target = new URL(`/rest/${encodeURIComponent(integration)}`, config.INTERNAL_MCP_URL).toString();
           const sent = await forwardForBrowserAffinity({
             userId, request, reply, target, body: request.body ?? {},
+            // A recipe integration's tool may run a reconnect first.
+            timeoutMs: integration === "browser" ? FORWARD_TIMEOUT_MS : RECIPE_FORWARD_TIMEOUT_MS,
           });
           if (sent) return reply;
         }
 
-        const body = request.body;
-        if (!body || typeof body !== "object" || Array.isArray(body)) {
-          return reply.status(400).send({ error: "Body must be a JSON object" });
-        }
-        const raw = body as Record<string, unknown>;
-
-        // Batch form — same semantics as the `execute_tools` meta-tool: HTTP
-        // 200 with an index-aligned `results` array, one failing item never
-        // aborting the others.
-        if (raw.executions !== undefined) {
-          // `compose` and `return` are MCP-only for now. Ignoring them would
-          // run the steps in parallel, hand each tool its `{{step:...}}` refs
-          // as literal text, and answer with the full results.
-          if (raw.compose !== undefined || raw.return !== undefined) {
-            return reply.status(400).send({ error: "compose and return are not supported on /rest; use execute_tools over /mcp" });
+        // A verified routing key means this replica owns the user's chromium.
+        // Without a cluster mayOwnBrowser() is already true; nothing to verify.
+        const inboundKey = request.headers[SESSION_HEADER];
+        const isOwner =
+          !!config.INTERNAL_MCP_URL &&
+          verifySessionKey(Array.isArray(inboundKey) ? inboundKey[0] : inboundKey, userId);
+        const execute = async () => {
+          const body = request.body;
+          if (!body || typeof body !== "object" || Array.isArray(body)) {
+            return reply.status(400).send({ error: "Body must be a JSON object" });
           }
-          const parsed = BatchBody.safeParse(raw);
+          const raw = body as Record<string, unknown>;
+
+          // Batch form — same semantics as the `execute_tools` meta-tool: HTTP
+          // 200 with an index-aligned `results` array, one failing item never
+          // aborting the others.
+          if (raw.executions !== undefined) {
+            // `compose` and `return` are MCP-only for now. Ignoring them would
+            // run the steps in parallel, hand each tool its `{{step:...}}` refs
+            // as literal text, and answer with the full results.
+            if (raw.compose !== undefined || raw.return !== undefined) {
+              return reply.status(400).send({ error: "compose and return are not supported on /rest; use execute_tools over /mcp" });
+            }
+            const parsed = BatchBody.safeParse(raw);
+            if (!parsed.success) {
+              return reply.status(400).send({ error: `Invalid body: ${parsed.error.message}` });
+            }
+            const items = parsed.data.executions;
+            const resolutions = items.map((i) => resolveToolName(integration, i.tool));
+            const runnable = items
+              .map((item, index) => ({ item, index, resolution: resolutions[index] }))
+              .filter((e) => e.resolution.ok);
+            const { results } = await executeMany(
+              userId,
+              runnable.map((e) => ({
+                tool: (e.resolution as { ok: true; name: string }).name,
+                args: e.item.args ?? {},
+              }))
+            );
+            // Unresolvable names never reach the engine; they get their own
+            // entry so the array stays index-aligned with `executions`.
+            const merged: ExecResult[] = new Array(items.length);
+            resolutions.forEach((r, i) => {
+              if (!r.ok) merged[i] = { error: r.error };
+            });
+            runnable.forEach((e, k) => {
+              merged[e.index] = results[k];
+            });
+            return reply.send({ integration, results: merged });
+          }
+
+          // Single form. `args` wins when present; otherwise every non-envelope
+          // key in the body is treated as a tool argument, which is what makes
+          // the flat spelling work. A tool with an argument literally named
+          // `tool` or `args` must use the `args` wrapper.
+          const parsed = SingleBody.safeParse(raw);
           if (!parsed.success) {
-            return reply.status(400).send({ error: `Invalid body: ${parsed.error.message}` });
+            return reply.status(400).send({
+              error: 'Body must carry a "tool" string (or an "executions" array)',
+              details: parsed.error.issues,
+            });
           }
-          const items = parsed.data.executions;
-          const resolutions = items.map((i) => resolveToolName(integration, i.tool));
-          const runnable = items
-            .map((item, index) => ({ item, index, resolution: resolutions[index] }))
-            .filter((e) => e.resolution.ok);
-          const { results } = await executeMany(
-            userId,
-            runnable.map((e) => ({
-              tool: (e.resolution as { ok: true; name: string }).name,
-              args: e.item.args ?? {},
-            }))
-          );
-          // Unresolvable names never reach the engine; they get their own
-          // entry so the array stays index-aligned with `executions`.
-          const merged: ExecResult[] = new Array(items.length);
-          resolutions.forEach((r, i) => {
-            if (!r.ok) merged[i] = { error: r.error };
-          });
-          runnable.forEach((e, k) => {
-            merged[e.index] = results[k];
-          });
-          return reply.send({ integration, results: merged });
-        }
+          const args =
+            parsed.data.args ??
+            Object.fromEntries(Object.entries(raw).filter(([k]) => !ENVELOPE_KEYS.has(k)));
 
-        // Single form. `args` wins when present; otherwise every non-envelope
-        // key in the body is treated as a tool argument, which is what makes
-        // the flat spelling work. A tool with an argument literally named
-        // `tool` or `args` must use the `args` wrapper.
-        const parsed = SingleBody.safeParse(raw);
-        if (!parsed.success) {
-          return reply.status(400).send({
-            error: 'Body must carry a "tool" string (or an "executions" array)',
-            details: parsed.error.issues,
-          });
-        }
-        const args =
-          parsed.data.args ??
-          Object.fromEntries(Object.entries(raw).filter(([k]) => !ENVELOPE_KEYS.has(k)));
+          const resolution = resolveToolName(integration, parsed.data.tool);
+          if (!resolution.ok) {
+            return reply.status(404).send({ error: resolution.error, integration });
+          }
 
-        const resolution = resolveToolName(integration, parsed.data.tool);
-        if (!resolution.ok) {
-          return reply.status(404).send({ error: resolution.error, integration });
-        }
-
-        const outcome = await executeSingle(userId, resolution.name, args);
-        if ("error" in outcome) {
-          return reply
-            .status(statusForError(outcome.error))
-            .send({ ...outcome, integration, tool: resolution.name });
-        }
-        // No result cap: the whole payload is serialized as-is. That is the
-        // point of this endpoint.
-        return reply.send({ integration, tool: resolution.name, result: outcome.result });
+          const outcome = await executeSingle(userId, resolution.name, args);
+          if ("error" in outcome) {
+            return reply
+              .status(statusForError(outcome.error))
+              .send({ ...outcome, integration, tool: resolution.name });
+          }
+          // No result cap: the whole payload is serialized as-is. That is the
+          // point of this endpoint.
+          return reply.send({ integration, tool: resolution.name, result: outcome.result });
+        };
+        return isOwner ? runWithBrowserAffinity(execute) : execute();
       }
     );
   });

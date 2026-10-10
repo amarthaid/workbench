@@ -1,0 +1,119 @@
+import { useRef, useState } from "react";
+import { Link } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { fetchVaultSecrets, saveReconnectBindings, type ReconnectStatus, type ReconnectCredential } from "../api";
+import { Box, BoxRow } from "./ui/Box";
+import { Button } from "./ui/Button";
+import { Select } from "./ui/Input";
+import { relativeTime } from "../format";
+
+function statusLine(status: ReconnectStatus | undefined): string {
+  if (status?.last?.ok === true) return `Auto-reconnected ${relativeTime(Math.floor(status.last.at / 1000))}`;
+  if (status?.last?.ok === false) {
+    return `Auto-reconnect failed${status.last.error ? ` (${status.last.error})` : ""} — reconnect manually`;
+  }
+  if (status?.dead) return "Session expired";
+  if (status?.missing.length) return "Bind credentials to enable";
+  return "Auto-reconnect ready";
+}
+
+export function AutoReconnectPanel({
+  integration,
+  credentials,
+  status,
+}: {
+  integration: string;
+  credentials: ReconnectCredential[];
+  /** Present only when a connection row exists (connected or expired). */
+  status?: ReconnectStatus;
+}) {
+  const initial = status?.bindings ?? {};
+  // Only the user's edits are state; everything else derives from the server
+  // status, so a status that loads late can never be overwritten by a stale seed.
+  const [edits, setEdits] = useState<Record<string, string>>({});
+  // Bindable whenever a connection row exists, including an expired one:
+  // that is exactly when a user needs to bind.
+  const ready = status !== undefined;
+  const initialRef = useRef(initial);
+  initialRef.current = initial;
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const qc = useQueryClient();
+  const { data: secrets } = useQuery({
+    queryKey: ["vault"],
+    queryFn: fetchVaultSecrets,
+    enabled: credentials.length > 0,
+  });
+
+  const changed: Record<string, string> = {};
+  for (const c of credentials) {
+    const next = edits[c.key];
+    if (next !== undefined && next !== (initial[c.key] ?? "")) changed[c.key] = next;
+  }
+  const dirty = Object.keys(changed).length > 0;
+
+  async function onSave() {
+    setBusy(true);
+    setMsg(null);
+    try {
+      await saveReconnectBindings(integration, changed);
+      setMsg({ ok: true, text: "Bindings saved." });
+      try {
+        await qc.invalidateQueries({ queryKey: ["connections"] });
+      } catch {
+        // The save succeeded; a failed refetch just leaves the edits showing.
+      }
+      // Drop only edits the refreshed status now reflects, so a slow or failed
+      // refetch never flips a picker back to the old binding.
+      setEdits((prev) =>
+        Object.fromEntries(Object.entries(prev).filter(([k, v]) => v !== (initialRef.current[k] ?? "")))
+      );
+    } catch (e) {
+      setMsg({ ok: false, text: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Box title="Auto-reconnect">
+      <BoxRow className="wb-row-stack">
+        <span className="wb-detail-val">{statusLine(status)}</span>
+        {credentials.length === 0 ? (
+          <p className="wb-detail-desc">Signs in again with your existing SSO session</p>
+        ) : (
+          <>
+            <p className="wb-detail-desc">
+              Bind vault entries to the credentials this app signs in with. <Link to="/vault">Add a vault entry</Link>
+            </p>
+            {!ready && <p className="wb-detail-desc">Connect first</p>}
+            {credentials.map((c) => {
+              const value = edits[c.key] ?? initial[c.key] ?? "";
+              const names = (secrets ?? []).map((s) => s.name);
+              const missing = value !== "" && secrets !== undefined && !names.includes(value);
+              return (
+              <div key={c.key} className="wb-inline-row">
+                <label htmlFor={`reconnect-${c.key}`}>{c.label}</label>
+                <Select
+                  id={`reconnect-${c.key}`}
+                  value={value}
+                  disabled={!ready || busy}
+                  onChange={(e) => setEdits((v) => ({ ...v, [c.key]: e.target.value }))}
+                >
+                  <option value="">— none —</option>
+                  {missing && <option value={value}>{value} (missing)</option>}
+                  {names.map((n) => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </Select>
+              </div>
+              );
+            })}
+            <Button onClick={onSave} disabled={!ready || busy || !dirty}>Save</Button>
+          </>
+        )}
+        {msg && <div className={msg.ok ? "wb-ok" : "ui-form-error"}>{msg.text}</div>}
+      </BoxRow>
+    </Box>
+  );
+}

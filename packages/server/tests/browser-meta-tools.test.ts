@@ -176,6 +176,25 @@ describe("browser plugin tools", () => {
     expect(() => schema.parse({ session_id: "s", url: "https://example.com" })).not.toThrow();
   });
 
+  it("browser_navigate schema rejects loopback, where chromium's debug endpoint lives", () => {
+    const schema = tool("browser_navigate").inputSchema;
+    for (const url of [
+      "http://127.0.0.1:9222/json/list",
+      "http://localhost:9222/json/close/ABC",
+      "http://LOCALHOST./",
+      "http://app.localhost/",
+      "http://[::1]:9222/json",
+      "http://0.0.0.0:9222/json",
+      "http://2130706433:9222/json", // 127.0.0.1 as one number
+      "http://0x7f.1/",
+      "http://[::ffff:127.0.0.1]/",
+    ]) {
+      expect(() => schema.parse({ session_id: "s", url }), url).toThrow();
+    }
+    expect(() => schema.parse({ session_id: "s", url: "https://example.com:9222/" })).not.toThrow();
+    expect(() => schema.parse({ session_id: "s", url: "http://10.0.0.5/" })).not.toThrow();
+  });
+
   it("browser_screenshot forwards opts and returns the helper result", async () => {
     shotMock.mockResolvedValue({ _mcpImage: { data: "B64", mimeType: "image/jpeg" } });
     const out = await (tool("browser_screenshot").handler as any)({ userId: "u1" }, { session_id: "T1", maxWidth: 800 });

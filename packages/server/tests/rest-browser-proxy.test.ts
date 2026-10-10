@@ -35,6 +35,8 @@ vi.mock("../src/auth/oauth-server/resolve", () => ({
 
 import { registerRestRoutes } from "../src/api/rest-routes";
 import { registry } from "../src/plugins/registry";
+import { hasValidCookies } from "../src/auth/cookie";
+import { mayOwnBrowser } from "../src/auth/reconnect/affinity";
 import { SESSION_HEADER, mintSessionKey } from "../src/auth/cdp-bridge";
 
 const browserInteg = {
@@ -65,16 +67,36 @@ const listRepos = {
   handler: vi.fn(async () => ({ local: true })),
 };
 
+// What mayOwnBrowser() said while the acme handler ran.
+const owned: boolean[] = [];
+const acmeInteg = {
+  name: "acme",
+  version: "1.0.0",
+  displayName: "Acme",
+  auth: { type: "cookie" as const, reconnect: { steps: [{ goto: "loginUrl" }] } },
+};
+const acmeList = {
+  name: "acme_list",
+  description: "list",
+  integration: "acme",
+  inputSchema: z.object({}),
+  handler: vi.fn(async () => {
+    owned.push(mayOwnBrowser());
+    return { local: true };
+  }),
+};
+
 function stubRegistry() {
   vi.spyOn(registry, "getIntegration").mockImplementation((name: string) =>
-    name === "browser" ? (browserInteg as any) : name === "github" ? (githubInteg as any) : undefined
+    name === "browser" ? (browserInteg as any) : name === "github" ? (githubInteg as any) : name === "acme" ? (acmeInteg as any) : undefined
   );
   vi.spyOn(registry, "listToolsByIntegration").mockImplementation((name: string) =>
-    name === "browser" ? ([browserStart] as any) : name === "github" ? ([listRepos] as any) : []
+    name === "browser" ? ([browserStart] as any) : name === "github" ? ([listRepos] as any) : name === "acme" ? ([acmeList] as any) : []
   );
   vi.spyOn(registry, "getTool").mockImplementation((name: string) => {
     if (name === "browser_start") return browserStart as any;
     if (name === "github_list_repos") return listRepos as any;
+    if (name === "acme_list") return acmeList as any;
     return undefined;
   });
 }
@@ -84,6 +106,7 @@ let app: ReturnType<typeof Fastify>;
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  owned.length = 0;
   fetchMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
   stubRegistry();
@@ -138,3 +161,86 @@ describe("POST /rest/browser affinity", () => {
     expect(fetchMock.mock.calls[0][1].headers[SESSION_HEADER]).toBe(mintSessionKey("user-1"));
   });
 });
+
+describe("POST /rest/<recipe integration> affinity", () => {
+  it("forwards to its own path with the user's routing key", async () => {
+    fetchMock.mockResolvedValue({ status: 200, text: async () => JSON.stringify({ integration: "acme", result: { remote: true } }) });
+    const res = await app.inject({ method: "POST", url: "/rest/acme", headers, payload: { tool: "list" } });
+    expect(res.statusCode).toBe(200);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://a-workbench/rest/acme");
+    expect(init.headers[SESSION_HEADER]).toBe(mintSessionKey("user-1"));
+    expect(acmeList.handler).not.toHaveBeenCalled();
+  });
+
+  it("handles locally when the header carries this user's own key", async () => {
+    vi.mocked(hasValidCookies).mockResolvedValueOnce(true as never);
+    const res = await app.inject({
+      method: "POST", url: "/rest/acme",
+      headers: { ...headers, [SESSION_HEADER]: mintSessionKey("user-1") },
+      payload: { tool: "list" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(acmeList.handler).toHaveBeenCalled();
+    expect(owned).toEqual([true]);
+  });
+
+  // The owner gate: only a verified key for this bearer's user lets the
+  // handler drive chromium. When the hop fails the request falls through to
+  // local handling, which is exactly where the gate must say no.
+  it("grants chromium ownership only for this user's verified key", async () => {
+    vi.mocked(hasValidCookies).mockResolvedValue(true as never);
+    fetchMock.mockRejectedValue(connRefused());
+    for (const [key, expected] of [
+      [mintSessionKey("user-1"), true],
+      [undefined, false],
+      [mintSessionKey("user-2"), false],
+    ] as const) {
+      owned.length = 0;
+      const res = await app.inject({
+        method: "POST", url: "/rest/acme",
+        headers: key ? { ...headers, [SESSION_HEADER]: key } : headers,
+        payload: { tool: "list" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(owned).toEqual([expected]);
+    }
+  });
+
+  it("a timeout after the request was sent is 504 UPSTREAM_TIMEOUT and never runs locally", async () => {
+    vi.mocked(hasValidCookies).mockResolvedValue(true as never);
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    fetchMock.mockRejectedValue(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+    const res = await app.inject({ method: "POST", url: "/rest/acme", headers, payload: { tool: "list" } });
+    expect(res.statusCode).toBe(504);
+    expect(res.json()).toEqual({ error: "UPSTREAM_TIMEOUT" });
+    expect(acmeList.handler).not.toHaveBeenCalled();
+    expect(timeout).toHaveBeenLastCalledWith(150_000); // sized for a recipe run
+  });
+
+  it("connection refused (nothing sent) falls back to local handling", async () => {
+    vi.mocked(hasValidCookies).mockResolvedValue(true as never);
+    fetchMock.mockRejectedValue(connRefused());
+    const res = await app.inject({ method: "POST", url: "/rest/acme", headers, payload: { tool: "list" } });
+    expect(res.statusCode).toBe(200);
+    expect(acmeList.handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards, rather than runs, another user's key", async () => {
+    fetchMock.mockResolvedValue({ status: 200, text: async () => JSON.stringify({ integration: "acme", result: {} }) });
+    await app.inject({
+      method: "POST", url: "/rest/acme",
+      headers: { ...headers, [SESSION_HEADER]: mintSessionKey("user-2") },
+      payload: { tool: "list" },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][1].headers[SESSION_HEADER]).toBe(mintSessionKey("user-1"));
+    expect(acmeList.handler).not.toHaveBeenCalled();
+  });
+});
+
+// What undici throws when the connect itself fails: nothing was sent.
+function connRefused() {
+  return Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("connect ECONNREFUSED a-workbench:80"), { code: "ECONNREFUSED" }) });
+}

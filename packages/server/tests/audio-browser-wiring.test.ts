@@ -35,7 +35,14 @@ vi.mock("../src/auth/cookie", () => ({ startProxyAuth: vi.fn(), filterCookies: v
 vi.mock("ws", async () => {
   const { EventEmitter } = await import("node:events");
   class FakeWs extends EventEmitter {
-    send = vi.fn();
+    send = vi.fn(function (this: any, raw: string) {
+      // Answer every command so awaited sends (the debug-port block on agent
+      // tabs) resolve; fire-and-forget enables just get an unread reply.
+      try {
+        const m = JSON.parse(raw);
+        if (typeof m.id === "number") setImmediate(() => this.emit("message", JSON.stringify({ id: m.id, result: {} })));
+      } catch { /* not JSON */ }
+    });
     close = vi.fn();
     constructor() { super(); setImmediate(() => this.emit("open")); }
   }

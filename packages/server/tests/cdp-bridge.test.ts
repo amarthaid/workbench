@@ -311,6 +311,20 @@ describe("the first command starts the browser", () => {
     }
   });
 
+  it("400s Target.* and child-session commands: the view can never reach another target", async () => {
+    // A page socket answers Target.getTargets / Target.attachToTarget, and a
+    // flattened `sessionId` routes a command into the attached target. Either
+    // would reach a private recipe tab while it types a credential.
+    for (const payload of [
+      [{ id: 1, method: "Target.getTargets" }],
+      [{ id: 1, method: "Page.enable" }, { id: 2, method: "Target.attachToTarget", params: { targetId: "RECIPE", flatten: true } }],
+      [{ id: 1, method: "Runtime.evaluate", sessionId: "child-1", params: { expression: "1" } }],
+    ]) {
+      const res = await app.inject({ method: "POST", url: `${BASE}/commands`, headers: headers(), payload });
+      expect(res.statusCode).toBe(400);
+    }
+  });
+
   it("400s a batch over the cap", async () => {
     const res = await app.inject({
       method: "POST",

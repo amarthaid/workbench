@@ -1,15 +1,17 @@
 import { chromium } from "playwright";
 import { spawn, ChildProcess } from "node:child_process";
-import { mkdirSync, chmodSync, rmSync } from "node:fs";
+import { mkdirSync, chmodSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { createServer } from "node:net";
 import WebSocket from "ws";
 import { config } from "../config";
+import { CDP_ORIGIN } from "./cdp-origin";
 
 // Userdata dirs can't be shared by two Chromium processes — one active session
 // (capture OR warm browser) per user at a time. Shared by cookie.ts and
 // browser-session.ts so the two are mutually exclusive.
 export const activeProfiles = new Set<string>();
+
 
 export function profilesBaseDir(): string {
   return config.BROWSER_PROFILES_DIR || join(dirname(config.DATABASE_URL), "browser-profiles");
@@ -61,6 +63,20 @@ async function getFreePort(): Promise<number> {
   });
 }
 
+/**
+ * The chromium debug port. Never one of BROWSER_LOOPBACK_ALLOW_PORTS: those
+ * are reachable from agent tabs, and every worker reads the same list, so no
+ * process's chromium can sit on one.
+ */
+export async function pickDebugPort(probe: () => Promise<number> = getFreePort): Promise<number> {
+  const allowed = config.BROWSER_LOOPBACK_ALLOW_PORTS ?? [];
+  for (let i = 0; i < 20; i++) {
+    const port = await probe();
+    if (!allowed.includes(port)) return port;
+  }
+  throw new Error("pickDebugPort: every free port offered was allow-listed");
+}
+
 export interface PollOpts {
   /** Give up this long after the first attempt. Budget in time, not attempts:
    *  an attempt count silently shrinks the budget when each fetch is slow. */
@@ -109,7 +125,7 @@ export async function cdpCall(
   params: Record<string, unknown> = {}
 ): Promise<Record<string, unknown>> {
   return await new Promise((resolve, reject) => {
-    const ws = new WebSocket(wsUrl, { perMessageDeflate: false, origin: "http://127.0.0.1" });
+    const ws = new WebSocket(wsUrl, { perMessageDeflate: false, origin: CDP_ORIGIN });
     const timeout = setTimeout(() => {
       try { ws.close(); } catch { /* noop */ }
       reject(new Error(`cdpCall ${method} timed out`));
@@ -153,6 +169,38 @@ export interface SpawnedChromium {
   timings: SpawnStageTimings;
 }
 
+/**
+ * Turn chromium's password manager off in the profile before it starts. A
+ * reconnect recipe fills a vault password into a login form, and chromium
+ * would otherwise offer to save it, or save it, into the profile's Login
+ * Data. There is no stable command-line switch for this, so it is the
+ * profile prefs. Other prefs are kept. A Preferences file that does not parse
+ * is left alone rather than clobbered (chromium resets it itself).
+ */
+function disablePasswordManager(userDataDir: string): void {
+  const dir = join(userDataDir, "Default");
+  const file = join(dir, "Preferences");
+  let prefs: Record<string, unknown> = {};
+  if (existsSync(file)) {
+    try {
+      const parsed = JSON.parse(readFileSync(file, "utf8")) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+      prefs = parsed as Record<string, unknown>;
+    } catch {
+      return;
+    }
+  }
+  const profile = prefs.profile && typeof prefs.profile === "object" ? (prefs.profile as Record<string, unknown>) : {};
+  prefs.credentials_enable_service = false;
+  prefs.profile = { ...profile, password_manager_enabled: false };
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(file, JSON.stringify(prefs), { mode: 0o600 });
+  } catch (e) {
+    console.warn(`[browser] could not disable the password manager: ${(e as NodeJS.ErrnoException).code ?? "ERROR"}`);
+  }
+}
+
 // Launch a headless Chromium on the user's persistent profile and resolve once
 // its DevTools endpoint and a non-blank page target are up. Caller owns the
 // activeProfiles lock (acquire before calling, release on failure/teardown).
@@ -161,17 +209,18 @@ export async function spawnProfileChromium(
   opts: { startUrl?: string; env?: NodeJS.ProcessEnv; extraArgs?: string[] } = {}
 ): Promise<SpawnedChromium> {
   const t0 = Date.now();
-  const remotePort = await getFreePort();
+  const remotePort = await pickDebugPort();
   const userDataDir = userProfileDir(userId);
   mkdirSync(userDataDir, { recursive: true, mode: 0o700 });
   chmodSync(userDataDir, 0o700);
   clearStaleSingletonLocks(userDataDir);
+  disablePasswordManager(userDataDir);
   const execPath = chromium.executablePath();
   const args = [
     "--headless=new",
     `--remote-debugging-port=${remotePort}`,
     `--user-data-dir=${userDataDir}`,
-    "--remote-allow-origins=http://127.0.0.1",
+    `--remote-allow-origins=${CDP_ORIGIN}`,
     "--no-first-run",
     "--no-default-browser-check",
     "--disable-features=TranslateUI",
@@ -195,6 +244,9 @@ export async function spawnProfileChromium(
     ...(process.env.CAPTURE_PROXY ? [`--proxy-server=${process.env.CAPTURE_PROXY}`] : []),
     "--no-sandbox",
     "--disable-dev-shm-usage",
+    // No OS keychain for cookie encryption (macOS "Chromium Safe Storage" prompt); no-op on Linux. Playwright passes the same.
+    "--use-mock-keychain",
+    "--password-store=basic",
   ];
   if (opts.extraArgs) args.push(...opts.extraArgs);
   if (opts.startUrl) args.push(opts.startUrl);

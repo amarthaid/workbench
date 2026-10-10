@@ -2,6 +2,33 @@ import { getToken, storeToken, getConnectionConfig, TokenData } from "../auth/to
 import { getCookies, CookieData, isCookieExpired } from "../auth/cookie";
 import { getPluginOAuthCreds, resolveOAuthUrls } from "../auth/plugin-oauth";
 import { registry } from "./registry";
+import { matchesDead } from "../auth/reconnect/dead";
+import { reconnectSession } from "../auth/reconnect/runner";
+import { getReconnectState, updateReconnectState } from "../auth/reconnect/state";
+
+function buildCookieHeader(data: CookieData, targetHost: string): string {
+  const nowSec = Math.floor(Date.now() / 1000);
+  return data.cookies
+    .filter((c) => !c.expires || c.expires >= nowSec)
+    .filter((c) => {
+      const cd = c.domain.replace(/^\./, "").toLowerCase();
+      return targetHost === cd || targetHost.endsWith("." + cd);
+    })
+    .map((c) => `${c.name}=${c.value}`)
+    .join("; ");
+}
+
+// A login bounce means the upstream never processed the request, so it is
+// safe to re-send, but only a body we still hold. A stream is spent.
+function isReplayableBody(body: RequestInit["body"]): boolean {
+  return (
+    body == null ||
+    typeof body === "string" ||
+    body instanceof URLSearchParams ||
+    body instanceof ArrayBuffer ||
+    ArrayBuffer.isView(body)
+  );
+}
 
 // Refresh a few seconds before the actual expiry to absorb clock skew.
 const TOKEN_EXPIRY_SKEW_SECONDS = 30;
@@ -159,18 +186,35 @@ export async function createContext(userId: string, integration: string): Promis
           );
         }
 
-        const nowSec = Math.floor(Date.now() / 1000);
-        const cookieHeader = cookieData.cookies
-          .filter((c) => !c.expires || c.expires >= nowSec)
-          .filter((c) => {
-            const cd = c.domain.replace(/^\./, "").toLowerCase();
-            return targetHost === cd || targetHost.endsWith("." + cd);
-          })
-          .map((c) => `${c.name}=${c.value}`)
-          .join("; ");
-        headers.set("Cookie", cookieHeader);
-
-        return fetch(url, { ...init, headers, redirect: "manual" });
+        const send = () => {
+          headers.set("Cookie", buildCookieHeader(cookieData!, targetHost));
+          return fetch(url, { ...init, headers, redirect: "manual" });
+        };
+        const res = await send();
+        const session = integrationConfig.auth.session;
+        if (!session || !matchesDead(res, session.dead, url)) return res;
+        if (!integrationConfig.auth.reconnect) {
+          await updateReconnectState(userId, integration, { deadAt: Date.now() });
+          return res;
+        }
+        // The runner applies the cooldown itself, after its fast path (which
+        // types nothing), and marks the session dead when it refuses.
+        const outcome = await reconnectSession(userId, integration);
+        if (!outcome.ok || !isReplayableBody(init?.body)) return res;
+        const fresh = await getCookies(userId, integration);
+        if (!fresh) return res;
+        cookieData = fresh;
+        const retried = await send();
+        if (matchesDead(retried, session.dead, url)) {
+          // The recipe "succeeded" but its cookies are still refused. Record it
+          // as a failed attempt so the cooldown holds the rate at its promised cap.
+          const now = Date.now();
+          await updateReconnectState(userId, integration, {
+            deadAt: now,
+            last: { at: now, ok: false, error: "verify: PROBE_FAILED" },
+          });
+        }
+        return retried;
       }
 
       const token = await ctx.getToken();

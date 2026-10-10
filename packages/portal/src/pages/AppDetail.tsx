@@ -11,6 +11,7 @@ import {
   removeCustomApp,
   updateCustomAppHeaders,
   type HeaderRow,
+  type ReconnectStatus,
 } from "../api";
 import { PageHeader } from "../components/ui/PageHeader";
 import { Box, BoxRow } from "../components/ui/Box";
@@ -20,6 +21,7 @@ import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { ConfirmDialog } from "../components/dialogs/ConfirmDialog";
+import { AutoReconnectPanel } from "../components/AutoReconnectPanel";
 import { CustomAppHeadersEditor } from "../components/CustomAppHeadersEditor";
 import IntegrationLogo from "../components/IntegrationLogo";
 import { useConnectFlow } from "../hooks/useConnectFlow";
@@ -53,10 +55,11 @@ export default function AppDetail() {
     }
   }
 
-  const connected = useMemo(() => {
-    const rows: { name: string; connected: boolean }[] = connectionsData?.connections ?? [];
-    return rows.some((c) => c.name === name && c.connected);
+  const connectionRow = useMemo(() => {
+    const rows: { name: string; connected: boolean; autoReconnect?: ReconnectStatus }[] = connectionsData?.connections ?? [];
+    return rows.find((c) => c.name === name);
   }, [connectionsData, name]);
+  const connected = connectionRow?.connected === true;
 
   if (isLoading) {
     return (
@@ -166,6 +169,14 @@ export default function AppDetail() {
           <CustomAppHeaders id={data.name.replace(/^custom:/, "")} names={data.headerNames ?? []} />
         )}
         {data.authType === "cookie" && <SessionTransfer name={data.name} />}
+        {data.authType === "cookie" && data.autoReconnect && (
+          <AutoReconnectPanel
+            key={data.name}
+            integration={data.name}
+            credentials={data.autoReconnect.credentials}
+            status={connectionRow?.autoReconnect}
+          />
+        )}
         {data.name === "browser" && <BrowserControls />}
 
         <Box title={`Tools (${data.tools.length})`}>

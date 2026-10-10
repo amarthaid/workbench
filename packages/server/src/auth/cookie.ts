@@ -3,6 +3,8 @@ import WebSocket from "ws";
 import { db } from "../db";
 import { encrypt, decrypt } from "./encryption";
 import { activeProfiles, userProfileDir } from "./profile-chromium";
+import { CDP_ORIGIN } from "./cdp-origin";
+import { getReconnectState, updateReconnectState } from "./reconnect/state";
 
 export interface CookieData {
   domain: string;
@@ -46,7 +48,7 @@ export function createProxyAuthHandler(creds: { username: string; password: stri
 
 export function startProxyAuth(browserWsUrl: string, username: string, password: string): WebSocket {
   const handler = createProxyAuthHandler({ username, password });
-  const ws = new WebSocket(browserWsUrl, { perMessageDeflate: false, origin: "http://127.0.0.1" });
+  const ws = new WebSocket(browserWsUrl, { perMessageDeflate: false, origin: CDP_ORIGIN });
   ws.on("open", () => {
     ws.send(JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true, flatten: true, waitForDebuggerOnStart: false } }));
   });
@@ -114,6 +116,27 @@ export async function storeCookies(userId: string, integration: string, data: Co
        updated_at = ?`,
     [userId, integration, encrypt("cookie-auth"), encrypt(JSON.stringify(data)), now, now, now]
   );
+  // Fresh cookies (manual connect, import, or auto-reconnect) end a dead spell.
+  // A recorded failure stays: it holds the cooldown, and import accepts an API
+  // key, so clearing it here would let an agent loop import -> dead call ->
+  // recipe run and replay the vault password without a cap. Only a portal
+  // session clears it (clearReconnectFailure).
+  await updateReconnectState(userId, integration, { deadAt: undefined });
+}
+
+/**
+ * Drop a failed attempt (and so its cooldown), keeping a success, and stamp
+ * `clearedAt` so a run the runner only remembers in memory (the row was
+ * deleted and re-imported since) stops holding too. Call only on a path a
+ * signed-in human drove (portal session): a manual reconnect there means the
+ * stale "Auto-reconnect failed" no longer applies.
+ */
+export async function clearReconnectFailure(userId: string, integration: string): Promise<void> {
+  const { last } = await getReconnectState(userId, integration);
+  await updateReconnectState(userId, integration, {
+    clearedAt: Date.now(),
+    ...(last && !last.ok ? { last: undefined } : {}),
+  });
 }
 
 export async function getCookies(userId: string, integration: string): Promise<CookieData | null> {
@@ -141,6 +164,6 @@ export function isCookieExpired(data: CookieData): boolean {
 
 export async function hasValidCookies(userId: string, integration: string): Promise<boolean> {
   const data = await getCookies(userId, integration);
-  if (!data) return false;
-  return !isCookieExpired(data);
+  if (!data || isCookieExpired(data)) return false;
+  return !(await getReconnectState(userId, integration)).deadAt;
 }

@@ -59,6 +59,9 @@ vi.mock("../src/custom-apps/client", async (importOriginal) => ({
 vi.mock("../src/auth/cookie", () => ({
   hasValidCookies: vi.fn(() => false),
   storeCookies: vi.fn(),
+  // ensureCookieSession reads the row to tell "never connected" from "expired".
+  getCookies: vi.fn(async () => null),
+  isCookieExpired: vi.fn(() => true),
 }));
 
 vi.mock("../src/auth/browser-session", () => ({

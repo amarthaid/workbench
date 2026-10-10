@@ -5,9 +5,12 @@ import { encrypt, decrypt } from "../auth/encryption";
 // Per-user secrets the agent can USE but never READ.
 //
 // `readSecretValue` is the only function in the server that decrypts a vault
-// row. Its two callers are the interpolator (mcp/meta-tools.ts via
-// vault/interpolate.ts) and the one-time-link redeemer (vault/routes.ts). No
-// list, no portal route, no tool returns the plaintext.
+// row. Its callers are the interpolator (mcp/meta-tools.ts via
+// vault/interpolate.ts), the one-time-link redeemer (vault/routes.ts), and the
+// cookie auto-reconnect runner (auth/reconnect/runner.ts), which hands the
+// value only to a `Runtime.callFunctionOn` argument bound to the verified form
+// field (auth/reconnect/dom.ts fillSelector). No list, no portal route, no
+// tool returns the plaintext.
 //
 // Same envelope as OAuth tokens: AES-256-GCM under ENCRYPTION_KEY
 // (auth/encryption.ts). No key versioning — nothing else has it either.
