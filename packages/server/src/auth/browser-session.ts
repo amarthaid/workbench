@@ -158,20 +158,25 @@ function pageWsUrl(remotePort: number, targetId: string): string {
   return `ws://127.0.0.1:${remotePort}/devtools/page/${targetId}`;
 }
 
-async function attachTab(s: WarmSession, targetId: string, wsUrl: string): Promise<Tab> {
+async function attachTab(
+  s: WarmSession,
+  targetId: string,
+  wsUrl: string,
+  map: Map<string, Tab> = s.tabs
+): Promise<Tab> {
   const cdp = new CdpClient(wsUrl, () => {
     // Only this tab is gone. Never tear the session down from here: chromium
     // is still up and the other tabs are still driveable.
-    const cur = s.tabs.get(targetId);
+    const cur = map.get(targetId);
     if (cur && cur.cdp === cdp) {
-      s.tabs.delete(targetId);
-      emitSafe("tab-closed", s.userId, targetId);
+      map.delete(targetId);
+      if (map === s.tabs) emitSafe("tab-closed", s.userId, targetId);
     }
   });
   await cdp.ready;
   const now = Date.now();
   const tab: Tab = { id: targetId, cdp, lastActivity: now, createdAt: now };
-  s.tabs.set(targetId, tab);
+  map.set(targetId, tab);
   return tab;
 }
 
@@ -189,6 +194,14 @@ export interface WarmSession {
    * agents holding the old routing key are mapped onto it.
    */
   tabs: Map<string, Tab>;
+  /**
+   * Tabs the server drives for itself (an auto-reconnect recipe delivering a
+   * vault credential). Never in `tabs`: no browser_* tool can resolve, list,
+   * close or adopt one, and the live view never lands on one. An agent with
+   * main-world evaluate on that page could otherwise listen for the input
+   * event that carries the credential.
+   */
+  privateTabs: Map<string, Tab>;
   defaultTabId: string;
   /**
    * Tabs whose target is being created right now. openTab reserves its slot
@@ -290,6 +303,7 @@ async function startSession(userId: string): Promise<WarmSession> {
       userId,
       lastActivity: Date.now(),
       tabs: new Map(),
+      privateTabs: new Map(),
       defaultTabId: spawned.cdpPageTargetId,
       pendingOpens: 0,
       authWs,
@@ -315,8 +329,9 @@ async function startSession(userId: string): Promise<WarmSession> {
         warmSessions.delete(userId);
         cancelDownloads(userId);
       }
-      for (const t of session.tabs.values()) { try { t.cdp.close(); } catch { /* noop */ } }
+      for (const t of [...session.tabs.values(), ...session.privateTabs.values()]) { try { t.cdp.close(); } catch { /* noop */ } }
       session.tabs.clear();
+      session.privateTabs.clear();
       try { session.browserCdp?.close(); } catch { /* noop */ }
       try { session.authWs?.close(); } catch { /* noop */ }
       // Releases the whole per-user daemon; its devices die with it. Guarded by
@@ -417,10 +432,36 @@ export type OpenTabResult =
   | { ok: false; error: "BROWSER_TAB_LIMIT"; limit: number };
 
 /** Open a fresh about:blank tab in this user's chromium and register it. */
-export async function openTab(userId: string): Promise<OpenTabResult> {
+export function openTab(userId: string): Promise<OpenTabResult> {
+  return openTabIn(userId, false);
+}
+
+/**
+ * Open a tab only the server can drive. It is kept out of `tabs`, so getTab,
+ * listTabs, closeTab and defaultTab never see it. Close it with closePrivateTab.
+ */
+export function openPrivateTab(userId: string): Promise<OpenTabResult> {
+  return openTabIn(userId, true);
+}
+
+/** Close a tab opened by openPrivateTab. False when it is not one of this user's. */
+export async function closePrivateTab(userId: string, tabId: string): Promise<boolean> {
+  const s = warmSessions.get(userId);
+  const tab = s?.privateTabs.get(tabId);
+  if (!s || !tab) return false;
+  s.privateTabs.delete(tabId);
+  try { tab.cdp.close(); } catch { /* noop */ }
+  try {
+    const browser = await browserClient(s);
+    await browser.send("Target.closeTarget", { targetId: tabId });
+  } catch { /* target already gone */ }
+  return true;
+}
+
+async function openTabIn(userId: string, isPrivate: boolean): Promise<OpenTabResult> {
   const s = await ensureSession(userId);
   const limit = config.BROWSER_TAB_LIMIT;
-  if (s.tabs.size + s.pendingOpens >= limit) return { ok: false, error: "BROWSER_TAB_LIMIT", limit };
+  if (s.tabs.size + s.privateTabs.size + s.pendingOpens >= limit) return { ok: false, error: "BROWSER_TAB_LIMIT", limit };
   s.pendingOpens += 1;
   try {
     const browser = await browserClient(s);
@@ -431,7 +472,7 @@ export async function openTab(userId: string): Promise<OpenTabResult> {
       url: "about:blank",
       background: true,
     })) as { targetId: string };
-    const tab = await attachTab(s, targetId, pageWsUrl(s.remotePort, targetId));
+    const tab = await attachTab(s, targetId, pageWsUrl(s.remotePort, targetId), isPrivate ? s.privateTabs : s.tabs);
     s.lastActivity = Date.now();
     return { ok: true, tab };
   } finally {
@@ -452,7 +493,9 @@ export async function defaultTab(userId: string): Promise<Tab> {
   const { targetInfos } = (await browser.send("Target.getTargets")) as {
     targetInfos?: Array<{ targetId: string; type: string }>;
   };
-  const pages = (targetInfos ?? []).filter((t) => t.type === "page");
+  // Never adopt a private (server-driven) tab: it would become the agent's
+  // compat default and the live view's target.
+  const pages = (targetInfos ?? []).filter((t) => t.type === "page" && !s.privateTabs.has(t.targetId));
   // Prefer a page nothing is driving yet, so adopting a default does not hand
   // the live view a tab an agent is already working in.
   let targetId = (pages.find((t) => !s.tabs.has(t.targetId)) ?? pages[0])?.targetId;
@@ -491,7 +534,7 @@ export async function listTabs(userId: string): Promise<TabInfo[]> {
     targetInfos?: Array<{ targetId: string; type: string; url: string; title: string }>;
   };
   return (targetInfos ?? [])
-    .filter((t) => t.type === "page")
+    .filter((t) => t.type === "page" && !s.privateTabs.has(t.targetId))
     .map((t) => ({ id: t.targetId, url: t.url, title: t.title, active: s.tabs.has(t.targetId) }));
 }
 
@@ -524,8 +567,9 @@ export async function closeBrowserSession(userId: string): Promise<void> {
   // Release now, not on proc exit: a re-spawn before that exit must get a
   // fresh manager, and the stale exit handler is guarded by `pm` identity.
   if (s.audio) void releasePulse(s.audio.key, s.audio.pm).catch(() => undefined);
-  for (const t of s.tabs.values()) { try { t.cdp.close(); } catch { /* noop */ } }
+  for (const t of [...s.tabs.values(), ...s.privateTabs.values()]) { try { t.cdp.close(); } catch { /* noop */ } }
   s.tabs.clear();
+  s.privateTabs.clear();
   try { s.browserCdp?.close(); } catch { /* noop */ }
   try { s.authWs?.close(); } catch { /* noop */ }
   try { s.proc.kill("SIGKILL"); } catch { /* noop */ }

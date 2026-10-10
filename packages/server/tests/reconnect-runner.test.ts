@@ -64,8 +64,8 @@ vi.mock("../src/auth/cookie", async (orig) => {
 
 vi.mock("../src/auth/browser-session", async (orig) => ({
   ...(await orig<typeof import("../src/auth/browser-session")>()),
-  openTab: vi.fn(async () => ({ ok: true, tab: h.fakeTab })),
-  closeTab: vi.fn(async () => true),
+  openPrivateTab: vi.fn(async () => ({ ok: true, tab: h.fakeTab })),
+  closePrivateTab: vi.fn(async () => true),
   getWarmSession: vi.fn(() => ({})),
   captureLiveCookies: vi.fn(async (_u: string, d: string) => ({ domain: d, cookies: h.live.cookies, capturedAt: 1 })),
 }));
@@ -86,7 +86,7 @@ import { config } from "../src/config";
 import { registry } from "../src/plugins/registry";
 import { activeProfiles } from "../src/auth/profile-chromium";
 import { storeCookies } from "../src/auth/cookie";
-import { closeTab, openTab } from "../src/auth/browser-session";
+import { closePrivateTab, openPrivateTab } from "../src/auth/browser-session";
 import { touchUsed } from "../src/vault/store";
 import { getReconnectState, updateReconnectState } from "../src/auth/reconnect/state";
 import { markConnectStarted, markConnectEnded } from "../src/auth/reconnect/connect-lock";
@@ -163,7 +163,7 @@ describe("reconnectSession", () => {
     expect(st.deadAt).toBeUndefined();
     expect(st.last?.ok).toBe(true);
     expect(auditLog).toHaveBeenCalledWith(expect.objectContaining({ action: "REFRESH", success: true, integration: I }));
-    expect(closeTab).toHaveBeenCalledWith(U, "tab-1");
+    expect(closePrivateTab).toHaveBeenCalledWith(U, "tab-1");
   });
 
   it("fast path: a live profile session skips the steps", async () => {
@@ -214,7 +214,7 @@ describe("reconnectSession", () => {
       expect(st.last).toBeUndefined();
       expect(st.deadAt).toBeUndefined();
       expect(sent).toHaveLength(0);
-      expect(openTab).not.toHaveBeenCalled();
+      expect(openPrivateTab).not.toHaveBeenCalled();
       expect(auditLog).not.toHaveBeenCalled();
     } finally {
       markConnectEnded(U);
@@ -228,7 +228,7 @@ describe("reconnectSession", () => {
       probeStatus = 200;
       expect(await reconnectSession(U, I)).toEqual({ ok: true });
       expect(__deps.probe).toHaveBeenCalled();
-      expect(openTab).not.toHaveBeenCalled();
+      expect(openPrivateTab).not.toHaveBeenCalled();
     } finally {
       activeProfiles.delete(U);
     }
@@ -239,21 +239,21 @@ describe("reconnectSession", () => {
     probeStatus = 200;
     h.flags.storeFail = true;
     expect(await reconnectSession(U, I)).toMatchObject({ ok: false, reason: "BROWSER_ERROR" });
-    expect(openTab).not.toHaveBeenCalled();
+    expect(openPrivateTab).not.toHaveBeenCalled();
     expect(sent.find(([m]) => m === "Page.navigate")).toBeUndefined();
     expect((await getReconnectState(U, I)).last).toMatchObject({ ok: false });
   });
 
-  it("openTab returning !ok is BROWSER_ERROR, recorded under 'open'", async () => {
-    vi.mocked(openTab).mockResolvedValueOnce({ ok: false, error: "BROWSER_TAB_LIMIT", limit: 1 });
+  it("openPrivateTab returning !ok is BROWSER_ERROR, recorded under 'open'", async () => {
+    vi.mocked(openPrivateTab).mockResolvedValueOnce({ ok: false, error: "BROWSER_TAB_LIMIT", limit: 1 });
     const out = await reconnectSession(U, I);
     expect(out).toEqual({ ok: false, reason: "BROWSER_ERROR" });
     expect((await getReconnectState(U, I)).last?.error).toBe("open: BROWSER_ERROR");
-    expect(closeTab).not.toHaveBeenCalled();
+    expect(closePrivateTab).not.toHaveBeenCalled();
   });
 
-  it("openTab throwing is BROWSER_ERROR", async () => {
-    vi.mocked(openTab).mockRejectedValueOnce(new Error("spawn failed"));
+  it("openPrivateTab throwing is BROWSER_ERROR", async () => {
+    vi.mocked(openPrivateTab).mockRejectedValueOnce(new Error("spawn failed"));
     expect(await reconnectSession(U, I)).toEqual({ ok: false, reason: "BROWSER_ERROR" });
     expect((await getReconnectState(U, I)).deadAt).toBeTypeOf("number");
   });
@@ -267,7 +267,7 @@ describe("reconnectSession", () => {
     const out = await reconnectSession(U, I);
     expect(out).toEqual({ ok: false, reason: "TIMEOUT", step: 0 });
     expect(Date.now() - t0).toBeLessThan(3000);
-    expect(closeTab).toHaveBeenCalledWith(U, "tab-1");
+    expect(closePrivateTab).toHaveBeenCalledWith(U, "tab-1");
     expect((await getReconnectState(U, I)).last?.error).toBe("step 0: TIMEOUT");
   });
 
@@ -288,7 +288,7 @@ describe("reconnectSession", () => {
 
   it("on failure the tab is closed before the failure is recorded, and only once", async () => {
     let lastAtClose: unknown = "unset";
-    vi.mocked(closeTab).mockImplementationOnce(async () => {
+    vi.mocked(closePrivateTab).mockImplementationOnce(async () => {
       lastAtClose = (await getReconnectState(U, I)).last;
       return true;
     });
@@ -296,14 +296,14 @@ describe("reconnectSession", () => {
     expect(await reconnectSession(U, I)).toMatchObject({ ok: false, reason: "NO_COOKIES" });
     expect(lastAtClose).toBeUndefined(); // closed first ...
     expect((await getReconnectState(U, I)).last).toMatchObject({ ok: false }); // ... recorded after
-    expect(closeTab).toHaveBeenCalledTimes(1);
+    expect(closePrivateTab).toHaveBeenCalledTimes(1);
   });
 
   it("a non-StepError exception maps to BROWSER_ERROR and the tab is closed", async () => {
     pageState.throwOnKey = true;
     const out = await reconnectSession(U, I);
     expect(out).toEqual({ ok: false, reason: "BROWSER_ERROR", step: 3 });
-    expect(closeTab).toHaveBeenCalledWith(U, "tab-1");
+    expect(closePrivateTab).toHaveBeenCalledWith(U, "tab-1");
     expect(JSON.stringify(auditLog.mock.calls)).not.toContain("socket closed");
   });
 

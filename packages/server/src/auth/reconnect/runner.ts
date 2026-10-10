@@ -2,7 +2,7 @@ import type { CookieConfig, ReconnectStep } from "@a-workbench/shared";
 import { registry } from "../../plugins/registry";
 import { auditLogger } from "../../audit/logger";
 import { readSecretValue, touchUsed } from "../../vault/store";
-import { openTab, closeTab, getWarmSession, captureLiveCookies, pressKey, type PageHandle } from "../browser-session";
+import { openPrivateTab, closePrivateTab, getWarmSession, captureLiveCookies, pressKey, type PageHandle } from "../browser-session";
 import { storeCookies, hasValidCookies, type CookieData } from "../cookie";
 import { getReconnectState, updateReconnectState, type ReconnectState } from "./state";
 import { clickSelector, fillSelector, waitForSelector, waitForUrl, currentUrl, StepError, type ReconnectReason } from "./dom";
@@ -146,7 +146,7 @@ async function attempt(userId: string, integration: string, auth: RecipeAuth): P
     if (!tabId) return;
     const id = tabId;
     tabId = null;
-    await closeTab(userId, id).catch(() => false);
+    await closePrivateTab(userId, id).catch(() => false);
   };
   let phase = "verify"; // label for the failure record: "open", "step i", or "verify"
   let stepIndex = -1;
@@ -163,9 +163,9 @@ async function attempt(userId: string, integration: string, auth: RecipeAuth): P
     }
 
     phase = "open";
-    const openP = openTab(userId);
+    const openP = openPrivateTab(userId);
     // A tab that opens only after the run was abandoned would otherwise leak.
-    openP.then((r) => { if (run.aborted && r.ok) void closeTab(userId, r.tab.id).catch(() => false); }, () => {});
+    openP.then((r) => { if (run.aborted && r.ok) void closePrivateTab(userId, r.tab.id).catch(() => false); }, () => {});
     const opened = await withDeadline(openP, deadline, run);
     if (!opened.ok) throw new StepError("BROWSER_ERROR");
     tabId = opened.tab.id;
