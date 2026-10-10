@@ -60,9 +60,10 @@ async function main() {
     const start = (request as { _metricStart?: number })._metricStart;
     if (!start) return;
     // routerPath was removed in Fastify 5; the matched route pattern now
-    // lives on routeOptions. Falling back to the raw URL would explode the
-    // metric's cardinality, since every id would become its own label.
-    const route = request.routeOptions?.url ?? request.url;
+    // lives on routeOptions. An unmatched request has no pattern, and its raw
+    // URL must not stand in: every id would become its own label, and a path
+    // can carry a credential (an audio capability).
+    const route = request.routeOptions?.url ?? "unmatched";
     if (route === "/metrics") return;
     const labels = {
       method: request.method,

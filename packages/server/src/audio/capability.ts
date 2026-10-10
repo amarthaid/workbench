@@ -10,6 +10,8 @@ import { createHash, randomBytes } from "node:crypto";
 import type { AudioSession } from "./session";
 
 export const CAPABILITY_BYTES = 16;
+/** The shape capabilityFor mints: 16 bytes of base64url, unpadded. */
+export const CAPABILITY_RE = /^[A-Za-z0-9_-]{22}$/;
 
 const byHash = new Map<string, AudioSession>();
 const bySession = new WeakMap<AudioSession, { cap: string; hash: string }>();

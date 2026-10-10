@@ -168,7 +168,7 @@ describe("forwardAudioStream", () => {
   }, 10_000);
 
   it("returns false with no internal URL configured", async () => {
-    const out = await forwardAudioStream({ request: { headers: { ...H } } as any, reply: {} as any });
+    const out = await forwardAudioStream({ request: { headers: { ...H } } as any, reply: {} as any, path: path("clear") });
     expect(out).toBe(false);
   }, 10_000);
 
@@ -249,4 +249,34 @@ describe("forwardAudioStream", () => {
       expect(status).toBe(label === "absolute-form" ? "HTTP/1.1 200 OK" : "HTTP/1.1 404 Not Found");
     }, 10_000);
   }
+
+  it("refuses a path that is not an audio route, without a request", async () => {
+    for (const bad of ["/api/browser/stream", "/api/browser/audio/x/../../admin/clear", "/mcp", `${path("clear")}?x=1`]) {
+      const out = await forwardAudioStream({ request: { headers: { ...H } } as any, reply: {} as any, path: bad, internalUrl: `${ownerUrl}/mcp` });
+      expect(out).toBe(false);
+    }
+    expect(ownerHits).not.toHaveBeenCalled();
+  });
+
+  it("a dot-segment capability (%2e%2e) is a local 404 and never reaches the owner", async () => {
+    for (const c of ["%2e%2e", "%2E%2E", ".."]) {
+      const status = await new Promise<string>((resolve) => {
+        const sock = net.connect(Number(new URL(entryUrl).port), "127.0.0.1", () => {
+          sock.write(`POST /api/browser/audio/${c}/clear HTTP/1.1\r\nHost: 127.0.0.1\r\nx-browser-session: ${KEY}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n`);
+        });
+        let buf = "";
+        sock.on("data", (d) => { buf += d; });
+        sock.on("close", () => resolve(buf.split("\r\n")[0]));
+        sock.on("error", () => resolve("error"));
+      });
+      expect(status).toBe("HTTP/1.1 404 Not Found");
+    }
+    expect(ownerHits).not.toHaveBeenCalled();
+  }, 10_000);
+
+  it("forwards the route's own path, not the request target's query", async () => {
+    const res = await fetch(`${entryUrl}${path("clear")}?evil=1`, { method: "POST", headers: H });
+    expect(res.status).toBe(200);
+    expect(ownerHits).toHaveBeenCalled();
+  }, 10_000);
 });

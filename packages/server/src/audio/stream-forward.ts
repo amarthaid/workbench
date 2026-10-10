@@ -27,6 +27,8 @@ const SESSION_KEY = /^[A-Za-z0-9_-]{43}$/;
 export async function forwardAudioStream(opts: {
   request: FastifyRequest;
   reply: FastifyReply;
+  /** The audio route to hit on the owner, built by the route from a validated capability. */
+  path: string;
   internalUrl?: string;
 }): Promise<boolean> {
   const { request, reply } = opts;
@@ -37,16 +39,15 @@ export async function forwardAudioStream(opts: {
   const key = Array.isArray(inbound) ? inbound[0] : inbound;
   if (!key || !SESSION_KEY.test(key)) return false;
 
-  // Only the path and query come from the client; the origin is always ours.
-  // `new URL(request.url, internal)` would let an absolute-form target or a
-  // `//host/...` path pick the upstream and receive the caller's credentials.
+  // Nothing from the request target reaches the upstream URL: the origin is
+  // ours and the path is the route's own, built from a validated capability.
+  // Parsing the raw target instead would let an absolute-form target pick the
+  // host, and `new URL` resolves `%2e%2e` as a dot segment, so an
+  // unauthenticated caller could walk the forward off the audio routes.
+  if (!/^\/api\/browser\/audio\/[A-Za-z0-9_-]+\/(stream|clear)$/.test(opts.path)) return false;
   const base = new URL(internal);
-  const u = new URL(request.raw.url ?? "/", "http://placeholder.invalid");
   const target = new URL(base.origin);
-  target.pathname = u.pathname;
-  target.search = u.search;
-  // Defensive: target is built from base.origin, so this should never trip.
-  if (target.origin !== base.origin) return false;
+  target.pathname = opts.path;
   const headers: Record<string, string> = { [SESSION_HEADER]: key, [HOP_HEADER]: "1" };
   for (const h of PASS_THROUGH) {
     const v = request.headers[h];

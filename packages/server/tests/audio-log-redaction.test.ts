@@ -18,6 +18,8 @@ describe("request log redaction", () => {
     expect(r.statusCode).toBe(404);
     expect(r.body).not.toContain(cap);
     await app.inject({ method: "GET", url: `/api/browser/audio/${cap}/stream?x=1` });
+    // A typo'd leaf must not reach the app's not-found handler, which logs the raw URL.
+    await app.inject({ method: "GET", url: `/api/browser/audio/${cap}/bogus` });
     await app.close();
     const log = lines.join("");
     expect(log).toContain("/api/browser/audio/[REDACTED]/clear");

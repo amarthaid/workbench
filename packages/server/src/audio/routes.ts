@@ -8,7 +8,7 @@
 // never redirect.
 // Spec: docs/superpowers/specs/2026-10-07-browser-audio-pipeline-design.md
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { sessionForCapability } from "./capability";
+import { CAPABILITY_RE, sessionForCapability } from "./capability";
 import { forwardAudioStream } from "./stream-forward";
 import type { AudioSession } from "./session";
 
@@ -23,7 +23,7 @@ export const READER_STALL_MS = 10_000;
 
 export interface AudioRouteDeps {
   lookup(cap: string): AudioSession | undefined;
-  forward(opts: { request: FastifyRequest; reply: FastifyReply }): Promise<boolean>;
+  forward(opts: { request: FastifyRequest; reply: FastifyReply; path: string }): Promise<boolean>;
   readerStallMs: number;
 }
 
@@ -43,11 +43,17 @@ export async function registerAudioRoutes(app: FastifyInstance, overrides: Parti
    */
   async function resolve(
     request: FastifyRequest<Params>,
-    reply: FastifyReply
+    reply: FastifyReply,
+    leaf: "stream" | "clear"
   ): Promise<AudioSession | "handled" | null> {
-    const s = deps.lookup(request.params.cap);
-    if (s) return s;
-    if (await deps.forward({ request, reply })) return "handled";
+    const { cap } = request.params;
+    // Anything that is not the shape we mint is a miss without a lookup or a
+    // forward, so the forward's path below can only ever name an audio route.
+    if (CAPABILITY_RE.test(cap)) {
+      const s = deps.lookup(cap);
+      if (s) return s;
+      if (await deps.forward({ request, reply, path: `/api/browser/audio/${cap}/${leaf}` })) return "handled";
+    }
     reply.code(404).send({ error: "audio_not_found" });
     return null;
   }
@@ -62,8 +68,13 @@ export async function registerAudioRoutes(app: FastifyInstance, overrides: Parti
 
     const base = "/api/browser/audio/:cap";
 
+    // Every other path under the prefix is the same 404, answered here rather
+    // than by the app's not-found handler, which logs the raw URL (and with it
+    // a capability) and has no route pattern for the metrics label.
+    scope.all("/api/browser/audio/*", async (_request, reply) => reply.code(404).send({ error: "audio_not_found" }));
+
     scope.get<Params>(`${base}/stream`, { exposeHeadRoute: false }, async (request, reply) => {
-      const s = await resolve(request, reply);
+      const s = await resolve(request, reply, "stream");
       if (!s || s === "handled") return reply;
 
       // Subscribe before the headers go out, so a second concurrent reader
@@ -127,7 +138,7 @@ export async function registerAudioRoutes(app: FastifyInstance, overrides: Parti
       if (mediaType !== "audio/pcm") {
         return reply.code(415).send({ error: "unsupported_media_type", detail: "send Content-Type: audio/pcm (raw s16le mono)" });
       }
-      const s = await resolve(request, reply);
+      const s = await resolve(request, reply, "stream");
       if (!s || s === "handled") return reply;
       const up = s.openUplink();
       if (up === "busy") return reply.code(409).send({ error: "uplink_busy", detail: "another audio POST is open for this call" });
@@ -162,7 +173,7 @@ export async function registerAudioRoutes(app: FastifyInstance, overrides: Parti
     });
 
     scope.post<Params>(`${base}/clear`, async (request, reply) => {
-      const s = await resolve(request, reply);
+      const s = await resolve(request, reply, "clear");
       if (!s || s === "handled") return reply;
       return reply.send(s.clear());
     });

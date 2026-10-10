@@ -360,3 +360,27 @@ describe("stalled reader", () => {
     }
   });
 });
+
+describe("malformed and unmatched paths", () => {
+  it("a capability that is not the minted shape is a 404 without lookup or forward", async () => {
+    for (const c of ["short", "%2e%2e", "A".repeat(23), "A".repeat(21) + "="]) {
+      const r = await fetch(url(c, "clear"), { method: "POST" });
+      expect(r.status).toBe(404);
+    }
+    expect(lookup).not.toHaveBeenCalled();
+    expect(forward).not.toHaveBeenCalled();
+  });
+
+  it("any other path under the prefix is the same JSON 404, matched by a route", async () => {
+    let route: unknown = "none";
+    const a = Fastify();
+    a.addHook("onResponse", async (req) => { route = req.routeOptions?.url; });
+    await registerAudioRoutes(a, { lookup, forward });
+    const r = await a.inject({ method: "GET", url: `/api/browser/audio/${CAP}/bogus` });
+    await a.close();
+    expect(r.statusCode).toBe(404);
+    expect(r.json()).toEqual({ error: "audio_not_found" });
+    expect(route).toBe("/api/browser/audio/*");
+    expect(forward).not.toHaveBeenCalled();
+  });
+});
