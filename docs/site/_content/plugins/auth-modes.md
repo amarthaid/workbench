@@ -289,7 +289,9 @@ reconnect: {
 `timeoutMs` (each step defaults to 10 s; the run deadline is enforced per step).
 The private tab is invisible to the `browser_*` tools and to the live view, so
 an agent cannot list it, evaluate in it or attach to it while it holds a
-credential. The profile's password manager is turned off, so chromium never
+credential. Agent tabs cannot load chromium's own debugging endpoint either
+(its `/json/list` would name the private tab), and `browser_navigate` refuses
+loopback URLs. The profile's password manager is turned off, so chromium never
 saves a filled password.
 
 | Step | Meaning |
@@ -311,17 +313,26 @@ control characters.
 > Navigation may visit `targetDomain`, `cookieDomains` and `allowHosts`, and a
 > subdomain of any of them. A credential is stricter: `fill` delivers it only
 > when the page's hostname is an **exact** match for `targetDomain` or an
-> `allowHosts` entry. If the login form lives on `login.idp.example.net`, list
+> `allowHosts` entry, the page is a secure context (`https`, or `http` on
+> loopback for local testing), and the field belongs to that page's own
+> document. An `http://` login page on a public host never receives a
+> credential. If the login form lives on `login.idp.example.net`, list
 > that exact host in `allowHosts` (or as `targetDomain`); `idp.example.net` alone
 > will navigate there but refuse to type the password.
 
 **Cooldown.** After a failed reconnect the connection is marked as needing a
 manual reconnect and no further attempt runs for 10 minutes, at most six per
 hour, so a wrong password or an MFA wall never hammers a login form. A
-reconnect whose retried request is still refused counts as a failed attempt.
+reconnect whose retried request is still refused counts as a failed attempt,
+and so does a recipe run that succeeded but whose session is dead again inside
+the 10 minutes: the recipe does not run twice in one window. (Reusing a session
+the browser profile still holds types no credential and holds no cooldown.)
 Saving new bindings, or reconnecting by hand from the portal, clears the
 cooldown. A session import made with an API key or OAuth token stores the
-cookies but leaves the cooldown in force, so an agent cannot loop the recipe. A reconnect
+cookies but leaves the cooldown in force, so an agent cannot loop the recipe;
+disconnecting with an API key inside the cooldown is refused (`409
+RECONNECT_COOLDOWN`), and the server also remembers the last run apart from the
+connection, so deleting and re-importing it does not reset the clock. A reconnect
 stands down without recording anything while the user is in the middle of a
 portal connect (the connect link or live view), or when the browser is already
 at its tab limit.

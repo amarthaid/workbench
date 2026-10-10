@@ -71,9 +71,45 @@ guide: Auto-reconnect in `plugins/auth-modes`.
 - **`text=` cannot target `fill`.** It matches clickable elements only; a fill
   must hit a real editable input.
 
+- **Security review follow-ups.**
+  - *The cooldown lived on a row an agent can delete.* `DELETE
+    /api/connections/:i` and session import both take an API key, and the
+    failure record sat in `connections.config`: delete, re-import, retry reset
+    it (deleting mid-run meant the failure was never written at all). The
+    runner now also remembers the last recipe run in-process (recipes only run
+    on the chromium owner, so that is where every run starts), an API-key
+    DELETE inside the cooldown is a 409, and portal-session clears stamp
+    `clearedAt` so they still lift a run only the process remembers.
+  - *A "success" that dies at once had no cooldown.* A probe-less recipe that
+    lands anywhere but the login URL counts as success; with a non-replayable
+    body there is no retry to catch it, so every call re-ran the recipe. A
+    recipe success now holds the window like a failure. The fast path (reusing
+    the profile's live session) types nothing and holds nothing.
+  - *Exact host was not enough for delivery.* `http://` on the right host
+    received the value in cleartext (recipe `goto` may be `http`), and the
+    target node came from main-world script, which can hand over a node from
+    another frame. The isolated-world function now also requires
+    `isSecureContext` (loopback `http` still qualifies, so local fixtures work)
+    and `this.ownerDocument === document && this.isConnected`.
+  - *Agent tabs could read chromium's debug endpoint.* `/json/list` on the
+    debug port lists every target, private ones included, and `/json/close/<id>`
+    kills one. Every agent tab now fails its requests to that port through
+    `Fetch` interception (any host spelling, script navigations included), and
+    `browser_navigate` / the live-url route refuse loopback URLs. An iframe
+    pointed at the endpoint already failed to load in chromium; the e2e keeps
+    that pinned.
+
 ## Known gaps
 
 - Apps that only react to keydown events may not register the native-setter
   value; add a `press` step.
 - Reconnect failures from MFA, captcha or a gone IdP session end in "needs
   reconnect" by design.
+- The in-process run record is lost on a restart, after which only the DB
+  record (and the 409 on API-key DELETE) holds the cooldown.
+- The cooldown is per integration: two integrations whose recipes use the same
+  login each get their own window.
+- `cancel` and `session/import` accept an API key and end the "human is
+  mid-connect" lock, so an agent can let a recipe run under a human's live
+  connect. No credential is exposed (the recipe tab is private); it only
+  defeats the courtesy.
