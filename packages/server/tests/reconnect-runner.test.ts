@@ -12,7 +12,7 @@ const h = vi.hoisted(() => {
     hangNavigate: false, // Page.navigate never resolves
     throwOnKey: false, // Input.dispatchKeyEvent throws a plain (non-Step) Error
   };
-  const flags = { storeFail: false };
+  const flags = { storeFail: false, vaultDelayMs: {} as Record<string, number> };
   const sent: [string, any][] = [];
   const hostOf = (u: string) => { try { return new URL(u).hostname.toLowerCase(); } catch { return ""; } };
   const fakeTab = {
@@ -71,7 +71,11 @@ vi.mock("../src/auth/browser-session", async (orig) => ({
 }));
 vi.mock("../src/vault/store", async (orig) => ({
   ...(await orig<typeof import("../src/vault/store")>()),
-  readSecretValue: vi.fn(async (_u: string, n: string) => h.vault[n] ?? null),
+  readSecretValue: vi.fn(async (_u: string, n: string) => {
+    const delay = h.flags.vaultDelayMs[n];
+    if (delay) await new Promise((r) => setTimeout(r, delay));
+    return h.vault[n] ?? null;
+  }),
   touchUsed: vi.fn(async () => {}),
 }));
 const auditLog = vi.hoisted(() => vi.fn(async (_e: unknown) => {}));
@@ -125,6 +129,7 @@ beforeEach(async () => {
   pageState.hangNavigate = false;
   pageState.throwOnKey = false;
   h.flags.storeFail = false;
+  h.flags.vaultDelayMs = {};
   __deps.GOTO_SETTLE_MS = 0;
   markConnectEnded(U);
   pageState.elements = new Set(["#user", "#pass"]);
@@ -264,6 +269,34 @@ describe("reconnectSession", () => {
     expect(Date.now() - t0).toBeLessThan(3000);
     expect(closeTab).toHaveBeenCalledWith(U, "tab-1");
     expect((await getReconnectState(U, I)).last?.error).toBe("step 0: TIMEOUT");
+  });
+
+  it("an orphaned fill whose vault read lands after the deadline never delivers the credential", async () => {
+    h.flags.vaultDelayMs = { acme_pw: 400 }; // resolves well after the 150 ms deadline
+    vi.spyOn(registry, "getIntegration").mockReturnValue({
+      name: I, version: "1", auth: { ...auth, reconnect: { ...auth.reconnect, timeoutMs: 150 } },
+    } as any);
+    const out = await reconnectSession(U, I);
+    expect(out).toEqual({ ok: false, reason: "TIMEOUT", step: 2 });
+    // Let the orphaned step finish its vault read, then flush the event loop.
+    await new Promise((r) => setTimeout(r, 400 + 50));
+    expect(deliveries()).toHaveLength(0);
+    expect(JSON.stringify(sent)).not.toContain("pw-abc");
+    // Nothing after the abandoned fill ran either.
+    expect(sent.find(([m]) => m === "Input.dispatchKeyEvent")).toBeUndefined();
+  });
+
+  it("on failure the tab is closed before the failure is recorded, and only once", async () => {
+    let lastAtClose: unknown = "unset";
+    vi.mocked(closeTab).mockImplementationOnce(async () => {
+      lastAtClose = (await getReconnectState(U, I)).last;
+      return true;
+    });
+    pageState.afterLogin = () => {}; // NO_COOKIES at verify
+    expect(await reconnectSession(U, I)).toMatchObject({ ok: false, reason: "NO_COOKIES" });
+    expect(lastAtClose).toBeUndefined(); // closed first ...
+    expect((await getReconnectState(U, I)).last).toMatchObject({ ok: false }); // ... recorded after
+    expect(closeTab).toHaveBeenCalledTimes(1);
   });
 
   it("a non-StepError exception maps to BROWSER_ERROR and the tab is closed", async () => {

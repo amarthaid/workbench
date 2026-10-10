@@ -131,6 +131,18 @@ describe("reconnect dom", () => {
     expect(sent(p)).not.toContain("Input.insertText");
   });
 
+  it("fillSelector aborts between the isolated-world prepare and delivery", async () => {
+    const p = fillPage();
+    // The run is abandoned while the isolated world is being prepared.
+    const isAborted = () => sent(p).includes("DOM.resolveNode");
+    const err = await fillSelector(p, "#pass", "pw-abc", 300, hosts, isAborted).catch((e) => e);
+    expect(err).toBeInstanceOf(StepError);
+    expect(err.reason).toBe("TIMEOUT");
+    expect(sent(p)).not.toContain("Runtime.callFunctionOn");
+    expect(JSON.stringify(calls(p))).not.toContain("pw-abc");
+    expect(calls(p).filter(([m]) => m === "Runtime.releaseObject").map(([, a]) => a.objectId).sort()).toEqual(["iso-1", "obj-1"]);
+  });
+
   it("fillSelector rejects text= selectors without touching the page", async () => {
     const p = fillPage();
     const err = await fillSelector(p, "text=Login", "pw-abc", 300, hosts).catch((e) => e);

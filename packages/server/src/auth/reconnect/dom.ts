@@ -81,7 +81,19 @@ const DELIVER_FN = `function (v, hosts) {
 
 const WORLD_NAME = "workbench-reconnect";
 
-export async function fillSelector(page: PageHandle, selector: string, value: string, timeoutMs: number, allowedHosts: string[]): Promise<void> {
+/**
+ * `isAborted` is the caller's run-abort flag. It is checked immediately before
+ * delivery, so a fill orphaned by a deadline (the caller stopped waiting but
+ * cannot cancel the promise) never hands the value to the page.
+ */
+export async function fillSelector(
+  page: PageHandle,
+  selector: string,
+  value: string,
+  timeoutMs: number,
+  allowedHosts: string[],
+  isAborted: () => boolean = () => false
+): Promise<void> {
   if (selector.startsWith("text=")) {
     throw new StepError("SELECTOR_NOT_FOUND", "text= selectors cannot target fill");
   }
@@ -116,13 +128,15 @@ export async function fillSelector(page: PageHandle, selector: string, value: st
       const resolved = await send("DOM.resolveNode", { backendNodeId, executionContextId });
       isoId = resolved?.object?.objectId;
       if (!isoId) throw new Error("no isolated handle");
+      if (isAborted()) throw new StepError("TIMEOUT");
       res = await send("Runtime.callFunctionOn", {
         objectId: isoId,
         functionDeclaration: DELIVER_FN,
         arguments: [{ value }, { value: allowedHosts.map((h) => h.toLowerCase()) }],
         returnByValue: true,
       });
-    } catch {
+    } catch (e) {
+      if (e instanceof StepError) throw e;
       throw new StepError("BROWSER_ERROR");
     }
     if (res.exceptionDetails) throw new StepError("BROWSER_ERROR");

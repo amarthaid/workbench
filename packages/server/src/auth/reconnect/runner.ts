@@ -76,16 +76,32 @@ function hostOk(href: string, allowed: string[], navigated: boolean): boolean {
   }
 }
 
-/** Race `p` against the run deadline; expiry is StepError("TIMEOUT"). */
-async function withDeadline<T>(p: Promise<T>, deadline: number): Promise<T> {
+/**
+ * Per-run abort flag. Racing a promise against the deadline stops *waiting*
+ * on it but cannot cancel it: an orphaned fill could still finish its vault
+ * read and deliver the plaintext. Everything that could move a credential or
+ * act on the page checks this first.
+ */
+interface RunCtl { aborted: boolean }
+
+function assertLive(run: RunCtl): void {
+  if (run.aborted) throw new StepError("TIMEOUT");
+}
+
+/** Race `p` against the run deadline; expiry aborts the run and is StepError("TIMEOUT"). */
+async function withDeadline<T>(p: Promise<T>, deadline: number, run: RunCtl): Promise<T> {
   const remaining = deadline - Date.now();
   if (remaining <= 0) {
+    run.aborted = true;
     p.catch(() => {});
     throw new StepError("TIMEOUT");
   }
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expiry = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new StepError("TIMEOUT")), remaining);
+    timer = setTimeout(() => {
+      run.aborted = true; // synchronously, before anything else can observe the expiry
+      reject(new StepError("TIMEOUT"));
+    }, remaining);
   });
   try {
     return await Promise.race([p, expiry]);
@@ -123,7 +139,15 @@ async function attempt(userId: string, integration: string, auth: RecipeAuth): P
   const deadline = started + (auth.reconnect.timeoutMs ?? DEFAULT_RUN_MS);
   const capture = () => captureLiveCookies(userId, auth.targetDomain, auth.cookieDomains);
 
+  const run: RunCtl = { aborted: false };
   let tabId: string | null = null;
+  // Idempotent: the failure path closes first, `finally` is the safety net.
+  const closeOnce = async () => {
+    if (!tabId) return;
+    const id = tabId;
+    tabId = null;
+    await closeTab(userId, id).catch(() => false);
+  };
   let phase = "verify"; // label for the failure record: "open", "step i", or "verify"
   let stepIndex = -1;
   try {
@@ -132,14 +156,17 @@ async function attempt(userId: string, integration: string, auth: RecipeAuth): P
     if (auth.session.probe && getWarmSession(userId)) {
       let live: CookieData | null = null;
       try {
-        const data = await withDeadline(capture(), deadline);
-        if (data.cookies.length && (await withDeadline(probeAlive(auth, data.cookies), deadline))) live = data;
+        const data = await withDeadline(capture(), deadline, run);
+        if (data.cookies.length && (await withDeadline(probeAlive(auth, data.cookies), deadline, run))) live = data;
       } catch { /* fall through to the recipe */ }
       if (live) return await commit(userId, integration, live, started);
     }
 
     phase = "open";
-    const opened = await withDeadline(openTab(userId), deadline);
+    const openP = openTab(userId);
+    // A tab that opens only after the run was abandoned would otherwise leak.
+    openP.then((r) => { if (run.aborted && r.ok) void closeTab(userId, r.tab.id).catch(() => false); }, () => {});
+    const opened = await withDeadline(openP, deadline, run);
     if (!opened.ok) throw new StepError("BROWSER_ERROR");
     tabId = opened.tab.id;
     const page: PageHandle = opened.tab;
@@ -155,6 +182,7 @@ async function attempt(userId: string, integration: string, auth: RecipeAuth): P
       for (const [, k] of [...v.matchAll(CRED_RE)]) {
         const name = bindings[k];
         const secret = name ? await readSecretValue(userId, name) : null;
+        assertLive(run); // the run may have been abandoned during the vault read
         if (secret === null) throw new StepError("CREDENTIAL_UNBOUND");
         usedNames.push(name!);
         out = out.split(`{{cred:${k}}}`).join(secret);
@@ -165,27 +193,32 @@ async function attempt(userId: string, integration: string, auth: RecipeAuth): P
     for (const [i, step] of auth.reconnect.steps.entries()) {
       stepIndex = i;
       phase = `step ${i}`;
-      const href = await withDeadline(currentUrl(page), deadline);
+      assertLive(run);
+      const href = await withDeadline(currentUrl(page), deadline, run);
       if (!hostOk(href, allowed, navigated)) throw new StepError("HOST_NOT_ALLOWED");
       const timeoutMs = Math.min(stepTimeout(step), deadline - Date.now());
       if (timeoutMs <= 0) throw new StepError("TIMEOUT");
-      await withDeadline(runStep(page, step, auth, timeoutMs, allowed, resolveValue), deadline);
+      await withDeadline(runStep(page, step, auth, timeoutMs, allowed, resolveValue, run), deadline, run);
       if ("goto" in step) navigated = true;
     }
 
     stepIndex = -1;
     phase = "verify";
-    const data = await withDeadline(capture(), deadline);
+    const data = await withDeadline(capture(), deadline, run);
     if (!data.cookies.length) throw new StepError("NO_COOKIES");
     if (auth.session.probe) {
-      if (!(await withDeadline(probeAlive(auth, data.cookies), deadline))) throw new StepError("PROBE_FAILED");
+      if (!(await withDeadline(probeAlive(auth, data.cookies), deadline, run))) throw new StepError("PROBE_FAILED");
     } else {
-      const href = await withDeadline(currentUrl(page), deadline);
+      const href = await withDeadline(currentUrl(page), deadline, run);
       if (!href || href.startsWith(auth.loginUrl)) throw new StepError("PROBE_FAILED");
     }
     if (usedNames.length) await touchUsed(userId, usedNames).catch(() => warn("vault touchUsed", "TOUCH_FAILED"));
     return await commit(userId, integration, data, started);
   } catch (e) {
+    // Stop every orphaned step from acting, and take the page away from it,
+    // before spending time on the state and audit writes.
+    run.aborted = true;
+    await closeOnce();
     const reason: ReconnectReason = e instanceof StepError ? e.reason : "BROWSER_ERROR";
     const now = Date.now();
     await updateReconnectState(userId, integration, { deadAt: now, last: { at: now, ok: false, error: `${phase}: ${reason}` } });
@@ -194,7 +227,7 @@ async function attempt(userId: string, integration: string, auth: RecipeAuth): P
       .catch(() => warn("audit log REFRESH", reason));
     return { ok: false, reason, ...(stepIndex >= 0 ? { step: stepIndex } : {}) };
   } finally {
-    if (tabId) await closeTab(userId, tabId).catch(() => false);
+    await closeOnce();
   }
 }
 
@@ -217,7 +250,8 @@ async function runStep(
   auth: RecipeAuth,
   timeoutMs: number,
   allowed: string[],
-  resolveValue: (v: string) => Promise<string>
+  resolveValue: (v: string) => Promise<string>,
+  run: RunCtl
 ): Promise<void> {
   if ("goto" in step) {
     const url = step.goto === "loginUrl" ? auth.loginUrl
@@ -239,11 +273,14 @@ async function runStep(
   if ("fill" in step) {
     // fillSelector waits for the element and re-checks the host in the same
     // call that writes the value, bound to the verified element.
+    // The abort checks bracket the plaintext: after the vault read (inside
+    // resolveValue), right here, and again just before delivery.
     const value = await resolveValue(step.value);
-    await fillSelector(page, step.fill, value, timeoutMs, allowed);
+    assertLive(run);
+    await fillSelector(page, step.fill, value, timeoutMs, allowed, () => run.aborted);
     return;
   }
-  if ("press" in step) { await pressKey(page, step.press); return; }
+  if ("press" in step) { assertLive(run); await pressKey(page, step.press); return; }
   if ("waitFor" in step) { await waitForSelector(page, step.waitFor, timeoutMs); return; }
   if ("waitUrl" in step) { await waitForUrl(page, step.waitUrl, timeoutMs); return; }
 }
