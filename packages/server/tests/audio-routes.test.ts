@@ -7,12 +7,6 @@ import { request as httpRequest } from "node:http";
 vi.mock("../src/config", () => ({
   config: { SERVER_PUBLIC_URL: "http://localhost:3000", SESSION_SECRET: "test-session-secret-32-chars-long!!" },
 }));
-// Routes get getAudio injected; keep the real manager (and the browser stack
-// behind it) out of this suite.
-vi.mock("../src/audio/manager", () => ({ getAudio: vi.fn() }));
-vi.mock("../src/auth/oauth-server/resolve", () => ({
-  resolveMcpUser: vi.fn(async (h: Record<string, string>) => (h["x-workbench-api-key"] === "k1" ? "user-1" : null)),
-}));
 
 import { registerAudioRoutes } from "../src/audio/routes";
 import { AudioSession, type AudioIO } from "../src/audio/session";
@@ -26,11 +20,17 @@ function fakeProc() {
   return p;
 }
 
+// Synthetic capability; the routes only ever see it through the injected lookup.
+const CAP = "capAAAAAAAAAAAAAAAAAAA";
+const UNKNOWN = "capZZZZZZZZZZZZZZZZZZZ";
+const SESSION_KEY = "K".repeat(43);
+
 let app: FastifyInstance;
 let base: string;
 let session: AudioSession;
 let cap: any;
 const forward = vi.fn(async (_o?: any) => false);
+const lookup = vi.fn((c: string) => (c === CAP && !session.ended ? session : undefined));
 
 beforeEach(async () => {
   cap = fakeProc();
@@ -46,7 +46,7 @@ beforeEach(async () => {
   app.addContentTypeParser("application/x-www-form-urlencoded", { parseAs: "string" }, (_req, body, done) =>
     done(null, Object.fromEntries(new URLSearchParams(body as string)))
   );
-  await registerAudioRoutes(app, { getAudio: (u) => (u === "user-1" && !session.ended ? session : undefined), forward });
+  await registerAudioRoutes(app, { lookup, forward });
   await app.listen({ port: 0, host: "127.0.0.1" });
   const addr = app.server.address() as { port: number };
   base = `http://127.0.0.1:${addr.port}`;
@@ -57,9 +57,12 @@ afterEach(async () => {
   await app.close();
   forward.mockReset();
   forward.mockResolvedValue(false);
+  lookup.mockClear();
 });
 
-const H = { "x-workbench-api-key": "k1" };
+const url = (c: string, leaf: "stream" | "clear") => `${base}/api/browser/audio/${c}/${leaf}`;
+const STREAM = () => url(CAP, "stream");
+const CLEAR = () => url(CAP, "clear");
 
 async function readSse(res: Response, until: (events: Array<{ event: string; data: any }>) => boolean) {
   const events: Array<{ event: string; data: any }> = [];
@@ -82,34 +85,83 @@ async function readSse(res: Response, until: (events: Array<{ event: string; dat
   return events;
 }
 
-describe("auth and lookup", () => {
-  it("401 without credentials", async () => {
-    const r = await fetch(`${base}/api/browser/tabs/T1/audio/clear`, { method: "POST" });
-    expect(r.status).toBe(401);
+/** Open an SSE reader over node:http so the test controls exactly when the socket goes away. */
+async function openRawReader(): Promise<{ status: number; close: () => void }> {
+  const req = httpRequest(STREAM());
+  const gotHeaders = new Promise<import("node:http").IncomingMessage>((r) => req.on("response", r));
+  req.on("error", () => undefined);
+  req.end();
+  const res = await gotHeaders;
+  res.resume();
+  return { status: res.statusCode!, close: () => { res.destroy(); req.destroy(); } };
+}
+
+describe("capability lookup", () => {
+  it("serves the SSE stream with only X-Browser-Session and no Authorization", async () => {
+    const res = await fetch(STREAM(), { headers: { "x-browser-session": SESSION_KEY } });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("text/event-stream");
+    expect(lookup).toHaveBeenCalledWith(CAP);
+    await res.body!.cancel();
   });
 
-  it("404 audio_not_started for a tab without audio, after trying the forward", async () => {
-    const r = await fetch(`${base}/api/browser/tabs/T2/audio/clear`, { method: "POST", headers: H });
+  it("ignores a garbage Authorization header", async () => {
+    const res = await fetch(STREAM(), { headers: { authorization: "Bearer not-a-real-token" } });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("text/event-stream");
+    await res.body!.cancel();
+    const r = await fetch(CLEAR(), { method: "POST", headers: { authorization: "Basic Z2FyYmFnZQ==" } });
+    expect(r.status).toBe(200);
+  });
+
+  it("404 audio_not_found for an unknown capability, after trying the forward; no redirect, no echo", async () => {
+    for (const [method, leaf] of [["GET", "stream"], ["POST", "clear"]] as const) {
+      const r = await fetch(url(UNKNOWN, leaf), { method, redirect: "manual" });
+      expect(r.status).toBe(404);
+      expect(r.headers.get("location")).toBeNull();
+      const text = await r.text();
+      expect(JSON.parse(text)).toEqual({ error: "audio_not_found" });
+      expect(text).not.toContain(UNKNOWN);
+    }
+    expect(forward).toHaveBeenCalledTimes(2);
+  });
+
+  it("404 for an unknown capability on the uplink too", async () => {
+    const r = await fetch(url(UNKNOWN, "stream"), {
+      method: "POST", headers: { "content-type": "audio/pcm" }, body: Buffer.alloc(10), redirect: "manual",
+    });
     expect(r.status).toBe(404);
-    expect((await r.json()).error).toBe("audio_not_started");
+    expect(r.headers.get("location")).toBeNull();
+    expect(await r.text()).not.toContain(UNKNOWN);
   });
 
-  it("does not forward when this process owns a session on another tab", async () => {
-    await fetch(`${base}/api/browser/tabs/T2/audio/clear`, { method: "POST", headers: H });
+  it("does not forward when the capability is live here", async () => {
+    const r = await fetch(CLEAR(), { method: "POST" });
+    expect(r.status).toBe(200);
     expect(forward).not.toHaveBeenCalled();
   });
 
   it("hands off to the forward when there is no local session", async () => {
     session.end("stopped");
     forward.mockImplementation(async ({ reply }: any) => { reply.code(299).send({ forwarded: true }); return true; });
-    const r = await fetch(`${base}/api/browser/tabs/T1/audio/clear`, { method: "POST", headers: H });
+    const r = await fetch(CLEAR(), { method: "POST" });
     expect(r.status).toBe(299);
+  });
+
+  it("404 once the session has ended (lookup no longer resolves the capability)", async () => {
+    session.end("stopped");
+    for (const [method, leaf] of [["GET", "stream"], ["POST", "clear"]] as const) {
+      const r = await fetch(url(CAP, leaf), { method, redirect: "manual" });
+      expect(r.status).toBe(404);
+      expect(r.headers.get("location")).toBeNull();
+      expect(await r.json()).toEqual({ error: "audio_not_found" });
+    }
   });
 });
 
 describe("GET stream (SSE)", () => {
   it("streams audio frames as base64 PCM and ends with ended", async () => {
-    const res = await fetch(`${base}/api/browser/tabs/T1/audio/stream`, { headers: H });
+    const res = await fetch(STREAM());
     expect(res.headers.get("content-type")).toBe("text/event-stream");
     setTimeout(() => {
       cap.stdout.emit("data", Buffer.alloc(1920, 1));
@@ -121,22 +173,41 @@ describe("GET stream (SSE)", () => {
     expect(events.at(-1)).toEqual({ event: "ended", data: { reason: "stopped" } });
   });
 
-  it("a second reader replaces the first", async () => {
-    const a = await fetch(`${base}/api/browser/tabs/T1/audio/stream`, { headers: H });
+  it("409 stream_busy for a second concurrent reader; the first keeps the call", async () => {
+    const a = await fetch(STREAM());
     const aEvents = readSse(a, (e) => e.some((x) => x.event === "ended"));
     await new Promise((r) => setTimeout(r, 20));
-    const b = await fetch(`${base}/api/browser/tabs/T1/audio/stream`, { headers: H });
-    expect(await aEvents).toEqual([{ event: "ended", data: { reason: "replaced" } }]);
-    await b.body!.cancel();
+    const b = await fetch(STREAM());
+    expect(b.status).toBe(409);
+    expect((await b.json()).error).toBe("stream_busy");
+    cap.stdout.emit("data", Buffer.alloc(1920, 1));
+    session.end("stopped");
+    const events = await aEvents;
+    expect(events.map((e) => e.event)).toEqual(["audio", "ended"]);
+    expect(events.at(-1)!.data.reason).toBe("stopped");
+  });
+
+  it("accepts a reconnect once the first reader has closed", async () => {
+    const first = await openRawReader();
+    expect(first.status).toBe(200);
+    const busy = await fetch(STREAM());
+    expect(busy.status).toBe(409);
+    first.close();
+    await vi.waitFor(() => expect(session.attached).toBe(false), { timeout: 2000 });
+    const again = await fetch(STREAM());
+    expect(again.status).toBe(200);
+    setTimeout(() => cap.stdout.emit("data", Buffer.alloc(1920, 2)), 20);
+    const events = await readSse(again, (e) => e.some((x) => x.event === "audio"));
+    expect(events[0].event).toBe("audio");
   });
 });
 
 describe("GET stream hygiene", () => {
-  it("HEAD does not subscribe and does not replace the live reader", async () => {
-    const a = await fetch(`${base}/api/browser/tabs/T1/audio/stream`, { headers: H });
+  it("HEAD does not subscribe and does not disturb the live reader", async () => {
+    const a = await fetch(STREAM());
     const aEvents = readSse(a, (e) => e.some((x) => x.event === "ended"));
     await new Promise((r) => setTimeout(r, 20));
-    const head = await fetch(`${base}/api/browser/tabs/T1/audio/stream`, { method: "HEAD", headers: H });
+    const head = await fetch(STREAM(), { method: "HEAD" });
     expect([404, 405]).toContain(head.status);
     cap.stdout.emit("data", Buffer.alloc(1920, 1));
     session.end("stopped");
@@ -146,17 +217,12 @@ describe("GET stream hygiene", () => {
   });
 
   it("a client that disconnects is unsubscribed: frames do not throw and a new reader works", async () => {
-    const req = httpRequest(`${base}/api/browser/tabs/T1/audio/stream`, { headers: H });
-    const gotHeaders = new Promise<import("node:http").IncomingMessage>((r) => req.on("response", r));
-    req.end();
-    const res = await gotHeaders;
-    res.resume();
-    res.destroy();
-    req.destroy();
-    await new Promise((r) => setTimeout(r, 50));
+    const r = await openRawReader();
+    r.close();
+    await new Promise((res) => setTimeout(res, 50));
     expect(session.attached).toBe(false);
     expect(() => cap.stdout.emit("data", Buffer.alloc(1920, 1))).not.toThrow();
-    const b = await fetch(`${base}/api/browser/tabs/T1/audio/stream`, { headers: H });
+    const b = await fetch(STREAM());
     setTimeout(() => cap.stdout.emit("data", Buffer.alloc(1920, 2)), 20);
     const events = await readSse(b, (e) => e.some((x) => x.event === "audio"));
     expect(events[0].event).toBe("audio");
@@ -165,15 +231,15 @@ describe("GET stream hygiene", () => {
 
 describe("POST stream (uplink)", () => {
   it("415 for a non-PCM content type", async () => {
-    const r = await fetch(`${base}/api/browser/tabs/T1/audio/stream`, {
-      method: "POST", headers: { ...H, "content-type": "application/x-www-form-urlencoded" }, body: "a=b",
+    const r = await fetch(STREAM(), {
+      method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "a=b",
     });
     expect(r.status).toBe(415);
   });
 
   it("queues the body, plays it out, answers 200 with played_ms", async () => {
-    const r = await fetch(`${base}/api/browser/tabs/T1/audio/stream`, {
-      method: "POST", headers: { ...H, "content-type": "audio/pcm" }, body: Buffer.alloc(48 * 100), // 100 ms
+    const r = await fetch(STREAM(), {
+      method: "POST", headers: { "content-type": "audio/pcm" }, body: Buffer.alloc(48 * 100), // 100 ms
     });
     expect(r.status).toBe(200);
     expect(await r.json()).toEqual({ played_ms: 100 });
@@ -182,8 +248,8 @@ describe("POST stream (uplink)", () => {
   it("409 uplink_busy while another uplink is open", async () => {
     const held = session.openUplink();
     expect(typeof held).toBe("object");
-    const r = await fetch(`${base}/api/browser/tabs/T1/audio/stream`, {
-      method: "POST", headers: { ...H, "content-type": "audio/pcm" }, body: Buffer.alloc(10),
+    const r = await fetch(STREAM(), {
+      method: "POST", headers: { "content-type": "audio/pcm" }, body: Buffer.alloc(10),
     });
     expect(r.status).toBe(409);
     expect((await r.json()).error).toBe("uplink_busy");
@@ -192,8 +258,8 @@ describe("POST stream (uplink)", () => {
   it("answers at once with played_ms when the session ends mid-upload", async () => {
     const body = new PassThrough();
     const answered = new Promise<{ status: number; body: string }>((resolve) => {
-      const req = httpRequest(`${base}/api/browser/tabs/T1/audio/stream`, {
-        method: "POST", headers: { ...H, "content-type": "audio/pcm", "transfer-encoding": "chunked" },
+      const req = httpRequest(STREAM(), {
+        method: "POST", headers: { "content-type": "audio/pcm", "transfer-encoding": "chunked" },
       }, (res) => {
         let s = "";
         res.on("data", (c) => { s += c; });
@@ -212,8 +278,8 @@ describe("POST stream (uplink)", () => {
   });
 
   it("frees the uplink slot when the client aborts mid-upload", async () => {
-    const req = httpRequest(`${base}/api/browser/tabs/T1/audio/stream`, {
-      method: "POST", headers: { ...H, "content-type": "audio/pcm", "transfer-encoding": "chunked" },
+    const req = httpRequest(STREAM(), {
+      method: "POST", headers: { "content-type": "audio/pcm", "transfer-encoding": "chunked" },
     });
     req.on("error", () => undefined);
     req.write(Buffer.alloc(48 * 1000));
@@ -223,8 +289,8 @@ describe("POST stream (uplink)", () => {
     expect(session.ended).toBeUndefined();
   });
   it("frees the uplink slot when the client aborts after the body ended", { timeout: 10_000 }, async () => {
-    const req = httpRequest(`${base}/api/browser/tabs/T1/audio/stream`, {
-      method: "POST", headers: { ...H, "content-type": "audio/pcm", "transfer-encoding": "chunked" },
+    const req = httpRequest(STREAM(), {
+      method: "POST", headers: { "content-type": "audio/pcm", "transfer-encoding": "chunked" },
     });
     req.on("error", () => undefined);
     req.end(Buffer.alloc(48 * 3000)); // ~3 s, still playing out when we hang up
@@ -235,15 +301,15 @@ describe("POST stream (uplink)", () => {
   });
 
   it("accepts a parameterised, mixed-case media type", { timeout: 10_000 }, async () => {
-    const r = await fetch(`${base}/api/browser/tabs/T1/audio/stream`, {
-      method: "POST", headers: { ...H, "content-type": "Audio/PCM; rate=24000" }, body: Buffer.alloc(48 * 10),
+    const r = await fetch(STREAM(), {
+      method: "POST", headers: { "content-type": "Audio/PCM; rate=24000" }, body: Buffer.alloc(48 * 10),
     });
     expect(r.status).toBe(200);
   });
 
   it("415 for a media type that only starts with audio/pcm", async () => {
-    const r = await fetch(`${base}/api/browser/tabs/T1/audio/stream`, {
-      method: "POST", headers: { ...H, "content-type": "audio/pcmfoo" }, body: Buffer.alloc(10),
+    const r = await fetch(STREAM(), {
+      method: "POST", headers: { "content-type": "audio/pcmfoo" }, body: Buffer.alloc(10),
     });
     expect(r.status).toBe(415);
   });
@@ -253,10 +319,44 @@ describe("POST clear", () => {
   it("returns played and cleared ms", async () => {
     const up = session.openUplink() as any;
     await up.write(Buffer.alloc(48 * 1000));
-    const r = await fetch(`${base}/api/browser/tabs/T1/audio/clear`, { method: "POST", headers: H });
+    const r = await fetch(CLEAR(), { method: "POST" });
     expect(r.status).toBe(200);
     const body = await r.json();
     expect(body.cleared_ms).toBeGreaterThan(900);
     expect(body).toHaveProperty("played_ms");
+  });
+});
+
+describe("stalled reader", () => {
+  it("drops a reader whose socket stops draining, so a reconnect is not 409", { timeout: 15_000 }, async () => {
+    const stallApp = Fastify();
+    await registerAudioRoutes(stallApp, { lookup, forward, readerStallMs: 200 });
+    await stallApp.listen({ port: 0, host: "127.0.0.1" });
+    const port = (stallApp.server.address() as { port: number }).port;
+    const path = `/api/browser/audio/${CAP}/stream`;
+    try {
+      // A reader that never reads: what a peer gone without a FIN looks like from here.
+      const stalled = await new Promise<import("node:http").IncomingMessage>((resolve, reject) => {
+        const req = httpRequest({ host: "127.0.0.1", port, path }, (res) => { res.pause(); resolve(res); });
+        req.on("error", reject);
+        req.end();
+      });
+      expect(stalled.statusCode).toBe(200);
+      // Keep feeding until the kernel buffers on both ends are full and the
+      // server has seen no drain for readerStallMs. A paused client never
+      // reads the server's close, so watch for the slot coming free instead.
+      let status = 409;
+      while (status === 409) {
+        for (let i = 0; i < 500; i++) cap.stdout.emit("data", Buffer.alloc(1920));
+        await new Promise((r) => setTimeout(r, 50));
+        const again = await fetch(`http://127.0.0.1:${port}${path}`);
+        status = again.status;
+        await again.body?.cancel();
+      }
+      expect(status).toBe(200);
+      stalled.destroy();
+    } finally {
+      await stallApp.close();
+    }
   });
 });

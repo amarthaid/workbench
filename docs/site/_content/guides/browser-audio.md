@@ -13,7 +13,7 @@ works best).
 
 ```bash
 BROWSER_AUDIO_ENABLED=true
-BROWSER_AUDIO_MAX_MINUTES=120   # hard cap per call
+BROWSER_AUDIO_MAX_MINUTES=180   # hard cap per call
 ```
 
 The Docker image ships PulseAudio; nothing runs until the flag is on. With the
@@ -26,10 +26,13 @@ close, logins survive (same profile), and the page reopens in a new tab whose
 ## Flow
 
 1. `browser_start` gives a `session_id`; `browser_navigate` to the meeting link.
-2. `browser_audio_start { session_id, sample_rate: 24000 }` returns `stream_url`,
-   `clear_url` (both absolute), `sample_rate`, `format` and `headers`.
-   Repeating `browser_audio_start` with the same tab and rate is idempotent; a
-   different rate returns `AUDIO_BUSY`, so stop first, then start again.
+2. `browser_audio_start { session_id, sample_rate: 24000 }` returns
+   `{ stream_url, clear_url, sample_rate, format, channels, session_id, restarted, headers }`.
+   The URLs are absolute, on the server's own origin, and are capability URLs:
+   the secret in the path is the only credential they take (see
+   [Capability URLs](#capability-urls)). Repeating `browser_audio_start` with
+   the same tab and rate is idempotent and returns the same URLs; a different
+   rate returns `AUDIO_BUSY`, so stop first, then start again.
 3. Open the downlink: `GET stream_url` with `headers` (SSE).
 4. Open the uplink: `POST stream_url` with `headers`,
    `Content-Type: audio/pcm`, chunked, and keep it open.
@@ -55,18 +58,36 @@ SSE events:
 |---|---|
 | `audio` | `{ "seq": 412, "pcm": "<base64>" }`, 40 ms each; a `seq` gap means frames were dropped because you read too slowly |
 | `playback` | `{ "played_ms", "buffered_ms" }` every 200 ms while your audio is queued, and once when it drains or when `clear` drops buffered audio |
-| `ended` | `{ "reason" }`: `stopped`, `tab_closed`, `browser_exit`, `replaced`, `max_duration`, `capture_failed`, `playback_failed`, `audio_daemon_exit` |
+| `ended` | `{ "reason" }`: `stopped`, `tab_closed`, `browser_exit`, `idle`, `max_duration`, `capture_failed`, `playback_failed`, `audio_daemon_exit` |
 
-Opening a second `GET` replaces the first (`ended{replaced}`), so reconnecting
-is safe. A second concurrent `POST` gets `409 uplink_busy`. The uplink accepts
+One reader and one uplink at a time: a second concurrent `GET` gets
+`409 stream_busy` and a second concurrent `POST` gets `409 uplink_busy`. Once a
+reader has disconnected, a new `GET` is accepted, so reconnecting after a
+network blip is safe. The uplink accepts
 audio faster than real time and queues up to 120 s; past that it stops reading
 your body until audio plays. Closing the body plays out the queue, then the
 response is `200 { "played_ms" }`. Cancelling the request, even after the body
 is fully sent, drops the queued audio and frees the slot.
 
-Other HTTP responses: `401` without valid credentials, `404 audio_not_started`
-(no audio on that `session_id`, or your audio runs on a different tab, which the
-detail names; nothing is forwarded in that case), `415` unless `Content-Type` is `audio/pcm`.
+Other HTTP responses: `404 audio_not_found` for an unknown, revoked or ended
+capability (never a redirect), `415` unless `Content-Type` is `audio/pcm`.
+
+## Capability URLs
+
+The client that holds the call open is often not the agent that called
+`browser_audio_start`, and carries no workbench token. So the audio routes take
+no OAuth: `browser_audio_start` mints 128 random bits per audio session and puts
+them in the path (`/api/browser/audio/<capability>/stream` and `/clear`). Any
+`Authorization` header is ignored.
+
+- The capability lives exactly as long as the audio session: `browser_audio_stop`,
+  the `ended` event, closing the tab, a browser restart, `max_duration`, and
+  60 s with neither a reader nor an uplink connected (`ended{idle}`) all revoke
+  it. The next `browser_audio_start` mints a new one.
+- Treat the URLs as secrets. The server masks the capability in its request
+  logs and records no trace spans for these paths; mask it in your proxy's
+  access logs too (see [Reverse proxy settings](#reverse-proxy-settings)).
+- `headers` carries only `X-Browser-Session`, a routing key, not a credential.
 
 ## Errors from the tools
 
@@ -83,8 +104,9 @@ detail names; nothing is forwarded in that case), `415` unless `Content-Type` is
 
 Send the returned `headers` (`X-Browser-Session`) on all three requests so the
 mesh routes them to the pod running your browser. If a request lands elsewhere
-the server pipes it to the right pod itself (it needs `INTERNAL_MCP_URL`), at
-the cost of an extra hop. Operator rules, as for every browser request: hash
+the server pipes it to the right pod itself (it needs `INTERNAL_MCP_URL` and
+the `X-Browser-Session` header, since the capability names no user), at the
+cost of an extra hop. Operator rules, as for every browser request: hash
 consistently on `X-Browser-Session`, hash to pod endpoints rather than a
 ClusterIP (which would re-round-robin), and keep `CLUSTER_ENABLED` off, since no
 proxy can route inside a worker pool. Details in
@@ -95,7 +117,7 @@ proxy can route inside a worker pool. Details in
 
 The uplink is a long request body and the downlink a long response, so a proxy
 tuned for short requests cuts calls off. In front of the audio endpoints
-(`/api/browser/tabs/*/audio/*`) set:
+(`/api/browser/audio/*`) set:
 
 ```nginx
 client_max_body_size 0;        # default 1m cuts the uplink after ~22 s at 24 kHz
@@ -104,6 +126,7 @@ proxy_buffering off;           # SSE downlink
 proxy_http_version 1.1;
 proxy_read_timeout 7200s;      # at least the longest call
 proxy_send_timeout 7200s;
+access_log off;                # the path is a credential (or log without $request_uri)
 ```
 
 ingress-nginx equivalents: `nginx.ingress.kubernetes.io/proxy-body-size: "0"`,

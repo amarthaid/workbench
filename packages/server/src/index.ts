@@ -12,6 +12,7 @@ import { registerRestRoutes } from "./api/rest-routes";
 import { registerWorkspaceRoutes } from "./workspace/routes";
 import { registerAudioRoutes } from "./audio/routes";
 import { initBrowserAudio } from "./audio/manager";
+import { loggerOptions } from "./telemetry/logger";
 import { shutdownAllPulse } from "./audio/pulse";
 import { registerVaultRoutes } from "./vault/routes";
 import { startVaultReaper } from "./vault/otl";
@@ -33,24 +34,7 @@ import { VIA_HEADER, mcpLoopRefusal, parseVia, runWithVia } from "./custom-apps/
 
 async function main() {
   const app = Fastify({
-    logger: {
-      // Redact secrets from logs. req.url is intentionally NOT redacted:
-      // keeping the URL visible is necessary for request tracing. The one
-      // credential still in a URL is the jot upload token (/j/upload/<token>),
-      // which is an opaque handle carrying nothing — the deploy it authorises
-      // lives in the database — and is single-use with a few minutes' TTL. It
-      // does still reach the logs, so treat them accordingly.
-      redact: {
-        paths: [
-          "req.headers.authorization",
-          'req.headers["x-workbench-api-key"]',
-          'req.query.token',
-          'req.query.cdpToken',
-        ],
-        remove: false,
-        censor: "[REDACTED]",
-      },
-    },
+    logger: loggerOptions,
   });
 
   const { initDb } = await import("./db.js");

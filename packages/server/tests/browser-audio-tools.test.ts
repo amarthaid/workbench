@@ -34,26 +34,41 @@ import { browserPlugin } from "../src/plugins/internal/browser";
 
 const tool = (n: string) => browserPlugin.tools.find((t) => t.name === n)! as any;
 const TAB = { id: "T1", cdp: {} };
+const live = (extra: Record<string, unknown> = {}) => ({ rate: 24000, whenEnded: new Promise(() => undefined), ...extra });
+const CAP = /^https:\/\/wb\.example\.com\/api\/browser\/audio\/([A-Za-z0-9_-]{22})\/(stream|clear)$/;
 
 beforeEach(() => {
   getTabMock.mockImplementation((_u: string, id: string) => (id === "T1" ? TAB : undefined));
 });
 
 describe("browser_audio_start", () => {
-  it("defaults to 24 kHz and returns absolute urls plus the routing header", async () => {
-    startMock.mockResolvedValue({ ok: true, session: { rate: 24000 }, session_id: "T1", restarted: false });
+  it("defaults to 24 kHz and returns capability urls plus the routing header, nothing else", async () => {
+    startMock.mockResolvedValue({ ok: true, session: live(), session_id: "T1", restarted: false });
     const out = await tool("browser_audio_start").handler({ userId: "user-1" }, { session_id: "T1" });
     expect(startMock).toHaveBeenCalledWith("user-1", "T1", 24000, { restart: false });
-    expect(out).toEqual({
-      session_id: "T1",
-      restarted: false,
-      format: "pcm_s16le",
-      channels: 1,
-      sample_rate: 24000,
-      stream_url: "https://wb.example.com/api/browser/tabs/T1/audio/stream",
-      clear_url: "https://wb.example.com/api/browser/tabs/T1/audio/clear",
-      headers: { "X-Browser-Session": "route-key" },
-    });
+    // The shape is frozen: slaude's schema is strict and refuses unknown keys.
+    expect(Object.keys(out).sort()).toEqual(
+      ["channels", "clear_url", "format", "headers", "restarted", "sample_rate", "session_id", "stream_url"]
+    );
+    expect(out).toMatchObject({ session_id: "T1", restarted: false, format: "pcm_s16le", channels: 1, sample_rate: 24000 });
+    expect(out.headers).toEqual({ "X-Browser-Session": "route-key" });
+    const s = CAP.exec(out.stream_url);
+    const c = CAP.exec(out.clear_url);
+    expect(s?.[2]).toBe("stream");
+    expect(c?.[2]).toBe("clear");
+    expect(s?.[1]).toBe(c?.[1]);
+    expect(out.stream_url).not.toContain("T1");
+  });
+
+  it("returns the same capability for a repeat start of the same session, a new one for a new session", async () => {
+    const session = live();
+    startMock.mockResolvedValue({ ok: true, session, session_id: "T1", restarted: false });
+    const a = await tool("browser_audio_start").handler({ userId: "user-1" }, { session_id: "T1" });
+    const b = await tool("browser_audio_start").handler({ userId: "user-1" }, { session_id: "T1" });
+    expect(b.stream_url).toBe(a.stream_url);
+    startMock.mockResolvedValue({ ok: true, session: live(), session_id: "T1", restarted: false });
+    const c = await tool("browser_audio_start").handler({ userId: "user-1" }, { session_id: "T1" });
+    expect(c.stream_url).not.toBe(a.stream_url);
   });
 
   it("only accepts 16000, 24000, 48000", () => {
@@ -75,13 +90,14 @@ describe("browser_audio_start", () => {
   });
 
   it("uses the new tab id in the urls after a restart", async () => {
-    startMock.mockResolvedValue({ ok: true, session: { rate: 16000 }, session_id: "T9", restarted: true });
+    startMock.mockResolvedValue({ ok: true, session: live({ rate: 16000 }), session_id: "T9", restarted: true });
     const out = await tool("browser_audio_start").handler(
       { userId: "user-1" }, { session_id: "T1", sample_rate: 16000, restart: true }
     );
     expect(startMock).toHaveBeenCalledWith("user-1", "T1", 16000, { restart: true });
     expect(out.session_id).toBe("T9");
-    expect(out.stream_url).toBe("https://wb.example.com/api/browser/tabs/T9/audio/stream");
+    expect(out.restarted).toBe(true);
+    expect(out.stream_url).toMatch(CAP);
   });
 
   it("passes manager BROWSER_RESTART_FAILED error through", async () => {

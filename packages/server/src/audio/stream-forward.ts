@@ -5,29 +5,37 @@
 // kill any uplink longer than five minutes, because its response headers only
 // arrive when the call ends.
 //
-// Same rules as the buffered forward: the routing key is derived from the
-// authenticated user, never taken from the client; an inbound key that
-// verifies for this user means "you are the owner", so handle locally.
+// The audio routes authenticate by capability, not by user, so this hop
+// cannot derive the routing key: it relays the caller's own X-Browser-Session
+// (browser_audio_start hands it out alongside the URLs) and the mesh hashes it
+// onto the owner. The key only routes; the owner still checks the capability.
+// A request that already made the hop is answered where it lands, so an
+// unknown capability is one 404, never a loop.
 import http from "node:http";
 import https from "node:https";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { config } from "../config";
-import { SESSION_HEADER, mintSessionKey, verifySessionKey } from "../auth/cdp-bridge";
+import { SESSION_HEADER } from "../auth/cdp-bridge";
 
+export const HOP_HEADER = "x-workbench-audio-hop";
 const HOP_BY_HOP = new Set(["connection", "keep-alive", "transfer-encoding", "content-length", "upgrade", "te", "trailer"]);
-const PASS_THROUGH = ["authorization", "x-workbench-api-key", "content-type", "accept"];
+// No credentials: the capability in the path is the only one these routes take.
+const PASS_THROUGH = ["content-type", "accept"];
+// mintSessionKey's output: base64url of a SHA-256 HMAC.
+const SESSION_KEY = /^[A-Za-z0-9_-]{43}$/;
 
 export async function forwardAudioStream(opts: {
-  userId: string;
   request: FastifyRequest;
   reply: FastifyReply;
   internalUrl?: string;
 }): Promise<boolean> {
-  const { userId, request, reply } = opts;
+  const { request, reply } = opts;
   const internal = opts.internalUrl ?? config.INTERNAL_MCP_URL;
   if (!internal) return false;
+  if (request.headers[HOP_HEADER] !== undefined) return false;
   const inbound = request.headers[SESSION_HEADER];
-  if (verifySessionKey(Array.isArray(inbound) ? inbound[0] : inbound, userId)) return false;
+  const key = Array.isArray(inbound) ? inbound[0] : inbound;
+  if (!key || !SESSION_KEY.test(key)) return false;
 
   // Only the path and query come from the client; the origin is always ours.
   // `new URL(request.url, internal)` would let an absolute-form target or a
@@ -39,7 +47,7 @@ export async function forwardAudioStream(opts: {
   target.search = u.search;
   // Defensive: target is built from base.origin, so this should never trip.
   if (target.origin !== base.origin) return false;
-  const headers: Record<string, string> = { [SESSION_HEADER]: mintSessionKey(userId) };
+  const headers: Record<string, string> = { [SESSION_HEADER]: key, [HOP_HEADER]: "1" };
   for (const h of PASS_THROUGH) {
     const v = request.headers[h];
     if (typeof v === "string") headers[h] = v;

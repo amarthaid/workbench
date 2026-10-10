@@ -33,6 +33,7 @@ import { expectDownload, awaitDownload } from "../../auth/browser-downloads";
 import { uploadWorkspaceFile, BrowserUploadError } from "../../auth/browser-upload";
 import { verifySessionKey, mintSessionKey } from "../../auth/cdp-bridge";
 import { startAudio, stopAudio } from "../../audio/manager";
+import { capabilityFor } from "../../audio/capability";
 
 export const BROWSER_INTEGRATION_NAME = "browser";
 
@@ -291,7 +292,8 @@ const tools: PluginTool[] = [
       "Call it after opening the meeting page, before joining. Returns stream_url: GET it as SSE for the call audio " +
       "(`audio` events: base64 PCM16 mono, 40 ms each) and POST one long chunked `Content-Type: audio/pcm` body to it " +
       "with your voice at the same rate. POST clear_url to stop your audio at once (barge-in); it returns played_ms. " +
-      "Send `headers` on every one of those requests. One call per user at a time.",
+      "The URLs are secrets valid only while this audio session is open: no Authorization header, send only `headers`. " +
+      "One reader and one POST at a time (409 otherwise); nothing attached for 60 s ends the session. One call per user at a time.",
     integration: BROWSER_INTEGRATION_NAME,
     inputSchema: z.object({
       session_id: z.string().describe(SESSION_ID_DESC),
@@ -314,7 +316,10 @@ const tools: PluginTool[] = [
       if (r.session.ended) {
         return { error: "AUDIO_ENDED", detail: `audio ended during start: ${r.session.ended}` };
       }
-      const base = `${config.SERVER_PUBLIC_URL}/api/browser/tabs/${encodeURIComponent(r.session_id)}/audio`;
+      // The capability is the only credential the audio routes take: the
+      // voice client holding the call carries no workbench token. Same
+      // capability for the life of the session, revoked when it ends.
+      const base = `${config.SERVER_PUBLIC_URL}/api/browser/audio/${capabilityFor(r.session)}`;
       return {
         session_id: r.session_id,
         restarted: r.restarted,

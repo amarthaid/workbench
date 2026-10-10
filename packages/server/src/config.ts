@@ -68,8 +68,9 @@ export const configSchema = z.object({
     .default("false")
     .transform((v) => v === "true" || v === "1"),
   // Hard cap on one audio session, so a forgotten uplink cannot hold a
-  // chromium and two child processes forever.
-  BROWSER_AUDIO_MAX_MINUTES: z.coerce.number().int().positive().max(1440).default(120),
+  // chromium and two child processes forever. Above slaude's own 120-minute
+  // call cap, so the client ends a long call before the server does.
+  BROWSER_AUDIO_MAX_MINUTES: z.coerce.number().int().positive().max(1440).default(180),
   JOTS_DIR: z.string().optional(),
   JOTS_MAX_BYTES: z.coerce.number().int().positive().default(5_242_880),
   JOTS_MAX_FILES: z.coerce.number().int().positive().default(1000),
