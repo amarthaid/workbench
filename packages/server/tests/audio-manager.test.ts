@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 
-const cfg = vi.hoisted(() => ({ BROWSER_AUDIO_ENABLED: true, BROWSER_AUDIO_MAX_MINUTES: 120 }));
+const cfg = vi.hoisted(() => ({ BROWSER_AUDIO_ENABLED: true, BROWSER_AUDIO_MAX_MINUTES: 120, BROWSER_AUDIO_FIRST_ATTACH_SECONDS: 600 }));
 const warm = new Map<string, any>();
 const tabs = new Map<string, any>();
 
@@ -23,7 +23,7 @@ vi.mock("../src/auth/browser-session", async () => {
   };
 });
 
-import { startAudio, stopAudio, getAudio, initBrowserAudio, KEEPALIVE_MS, IDLE_MS, IDLE_CHECK_MS } from "../src/audio/manager";
+import { startAudio, stopAudio, getAudio, initBrowserAudio, isPostCallPage, KEEPALIVE_MS, IDLE_MS, IDLE_CHECK_MS } from "../src/audio/manager";
 import { capabilityFor, sessionForCapability } from "../src/audio/capability";
 import * as bsModule from "../src/auth/browser-session";
 
@@ -152,6 +152,21 @@ describe("startAudio", () => {
     expect(bs.navigate).toHaveBeenCalledWith(fresh, "https://meet.example.com/abc-defg");
     expect(r).toMatchObject({ ok: true, session_id: "T9", restarted: true });
   });
+
+  it("with restart: true grants the mic to the page's origin before reopening it", async () => {
+    warm.get("user-1").audio = undefined;
+    const fresh = fakeTab("T9");
+    const order: string[] = [];
+    bs.closeBrowserSession.mockImplementation(async () => { warm.set("user-1", warmWith(freshAudio())); });
+    bs.openTab.mockImplementation(async () => { tabs.set("T9", fresh); return { ok: true, tab: fresh }; });
+    browser.send.mockImplementation(async (method: string, params: any) => {
+      if (method === "Browser.setPermission") order.push(`${params.setting}:${params.origin}`);
+      return method === "Target.getTargetInfo" ? { targetInfo: { url: "https://meet.example.com/abc-defg" } } : {};
+    });
+    bs.navigate.mockImplementation(async (_t: unknown, u: string) => { order.push(`navigate:${u}`); return {}; });
+    await startAudio("user-1", "T1", 24000, { restart: true });
+    expect(order).toEqual(["granted:https://meet.example.com", "navigate:https://meet.example.com/abc-defg"]);
+  });
 });
 
 describe("mic permission follows navigation", () => {
@@ -277,10 +292,10 @@ describe("lifecycle", () => {
     expect(bs.touchTab).toHaveBeenCalledTimes(1);
   });
 
-  it("ends idle after IDLE_MS with nobody attached, revoking the capability", async () => {
+  it("waits BROWSER_AUDIO_FIRST_ATTACH_SECONDS for a first attach, then ends idle, revoking the capability", async () => {
     const r = (await startAudio("user-1", "T1", 24000)) as any;
     const cap = capabilityFor(r.session);
-    vi.advanceTimersByTime(IDLE_MS - IDLE_CHECK_MS);
+    vi.advanceTimersByTime(600_000 - IDLE_CHECK_MS);
     expect(r.session.ended).toBeUndefined();
     vi.advanceTimersByTime(IDLE_CHECK_MS);
     expect(r.session.ended).toBe("idle");
@@ -298,6 +313,25 @@ describe("lifecycle", () => {
     expect(r.session.ended).toBeUndefined();
     vi.advanceTimersByTime(IDLE_CHECK_MS * 2);
     expect(r.session.ended).toBe("idle");
+  });
+
+  it("ends page_left when the tab lands on a post-call page; other navigations only move the grant", async () => {
+    const r = (await startAudio("user-1", "T1", 24000)) as any;
+    const cdp = tabs.get("T1").cdp;
+    cdp.emit("Page.frameNavigated", { frame: { id: "main", url: "https://auth.example.org/login" } });
+    cdp.emit("Page.frameNavigated", { frame: { id: "sub", parentId: "main", url: "https://meet.jit.si/static/close3.html" } });
+    expect(r.session.ended).toBeUndefined();
+    cdp.emit("Page.frameNavigated", { frame: { id: "main", url: "https://meet.jit.si/static/close3.html" } });
+    expect(r.session.ended).toBe("page_left");
+  });
+
+  it("isPostCallPage knows Jitsi's close pages and nothing else", () => {
+    for (const u of ["https://meet.jit.si/static/close3.html", "https://jitsi.example.com/static/close.html", "https://x.example/static/close2.html?x=1"]) {
+      expect(isPostCallPage(u)).toBe(true);
+    }
+    for (const u of ["https://meet.jit.si/MyRoom", "https://meet.jit.si/static/closed.html", "about:blank", "file:///static/close3.html", "not a url"]) {
+      expect(isPostCallPage(u)).toBe(false);
+    }
   });
 
   it("stop revokes the capability, and the next start mints a new one", async () => {

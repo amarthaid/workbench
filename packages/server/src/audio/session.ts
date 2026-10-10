@@ -20,7 +20,8 @@ export type EndReason =
   | "capture_failed"
   | "playback_failed"
   | "audio_daemon_exit"
-  | "idle";
+  | "idle"
+  | "page_left";
 
 export type AudioEvent =
   | { event: "audio"; data: { seq: number; pcm: string } }
