@@ -115,6 +115,36 @@ guide: Auto-reconnect in `plugins/auth-modes`.
     (200 sequential same-origin fetches: ~210 ms guarded vs ~130 ms unguarded),
     plus one DNS lookup per new hostname per minute.
 
+  - *Fix round on the guard.* Every error path now fails the request: an
+    unparsable URL, an unknown scheme, a DNS error or timeout (negative results
+    cached 10 s, at most 8 lookups at once), a handler exception, and a request
+    from a session the guard never set up. A target of any type whose guard
+    cannot be set up is closed, never resumed. Dedicated workers have no Fetch
+    domain (`'Fetch.enable' wasn't found`); their requests are paused on the
+    owning page's session (pinned by the e2e), so one runs only under a guarded
+    parent. Shared and service workers take Fetch on their own session.
+    `Network.enable` on a paused service worker hangs until it is resumed, and
+    `Network.setBlockedURLs` did not block a WebSocket in a page either, so the
+    Network domain is not used. Guard setup for targets that exist at install
+    time is awaited. The cooldown is applied after the fast path, so a session
+    the profile can hand back is recovered inside the window.
+    `BROWSER_LOOPBACK_ALLOW_PORTS` opens listed loopback ports (dev servers) in
+    any environment, never a live chromium debug port or the server's `PORT`.
+  - *DevTools sockets need an origin no page can have.* `--remote-allow-origins`
+    was `http://127.0.0.1`, the origin of any page served from loopback port
+    80. It is now `http://workbench-cdp.invalid` (`src/auth/cdp-origin.ts`),
+    sent by every server-side CDP client.
+  - *The recipe tab is not guarded, on purpose.* Its steps are trusted plugin
+    manifest data driven by the server, no agent can reach the tab (it is
+    hidden from every `browser_*` tool and the live view), and e2e fixtures run
+    on 127.0.0.1.
+  - *Credentials are delivered to https only* (or loopback http, for local
+    fixtures): `isSecureContext` in the isolated-world deliver function.
+  - *409 after a success.* A recipe success now holds the window, so an API-key
+    `DELETE /api/connections/:i` within 10 minutes of an automatic reconnect
+    gets `409 RECONNECT_COOLDOWN` even though nothing failed. Disconnect from the
+    portal, or wait.
+
 ## Known gaps
 
 - Apps that only react to keydown events may not register the native-setter
@@ -125,7 +155,14 @@ guide: Auto-reconnect in `plugins/auth-modes`.
   record (and the 409 on API-key DELETE) holds the cooldown.
 - DNS rebinding: a hostname is resolved by the guard and again by chromium,
   so an answer that flips from public to loopback between the two lookups gets
-  through. IP literals and `localhost` names are not affected.
+  through. IP literals and `localhost` names are not affected. Chromium's
+  DevTools HTTP handler likely rejects a non-IP, non-`localhost` Host header,
+  which would leave the debug endpoints out of reach through a rebound name
+  (unverified).
+- WebSockets: Fetch never pauses a WebSocket handshake and `Network.setBlockedURLs`
+  did not block one, so an agent page can open a plain WebSocket to a loopback
+  service (pinned by an e2e "residual" case). DevTools sockets stay refused by
+  origin. The guard's "any port" covers HTTP(S) only.
 - `BROWSER_ALLOW_LOOPBACK` (test only, ignored when `NODE_ENV=production`) lets
   agent tabs reach loopback so chromium e2e fixtures on 127.0.0.1 load.
 - The cooldown is per integration: two integrations whose recipes use the same

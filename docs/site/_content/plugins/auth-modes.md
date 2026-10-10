@@ -289,7 +289,7 @@ reconnect: {
 `timeoutMs` (each step defaults to 10 s; the run deadline is enforced per step).
 The private tab is invisible to the `browser_*` tools and to the live view, so
 an agent cannot list it, evaluate in it or attach to it while it holds a
-credential. Agent tabs cannot reach loopback at all, on any port, which is
+credential. Agent tabs cannot load anything on loopback (see the browser integration page), which is
 where every chromium's debugging endpoint listens (its `/json/list` would name
 the private tab). The profile's password manager is turned off, so chromium never
 saves a filled password.
@@ -325,8 +325,9 @@ manual reconnect and no further attempt runs for 10 minutes, at most six per
 hour, so a wrong password or an MFA wall never hammers a login form. A
 reconnect whose retried request is still refused counts as a failed attempt,
 and so does a recipe run that succeeded but whose session is dead again inside
-the 10 minutes: the recipe does not run twice in one window. (Reusing a session
-the browser profile still holds types no credential and holds no cooldown.)
+the 10 minutes: the recipe does not run twice in one window. Reusing a session
+the browser profile still holds types no credential: it holds no cooldown and
+still runs inside one, so such a session is never refused.
 Saving new bindings, or reconnecting by hand from the portal, clears the
 cooldown. A session import made with an API key or OAuth token stores the
 cookies but leaves the cooldown in force, so an agent cannot loop the recipe;

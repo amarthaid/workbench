@@ -26,7 +26,11 @@ There is exactly one browser per user, backed by a persistent profile on disk. E
 
 The cookie-auth capture flow uses that same browser. The two **share** it rather than excluding each other. Capture and the `browser_*` tools resolve the same warm session, so a capture can start while an agent is driving. `browser_close` ends one tab, not the browser; the profile — and the logged-in state in it — survives regardless.
 
-**No loopback.** Agent tabs cannot reach `localhost`, `127.0.0.0/8`, `0.0.0.0`, `[::1]` or a hostname that resolves to one of them, on any port, nor the server's own internal host. Every user's Chromium listens for remote debugging on a loopback port. Each request (navigations, redirects, popups, frames, subresources) is checked inside the browser before it is sent, and a blocked one fails as `net::ERR_BLOCKED_BY_CLIENT`. `browser_navigate` refuses a loopback URL up front.
+**No loopback.** Agent tabs cannot load `localhost`, `127.0.0.0/8`, `0.0.0.0`, `[::1]` or a hostname that resolves to one of them, nor the server's own internal host. Every user's Chromium listens for remote debugging on a loopback port. Every HTTP(S) request (navigations, redirect hops, popups, frames, subresources, dedicated, shared and service workers) is checked inside the browser before it is sent, and a blocked one fails as `net::ERR_BLOCKED_BY_CLIENT`. A hostname that does not resolve is refused too. `browser_navigate` refuses a loopback URL up front.
+
+**Local development.** Set `BROWSER_LOOPBACK_ALLOW_PORTS` (for example `5173,8080`) to let the agent open a dev server on those loopback ports. A live Chromium debugging port and the server's own `PORT` stay refused even when listed.
+
+**WebSockets are not intercepted.** Chromium's request interception never pauses a WebSocket handshake, and `Network.setBlockedURLs` did not stop one either. So a page can still open a plain WebSocket to a loopback service. Chromium's own DevTools sockets are not reachable this way: Chromium accepts them only from an origin no page can have (`--remote-allow-origins`).
 
 Because the profile persists, sites the user logged into stay logged in across sessions. The server kills an idle session after `BROWSER_SESSION_TTL_SECONDS`. The profile itself is separately subject to `BROWSER_PROFILE_TTL_DAYS`.
 
