@@ -38,6 +38,7 @@ import {
   closeBrowserSession,
   openPrivateTab,
   closePrivateTab,
+  isPrivateTarget,
   getTab,
   defaultTab,
   closeTab,
@@ -121,6 +122,31 @@ describe("private (recipe) tabs", () => {
     expect(t.id).not.toBe("RECIPE");
     expect(getWarmSession(U)!.defaultTabId).not.toBe("RECIPE");
     expect(getWarmSession(U)!.cdpPageWsUrl).not.toContain("RECIPE");
+  });
+
+  it("race: a defaultTab() running while openPrivateTab is mid-flight never adopts the new target", async () => {
+    // createTarget has answered, but the private tab's socket is not open yet:
+    // the target exists in chromium and is in no map.
+    await closeTab(U, "T0");
+    targets = targets.filter((t) => t.targetId !== "T0");
+    const opening = openPrivateTab(U);
+    await new Promise((r) => setImmediate(r)); // let createTarget resolve; ws "open" is still pending
+    expect(targets.map((t) => t.targetId)).toContain("RECIPE");
+    const [d, listed] = await Promise.all([defaultTab(U), call("browser_tabs")]);
+    const opened = await opening;
+    expect(opened).toMatchObject({ ok: true, tab: { id: "RECIPE" } });
+    expect(d.id).not.toBe("RECIPE");
+    expect(getWarmSession(U)!.defaultTabId).not.toBe("RECIPE");
+    expect(getTab(U, "RECIPE")).toBeUndefined();
+    expect(listed.tabs.map((t: { session_id: string }) => t.session_id)).not.toContain("RECIPE");
+  });
+
+  it("isPrivateTarget marks the target for its whole life, and only then", async () => {
+    await openPrivateTab(U);
+    expect(isPrivateTarget("RECIPE")).toBe(true);
+    expect(isPrivateTarget("T0")).toBe(false);
+    await closePrivateTab(U, "RECIPE");
+    expect(isPrivateTarget("RECIPE")).toBe(false);
   });
 
   it("closePrivateTab closes the target; it counts toward the tab limit while open", async () => {

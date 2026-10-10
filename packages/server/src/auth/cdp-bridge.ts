@@ -215,7 +215,12 @@ export function sendCommands(channel: CdpChannel, body: unknown): number | null 
   if (list.length === 0 || list.length > MAX_BATCH) return null;
   for (const msg of list) {
     if (!msg || typeof msg !== "object" || Array.isArray(msg)) return null;
-    if (typeof (msg as { method?: unknown }).method !== "string") return null;
+    const method = (msg as { method?: unknown }).method;
+    if (typeof method !== "string") return null;
+    // The view drives its one page. The Target domain (getTargets,
+    // attachToTarget, ...) and a flattened `sessionId` would reach other
+    // targets, including a private reconnect tab delivering a credential.
+    if (method.startsWith("Target.") || "sessionId" in msg) return null;
   }
   for (const msg of list) channel.link?.send(JSON.stringify(msg));
   channel.lastActivity = Date.now();
