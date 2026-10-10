@@ -14,6 +14,7 @@ works best).
 ```bash
 BROWSER_AUDIO_ENABLED=true
 BROWSER_AUDIO_MAX_MINUTES=180   # hard cap per call
+BROWSER_AUDIO_FIRST_ATTACH_SECONDS=600   # wait for the first reader/uplink
 ```
 
 The Docker image ships PulseAudio; nothing runs until the flag is on. With the
@@ -25,8 +26,8 @@ close, logins survive (same profile), and the page reopens in a new tab whose
 
 ## Flow
 
-1. `browser_start` gives a `session_id`; `browser_navigate` to the meeting link.
-2. `browser_audio_start { session_id, sample_rate: 24000 }` returns
+1. `browser_start` gives a `session_id`. Do **not** open the meeting yet.
+2. `browser_audio_start { session_id, sample_rate: 24000 }` on that blank tab returns
    `{ stream_url, clear_url, sample_rate, format, channels, session_id, restarted, headers }`.
    The URLs are absolute, on the server's own origin, and are capability URLs:
    the secret in the path is the only credential they take (see
@@ -36,15 +37,19 @@ close, logins survive (same profile), and the page reopens in a new tab whose
 3. Open the downlink: `GET stream_url` with `headers` (SSE).
 4. Open the uplink: `POST stream_url` with `headers`,
    `Content-Type: audio/pcm`, chunked, and keep it open.
-5. Click through the meeting's join flow (`browser_click`, `browser_screenshot`);
+5. `browser_navigate` to the meeting link. Order matters: meeting pages ask for
+   the microphone as they load, and a request that arrives before the grant is
+   denied and stays denied. If the page was already open, reload it after
+   `browser_audio_start`. The grant follows the tab across origins.
+6. Click through the meeting's join flow (`browser_click`, `browser_screenshot`);
    choose "computer audio" when asked.
-6. Pipe: every SSE `audio` frame goes to your model's input; every model audio
+7. Pipe: every SSE `audio` frame goes to your model's input; every model audio
    delta is written into the uplink body.
-7. When your model is interrupted: `POST clear_url`, which returns
+8. When your model is interrupted: `POST clear_url`, which returns
    `{ played_ms, cleared_ms }`. `audio_end_ms = played_ms - <ms of audio you had
    sent before this response started>` is what a realtime API's truncate call
    needs.
-8. Leave the meeting, then `browser_audio_stop { session_id }`, which returns
+9. Leave the meeting, then `browser_audio_stop { session_id }`, which returns
    `{ played_ms, duration_ms }` for the call.
 
 ## Wire format
@@ -58,7 +63,11 @@ SSE events:
 |---|---|
 | `audio` | `{ "seq": 412, "pcm": "<base64>" }`, 40 ms each; a `seq` gap means frames were dropped because you read too slowly |
 | `playback` | `{ "played_ms", "buffered_ms" }` every 200 ms while your audio is queued, and once when it drains or when `clear` drops buffered audio |
-| `ended` | `{ "reason" }`: `stopped`, `tab_closed`, `browser_exit`, `idle`, `max_duration`, `capture_failed`, `playback_failed`, `audio_daemon_exit` |
+| `ended` | `{ "reason" }`: `stopped`, `tab_closed`, `browser_exit`, `idle`, `page_left`, `max_duration`, `capture_failed`, `playback_failed`, `audio_daemon_exit` |
+
+`page_left` means the tab landed on a meeting app's post-call page (today:
+Jitsi's `/static/close*.html`, shown after any hangup, kick or meeting end). An
+origin change alone does not end the session, because join flows hop origins.
 
 One reader and one uplink at a time: a second concurrent `GET` gets
 `409 stream_busy` and a second concurrent `POST` gets `409 uplink_busy`. Once a
@@ -82,7 +91,9 @@ them in the path (`/api/browser/audio/<capability>/stream` and `/clear`). Any
 
 - The capability lives exactly as long as the audio session: `browser_audio_stop`,
   the `ended` event, closing the tab, a browser restart, `max_duration`, and
-  60 s with neither a reader nor an uplink connected (`ended{idle}`) all revoke
+  `page_left`, no reader or uplink within `BROWSER_AUDIO_FIRST_ATTACH_SECONDS`
+  of the start (default 600, room for a human to approve the call), and 60 s
+  with neither connected after that (`ended{idle}`) all revoke
   it. The next `browser_audio_start` mints a new one.
 - Treat the URLs as secrets. The server masks the capability in its request
   logs and records no trace spans for these paths; mask it in your proxy's

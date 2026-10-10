@@ -71,6 +71,10 @@ export const configSchema = z.object({
   // chromium and two child processes forever. Above slaude's own 120-minute
   // call cap, so the client ends a long call before the server does.
   BROWSER_AUDIO_MAX_MINUTES: z.coerce.number().int().positive().max(1440).default(180),
+  // How long a fresh audio session waits for its first SSE reader or uplink
+  // before ending "idle" (afterwards the allowance is 60 s). Long enough for a
+  // human to approve the call in the voice client.
+  BROWSER_AUDIO_FIRST_ATTACH_SECONDS: z.coerce.number().int().positive().max(3600).default(600),
   JOTS_DIR: z.string().optional(),
   JOTS_MAX_BYTES: z.coerce.number().int().positive().default(5_242_880),
   JOTS_MAX_FILES: z.coerce.number().int().positive().default(1000),
