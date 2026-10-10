@@ -22,7 +22,7 @@
 // rebinding answer (public here, loopback a moment later in chromium) can
 // slip through between the two lookups.
 
-import { lookup } from "node:dns/promises";
+import { Resolver } from "node:dns/promises";
 import { isIP } from "node:net";
 import { config } from "../config";
 import { effectivePort, isAllowedLoopbackPort, isInternalHost, isLoopbackAddress, isLoopbackHost } from "./browser-url";
@@ -35,19 +35,33 @@ export interface CdpLike {
 const DNS_CACHE_MS = 60_000;
 const DNS_NEGATIVE_CACHE_MS = 10_000;
 const DNS_CACHE_MAX = 2_000;
+/** Paused requests one chromium may have awaiting a verdict; past it they are failed at once. */
+const MAX_PENDING = 512;
 
 type Resolved = "loopback" | "public" | "fail";
 
+const dnsResolver = new Resolver({ timeout: 900, tries: 2 });
+
 /** Test seams. */
 export const __netGuard = {
+  // c-ares queries, not dns.lookup: getaddrinfo runs on libuv's small shared
+  // threadpool (4 threads by default), so a few hung lookups from one page
+  // would stall every session's lookups (and fs work). c-ares is asynchronous
+  // and needs no thread. It does not read /etc/hosts: a name only the hosts
+  // file knows does not resolve here and is therefore refused (fail closed).
   async resolve(host: string): Promise<string[]> {
-    const addrs = await lookup(host, { all: true, verbatim: true });
-    return addrs.map((a) => a.address);
+    const [v4, v6] = await Promise.allSettled([dnsResolver.resolve4(host), dnsResolver.resolve6(host)]);
+    const addrs = [...(v4.status === "fulfilled" ? v4.value : []), ...(v6.status === "fulfilled" ? v6.value : [])];
+    if (!addrs.length) throw new Error("unresolved");
+    return addrs;
   },
-  cache: new Map<string, { at: number; ttl: number; result: Resolved }>(),
-  /** Bound on queueing + lookup for one hostname; past it the request is failed. */
+  /** Successful answers only (shared: real DNS data). Failures are cached per resolver. */
+  cache: new Map<string, { at: number; result: Exclude<Resolved, "fail"> }>(),
+  /** Overall bound for one request's decision: queue + lookup. Past it the request is failed. */
   timeoutMs: 2_000,
+  /** Per resolver (per session). */
   maxConcurrent: 8,
+  maxQueue: 32,
 };
 
 /** The test-only opt-out. Never honoured in production. */
@@ -55,60 +69,119 @@ function loopbackAllowed(): boolean {
   return config.BROWSER_ALLOW_LOOPBACK && process.env.NODE_ENV !== "production";
 }
 
-// At most __netGuard.maxConcurrent lookups at once; one in flight per host.
-let active = 0;
-const waiting: Array<() => void> = [];
-const inFlight = new Map<string, Promise<Resolved>>();
+/**
+ * DNS for one user's chromium. Lookups, their queue and negative results are
+ * per resolver (one per guard, so per session), so a page that floods slow or
+ * unresolvable hostnames only slows its own session. Successful answers are
+ * real DNS data and are shared (__netGuard.cache). Every wait (queue slot, a
+ * lookup another request started, the lookup itself) is bounded by the
+ * caller's own deadline; past it, or when the queue is full, the request is
+ * failed.
+ */
+export interface DnsResolver {
+  resolve(host: string, deadline: number): Promise<Resolved>;
+}
 
-async function withSlot<T>(fn: () => Promise<T>): Promise<T> {
-  if (active >= __netGuard.maxConcurrent) await new Promise<void>((r) => waiting.push(r));
-  active += 1;
-  try {
-    return await fn();
-  } finally {
+export function createDnsResolver(): DnsResolver {
+  let active = 0;
+  const waiting: Array<() => void> = [];
+  const inFlight = new Map<string, Promise<Resolved>>();
+  const negative = new Map<string, number>(); // host -> expires at
+
+  const release = () => {
     active -= 1;
     waiting.shift()?.();
-  }
+  };
+
+  /** Resolves true when a slot is held, false on overflow or deadline. */
+  const acquire = (deadline: number): Promise<boolean> => {
+    if (active < __netGuard.maxConcurrent) {
+      active += 1;
+      return Promise.resolve(true);
+    }
+    if (waiting.length >= __netGuard.maxQueue) return Promise.resolve(false);
+    return new Promise<boolean>((res) => {
+      let done = false;
+      const grant = () => {
+        if (done) { waiting.shift()?.(); return; } // timed out already: pass the slot on
+        done = true;
+        clearTimeout(timer);
+        active += 1;
+        res(true);
+      };
+      const timer = setTimeout(() => {
+        if (done) return;
+        done = true;
+        const i = waiting.indexOf(grant);
+        if (i >= 0) waiting.splice(i, 1);
+        res(false);
+      }, Math.max(0, deadline - Date.now()));
+      waiting.push(grant);
+    });
+  };
+
+  const lookupOnce = async (host: string, deadline: number): Promise<Resolved> => {
+    if (!(await acquire(deadline))) return "fail";
+    try {
+      const addrs = await bounded(__netGuard.resolve(host), deadline);
+      if (!addrs || !addrs.length) return "fail";
+      return addrs.some(isLoopbackAddress) ? "loopback" : "public";
+    } catch {
+      return "fail"; // NXDOMAIN, SERVFAIL: fail closed
+    } finally {
+      // The underlying lookup may still be running (a hung resolver), but this
+      // session's slot is returned at the deadline, so it cannot pin the queue.
+      release();
+    }
+  };
+
+  return {
+    async resolve(host: string, deadline: number): Promise<Resolved> {
+      const now = Date.now();
+      const hit = __netGuard.cache.get(host);
+      if (hit && now - hit.at < DNS_CACHE_MS) return hit.result;
+      const neg = negative.get(host);
+      if (neg !== undefined && neg > now) return "fail";
+      let p = inFlight.get(host);
+      if (!p) {
+        p = lookupOnce(host, now + __netGuard.timeoutMs)
+          .then((result) => {
+            if (result === "fail") {
+              if (negative.size >= DNS_CACHE_MAX) negative.clear();
+              negative.set(host, Date.now() + DNS_NEGATIVE_CACHE_MS);
+            } else {
+              if (__netGuard.cache.size >= DNS_CACHE_MAX) __netGuard.cache.clear();
+              __netGuard.cache.set(host, { at: Date.now(), result });
+            }
+            return result;
+          })
+          .finally(() => inFlight.delete(host));
+        inFlight.set(host, p);
+      }
+      // Waiting on someone else's lookup is bounded by this request's deadline.
+      return (await bounded(p, deadline)) ?? "fail";
+    },
+  };
 }
 
-async function lookupOnce(host: string): Promise<Resolved> {
+/** `p`, or undefined once `deadline` passes. Never rejects. */
+function bounded<T>(p: Promise<T>, deadline: number): Promise<T | undefined> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    const addrs = await Promise.race([
-      withSlot(() => __netGuard.resolve(host)),
-      new Promise<string[]>((_, rej) => { timer = setTimeout(() => rej(new Error("dns timeout")), __netGuard.timeoutMs); }),
-    ]);
-    if (!addrs.length) return "fail";
-    return addrs.some(isLoopbackAddress) ? "loopback" : "public";
-  } catch {
-    return "fail"; // NXDOMAIN, SERVFAIL, timeout: fail closed
-  } finally {
-    clearTimeout(timer);
-  }
+  return Promise.race([
+    p.catch(() => undefined),
+    new Promise<undefined>((r) => { timer = setTimeout(() => r(undefined), Math.max(0, deadline - Date.now())); }),
+  ]).finally(() => clearTimeout(timer));
 }
 
-async function resolveHost(host: string): Promise<Resolved> {
-  const now = Date.now();
-  const hit = __netGuard.cache.get(host);
-  if (hit && now - hit.at < hit.ttl) return hit.result;
-  let p = inFlight.get(host);
-  if (!p) {
-    p = lookupOnce(host).then((result) => {
-      if (__netGuard.cache.size >= DNS_CACHE_MAX) __netGuard.cache.clear();
-      __netGuard.cache.set(host, { at: Date.now(), ttl: result === "public" ? DNS_CACHE_MS : DNS_NEGATIVE_CACHE_MS, result });
-      return result;
-    }).finally(() => inFlight.delete(host));
-    inFlight.set(host, p);
-  }
-  return p;
-}
+/** Used where no guard-scoped resolver is passed (tests, one-off checks). */
+const defaultResolver = createDnsResolver();
 
 /**
  * True when an agent target must not send this request. Fails closed: an
  * unparsable URL, an unknown scheme, and a hostname that does not resolve
  * (error or timeout) are all refused.
  */
-export async function isBlockedAgentRequest(rawUrl: unknown): Promise<boolean> {
+export async function isBlockedAgentRequest(rawUrl: unknown, resolver: DnsResolver = defaultResolver): Promise<boolean> {
   if (typeof rawUrl !== "string") return true;
   let u: URL;
   try {
@@ -128,7 +201,7 @@ export async function isBlockedAgentRequest(rawUrl: unknown): Promise<boolean> {
   const loopbackVerdict = () => !(isAllowedLoopbackPort(port) || loopbackAllowed());
   if (isLoopbackHost(host)) return loopbackVerdict();
   if (isIP(bare)) return false; // a literal that is not loopback
-  const r = await resolveHost(bare);
+  const r = await resolver.resolve(bare, Date.now() + __netGuard.timeoutMs);
   if (r === "fail") return true;
   return r === "loopback" ? loopbackVerdict() : false;
 }
@@ -170,19 +243,32 @@ const FRAME_TYPES = new Set(["page", "iframe"]);
 export async function installBrowserNetGuard(cdp: CdpLike, hooks: GuardHooks): Promise<BrowserNetGuard> {
   const sessions = new Map<string, { targetId: string; private: boolean }>();
   const setups = new Set<Promise<void>>();
+  const dns = createDnsResolver(); // this chromium's own DNS budget
+  let pending = 0; // paused requests awaiting a verdict
 
   cdp.on("Fetch.requestPaused", (p, sid) => {
     void (async () => {
       const requestId = p.requestId;
       let blocked = true; // every error path below fails the request
+      pending += 1;
       try {
         const s = sid ? sessions.get(sid) : undefined;
-        if (s) {
+        if (s && pending <= MAX_PENDING) {
           const trusted = s.private || hooks.isPrivate(s.targetId);
-          blocked = !trusted && (await isBlockedAgentRequest((p.request as { url?: unknown } | undefined)?.url));
+          if (trusted) blocked = false;
+          else {
+            // Hard bound: whatever the decision does, the request is answered.
+            const verdict = await bounded(
+              isBlockedAgentRequest((p.request as { url?: unknown } | undefined)?.url, dns),
+              Date.now() + __netGuard.timeoutMs + 250
+            );
+            blocked = verdict !== false;
+          }
         }
       } catch {
         blocked = true;
+      } finally {
+        pending -= 1;
       }
       await cdp
         .send(blocked ? "Fetch.failRequest" : "Fetch.continueRequest",
@@ -228,7 +314,7 @@ export async function installBrowserNetGuard(cdp: CdpLike, hooks: GuardHooks): P
         return;
       }
       if (!p.waitingForDebugger && typeof info.url === "string" && /^(https?|wss?):/i.test(info.url)
-        && (await isBlockedAgentRequest(info.url).catch(() => true))) {
+        && ((await bounded(isBlockedAgentRequest(info.url, dns), Date.now() + __netGuard.timeoutMs + 250)) !== false)) {
         await cdp.send("Page.navigate", { url: "about:blank" }, child).catch(() => {});
       }
     }

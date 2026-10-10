@@ -130,6 +130,26 @@ guide: Auto-reconnect in `plugins/auth-modes`.
     the profile can hand back is recovered inside the window.
     `BROWSER_LOOPBACK_ALLOW_PORTS` opens listed loopback ports (dev servers) in
     any environment, never a live chromium debug port or the server's `PORT`.
+  - *The guard's DNS must not be a shared bottleneck.* One global limiter (8
+    lookups, unbounded queue) and a shared negative cache let one user's page,
+    flooding slow or unresolvable hostnames, stall or poison every other
+    user's requests. Each guard (one per chromium) now has its own resolver:
+    8 concurrent lookups, a queue of 32 (overflow fails the request at once),
+    its own 10 s negative cache. Only successful answers are shared. Every wait
+    (queue slot, another request's lookup of the same host, the lookup) is
+    bounded by the request's own 2 s deadline, the paused-request path has a
+    hard bound on top, and at most 512 paused requests per chromium await a
+    verdict (more are failed at once). Lookups go through c-ares
+    (`dns.Resolver`), not `dns.lookup`: getaddrinfo runs on libuv's 4-thread
+    pool, so a handful of hung lookups would stall every session. c-ares does
+    not read `/etc/hosts`, so a hosts-file-only name does not resolve and is
+    refused.
+  - *The recipe window has its own timestamp.* With the cooldown after the fast
+    path, a fast-path success overwrote the recipe's `last`, so recipe success,
+    death, fast-path success, death let the recipe re-type the password at
+    once. `recipeAt` (memory from the moment the recipe has a tab, DB with the
+    outcome) holds the window; fast-path commits never touch it; only a portal
+    `clearedAt` lifts it.
   - *DevTools sockets need an origin no page can have.* `--remote-allow-origins`
     was `http://127.0.0.1`, the origin of any page served from loopback port
     80. It is now `http://workbench-cdp.invalid` (`src/auth/cdp-origin.ts`),

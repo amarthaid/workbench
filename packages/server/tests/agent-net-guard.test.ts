@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { config } from "../src/config";
-import { installBrowserNetGuard, isBlockedAgentRequest, __netGuard } from "../src/auth/agent-net-guard";
+import { installBrowserNetGuard, isBlockedAgentRequest, createDnsResolver, __netGuard } from "../src/auth/agent-net-guard";
 import { isAgentNavigableUrl, registerDebugPort, unregisterDebugPort } from "../src/auth/browser-url";
 
 // Fake CDP client: records frames, lets the test fire events.
@@ -351,5 +351,71 @@ describe("fails closed, and the localhost allow-list", () => {
     };
     await installBrowserNetGuard(f.cdp, { isPrivate: () => false, markPrivate: () => {} });
     expect(enabled).toBe(true);
+  });
+});
+
+describe("DNS limits are per session and every wait is bounded", () => {
+  afterEach(() => {
+    __netGuard.timeoutMs = 2_000;
+  });
+  const hangOrFast = () => {
+    __netGuard.resolve = (host: string) =>
+      host.startsWith("slow") ? new Promise<string[]>(() => {}) : Promise.resolve(["93.184.216.34"]);
+  };
+
+  it("session A flooding slow lookups does not delay session B", async () => {
+    hangOrFast();
+    __netGuard.timeoutMs = 1_000;
+    const a = createDnsResolver();
+    const b = createDnsResolver();
+    const flood = Array.from({ length: 200 }, (_, i) => isBlockedAgentRequest(`https://slow${i}.example.com/`, a));
+    const t = Date.now();
+    expect(await isBlockedAgentRequest("https://fast.example.com/", b)).toBe(false);
+    expect(Date.now() - t).toBeLessThan(200);
+    expect(new Set(await Promise.all(flood))).toEqual(new Set([true])); // every flooded one failed closed
+  });
+
+  it("one session's negative result does not leak to another session", async () => {
+    const a = createDnsResolver();
+    const b = createDnsResolver();
+    __netGuard.resolve = async () => { throw new Error("SERVFAIL"); };
+    expect(await isBlockedAgentRequest("https://flaky.example.com/", a)).toBe(true);
+    __netGuard.resolve = async () => ["93.184.216.34"];
+    expect(await isBlockedAgentRequest("https://flaky.example.com/", b)).toBe(false);
+  });
+
+  it("queue overflow fails closed at once", async () => {
+    hangOrFast();
+    __netGuard.timeoutMs = 5_000;
+    const a = createDnsResolver();
+    const all = Array.from({ length: 200 }, (_, i) => {
+      const t = Date.now();
+      return isBlockedAgentRequest(`https://slow${i}.example.com/`, a).then((v) => ({ v, ms: Date.now() - t }));
+    });
+    const first = await Promise.race(all);
+    expect(first.v).toBe(true);
+    expect(first.ms).toBeLessThan(500); // an overflowed request did not wait for the 5 s deadline
+  });
+
+  it("a wait on another request's lookup of the same host is bounded by its own deadline", async () => {
+    hangOrFast();
+    __netGuard.timeoutMs = 300;
+    const a = createDnsResolver();
+    void isBlockedAgentRequest("https://slow-same.example.com/", a);
+    const t = Date.now();
+    expect(await isBlockedAgentRequest("https://slow-same.example.com/x", a)).toBe(true);
+    expect(Date.now() - t).toBeLessThan(1_000);
+  });
+
+  it("the paused-request path ends in fail or continue within the deadline, even if the decision hangs", async () => {
+    __netGuard.timeoutMs = 200;
+    __netGuard.resolve = () => new Promise<string[]>(() => {});
+    const f = fakeCdp();
+    await installBrowserNetGuard(f.cdp, { isPrivate: () => false, markPrivate: () => {} });
+    f.emit("Target.attachedToTarget", { sessionId: "S1", targetInfo: { type: "page", targetId: "T1" }, waitingForDebugger: true });
+    await flush();
+    f.emit("Fetch.requestPaused", { requestId: "RH", request: { url: "https://hang.example.com/" } }, "S1");
+    await new Promise((r) => setTimeout(r, 600));
+    expect(f.frames).toContainEqual({ method: "Fetch.failRequest", params: { requestId: "RH", errorReason: "BlockedByClient" }, sessionId: "S1" });
   });
 });
