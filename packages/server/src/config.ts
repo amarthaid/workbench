@@ -63,6 +63,14 @@ export const configSchema = z.object({
   // Virtual speaker + mic per user's chromium so an agent can take part in a
   // browser call (docs/superpowers/specs/2026-10-07-browser-audio-pipeline-design.md).
   // Off: no PulseAudio daemon, no devices, the audio tools answer AUDIO_DISABLED.
+  // TEST ONLY. Lets agent tabs load loopback URLs (chromium e2e fixtures on
+  // 127.0.0.1). Agent tabs otherwise fail every request to loopback, because
+  // every user's chromium debug endpoint listens there
+  // (src/auth/agent-net-guard.ts). Ignored when NODE_ENV is "production".
+  BROWSER_ALLOW_LOOPBACK: z
+    .enum(["true", "false", "1", "0"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1"),
   BROWSER_AUDIO_ENABLED: z
     .enum(["true", "false", "1", "0"])
     .default("false")

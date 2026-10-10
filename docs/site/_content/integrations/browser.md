@@ -26,6 +26,8 @@ There is exactly one browser per user, backed by a persistent profile on disk. E
 
 The cookie-auth capture flow uses that same browser. The two **share** it rather than excluding each other. Capture and the `browser_*` tools resolve the same warm session, so a capture can start while an agent is driving. `browser_close` ends one tab, not the browser; the profile — and the logged-in state in it — survives regardless.
 
+**No loopback.** Agent tabs cannot reach `localhost`, `127.0.0.0/8`, `0.0.0.0`, `[::1]` or a hostname that resolves to one of them, on any port, nor the server's own internal host. Every user's Chromium listens for remote debugging on a loopback port. Each request (navigations, redirects, popups, frames, subresources) is checked inside the browser before it is sent, and a blocked one fails as `net::ERR_BLOCKED_BY_CLIENT`. `browser_navigate` refuses a loopback URL up front.
+
 Because the profile persists, sites the user logged into stay logged in across sessions. The server kills an idle session after `BROWSER_SESSION_TTL_SECONDS`. The profile itself is separately subject to `BROWSER_PROFILE_TTL_DAYS`.
 
 ## Tools

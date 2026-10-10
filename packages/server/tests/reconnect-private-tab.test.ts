@@ -107,28 +107,36 @@ beforeEach(async () => {
 
 afterEach(async () => { await closeBrowserSession(U); });
 
-describe("chromium's debug endpoint is blocked for agent tabs only", () => {
-  const framesOf = (suffix: string) => sockets.filter((x) => x.url.endsWith(suffix)).flatMap((x) => x.frames);
-  const fetchEnable = (suffix: string) => framesOf(suffix).find((f) => f.method === "Fetch.enable");
+describe("agent tabs (never the recipe tab) run behind the network guard", () => {
+  const browserSock = () => sockets.find((x) => x.url.endsWith("/browser"))!;
+  const emit = (method: string, params: unknown, sessionId?: string) =>
+    browserSock().ws.emit("message", JSON.stringify(sessionId ? { method, params, sessionId } : { method, params }));
+  const tick = () => new Promise((r) => setTimeout(r, 10));
 
-  it("the default tab and a new agent tab intercept every request to the debug port", async () => {
-    expect(fetchEnable("/page")?.params).toEqual({ patterns: [{ urlPattern: "*:9999/*" }] });
-    const r = await openTab(U);
-    if (!r.ok) throw new Error("no tab");
-    expect(fetchEnable(`/devtools/page/${r.tab.id}`)?.params).toEqual({ patterns: [{ urlPattern: "*:9999/*" }] });
+  it("the browser client auto-attaches to every new target, paused, before the session is handed out", () => {
+    expect(browserSock().frames).toContainEqual(expect.objectContaining({
+      method: "Target.setAutoAttach",
+      params: { autoAttach: true, waitForDebuggerOnStart: true, flatten: true },
+    }));
   });
 
-  it("a paused request is failed, never continued", async () => {
-    const page = sockets.find((x) => x.url.endsWith("/page"))!;
-    page.ws.emit("message", JSON.stringify({ method: "Fetch.requestPaused", params: { requestId: "R1", request: { url: "http://127.0.0.1:9999/json/list" } } }));
-    await new Promise((r) => setImmediate(r));
-    expect(page.frames).toContainEqual(expect.objectContaining({ method: "Fetch.failRequest", params: { requestId: "R1", errorReason: "BlockedByClient" } }));
-    expect(page.frames.find((f) => f.method === "Fetch.continueRequest")).toBeUndefined();
+  it("a popup of an agent tab is intercepted, and its loopback request (another port) is failed", async () => {
+    emit("Target.attachedToTarget", { sessionId: "S1", targetInfo: { type: "page", targetId: "POP", openerId: "T0" }, waitingForDebugger: true });
+    await tick();
+    expect(sent).toContainEqual({ method: "Fetch.enable", params: { patterns: [{ urlPattern: "*" }] } });
+    expect(sent.map((x) => x.method)).toContain("Runtime.runIfWaitingForDebugger");
+    emit("Fetch.requestPaused", { requestId: "R1", request: { url: "http://127.0.0.1:41234/json/list" } }, "S1");
+    await tick();
+    expect(sent).toContainEqual({ method: "Fetch.failRequest", params: { requestId: "R1", errorReason: "BlockedByClient" } });
+    expect(sent.find((x) => x.method === "Fetch.continueRequest")).toBeUndefined();
   });
 
-  it("the private recipe tab is not intercepted (the server drives it, not an agent)", async () => {
+  it("the private recipe tab is not intercepted", async () => {
     await openPrivateTab(U);
-    expect(fetchEnable("/devtools/page/RECIPE")).toBeUndefined();
+    sent.length = 0;
+    emit("Target.attachedToTarget", { sessionId: "SR", targetInfo: { type: "page", targetId: "RECIPE" }, waitingForDebugger: true });
+    await tick();
+    expect(sent.map((x) => x.method).filter((m) => m.startsWith("Fetch.") || m.startsWith("Runtime.") || m.startsWith("Target.setAutoAttach"))).toEqual(["Runtime.runIfWaitingForDebugger"]);
   });
 });
 

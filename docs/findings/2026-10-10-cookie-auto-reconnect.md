@@ -91,13 +91,29 @@ guide: Auto-reconnect in `plugins/auth-modes`.
     another frame. The isolated-world function now also requires
     `isSecureContext` (loopback `http` still qualifies, so local fixtures work)
     and `this.ownerDocument === document && this.isConnected`.
-  - *Agent tabs could read chromium's debug endpoint.* `/json/list` on the
-    debug port lists every target, private ones included, and `/json/close/<id>`
-    kills one. Every agent tab now fails its requests to that port through
-    `Fetch` interception (any host spelling, script navigations included), and
-    `browser_navigate` / the live-url route refuse loopback URLs. An iframe
-    pointed at the endpoint already failed to load in chromium; the e2e keeps
-    that pinned.
+  - *Agent tabs could read any chromium's debug endpoint.* Every user's
+    chromium listens on its own `127.0.0.1:<port>`; `/json/list` there lists
+    every target (another user's private recipe tab included) and
+    `GET /json/close/<id>` kills one. A GET with side effects needs no readable
+    response (`<img src>` is enough), so CORS does not help, and a block on the
+    session's own port only (the first fix) left every other user's port open.
+    Now the **browser-target** client sets `Target.setAutoAttach` with
+    `waitForDebuggerOnStart`, so every new target (agent tabs, `window.open`
+    and `target=_blank` popups, workers) is attached paused, given `Fetch`
+    interception for all URLs and resource types, and only then resumed; each
+    guarded page auto-attaches its out-of-process iframes the same way. A
+    paused request is failed (`BlockedByClient`) when its host is loopback or
+    unspecified on any port (IP literal forms normalised by the URL parser,
+    hostnames resolved, cached 60 s) or the server's internal host, and fails
+    closed on a URL it cannot parse. Every redirect hop is paused as its own
+    request. The guard is installed before the session is handed out; if the
+    browser socket that carries it drops, chromium is killed. Private recipe
+    tabs and their popups are released unintercepted. `browser_navigate` and
+    the live-url route keep a literal pre-check as a fast error. Page-level
+    auto-attach does not see popups (the first attempt missed them in real
+    chromium); only the browser target does. Cost: about 0.4 ms per request
+    (200 sequential same-origin fetches: ~210 ms guarded vs ~130 ms unguarded),
+    plus one DNS lookup per new hostname per minute.
 
 ## Known gaps
 
@@ -107,6 +123,11 @@ guide: Auto-reconnect in `plugins/auth-modes`.
   reconnect" by design.
 - The in-process run record is lost on a restart, after which only the DB
   record (and the 409 on API-key DELETE) holds the cooldown.
+- DNS rebinding: a hostname is resolved by the guard and again by chromium,
+  so an answer that flips from public to loopback between the two lookups gets
+  through. IP literals and `localhost` names are not affected.
+- `BROWSER_ALLOW_LOOPBACK` (test only, ignored when `NODE_ENV=production`) lets
+  agent tabs reach loopback so chromium e2e fixtures on 127.0.0.1 load.
 - The cooldown is per integration: two integrations whose recipes use the same
   login each get their own window.
 - `cancel` and `session/import` accept an API key and end the "human is

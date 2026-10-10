@@ -5,6 +5,7 @@ import WebSocket from "ws";
 import { config } from "../config";
 import { activeProfiles, spawnProfileChromium, cdpCall, userProfileDir } from "./profile-chromium";
 import { trimProfileCaches } from "./profile-disk";
+import { installBrowserNetGuard, type BrowserNetGuard } from "./agent-net-guard";
 import { startProxyAuth, filterCookies } from "./cookie";
 import { configureDownloads, cancelDownloads } from "./browser-downloads";
 import { deviceKey, pulseFor, releasePulse, type PulseDevices, type PulseManager } from "../audio/pulse";
@@ -34,7 +35,7 @@ export class CdpClient {
   private pending = new Map<number, { resolve: (v: Record<string, unknown>) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private gone = false;
   private onGone?: () => void;
-  private listeners = new Map<string, Set<(p: Record<string, unknown>) => void>>();
+  private listeners = new Map<string, Set<(p: Record<string, unknown>, sessionId?: string) => void>>();
   readonly ready: Promise<void>;
 
   constructor(wsUrl: string, onGone?: () => void) {
@@ -56,6 +57,7 @@ export class CdpClient {
         error?: { message: string };
         method?: string;
         params?: Record<string, unknown>;
+        sessionId?: string;
       };
       try { msg = JSON.parse(raw.toString()); } catch { return; }
       if (typeof msg.id !== "number") {
@@ -66,7 +68,7 @@ export class CdpClient {
         if (set) {
           for (const fn of [...set]) {
             // One misbehaving listener must not take the socket down with it.
-            try { fn(msg.params ?? {}); }
+            try { fn(msg.params ?? {}, msg.sessionId); }
             catch (e) { console.warn(`[cdp] listener for ${msg.method} threw:`, e); }
           }
         }
@@ -98,7 +100,7 @@ export class CdpClient {
    * a long-lived warm session would otherwise accumulate one handler per
    * download.
    */
-  on(method: string, fn: (p: Record<string, unknown>) => void): () => void {
+  on(method: string, fn: (p: Record<string, unknown>, sessionId?: string) => void): () => void {
     let set = this.listeners.get(method);
     if (!set) { set = new Set(); this.listeners.set(method, set); }
     set.add(fn);
@@ -122,14 +124,15 @@ export class CdpClient {
     this.onGone?.();
   }
 
-  send(method: string, params: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+  /** `sessionId` addresses a child target attached with flatten (Target.setAutoAttach). */
+  send(method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<Record<string, unknown>> {
     return new Promise((resolve, reject) => {
       const id = ++this.id;
       const timer = setTimeout(() => {
         if (this.pending.delete(id)) reject(new Error(`cdp ${method} timed out`));
       }, 10000);
       this.pending.set(id, { resolve, reject, timer });
-      try { this.ws.send(JSON.stringify({ id, method, params })); }
+      try { this.ws.send(JSON.stringify(sessionId ? { id, method, params, sessionId } : { id, method, params })); }
       catch (e) { clearTimeout(timer); this.pending.delete(id); reject(e instanceof Error ? e : new Error(String(e))); }
     });
   }
@@ -158,28 +161,6 @@ function pageWsUrl(remotePort: number, targetId: string): string {
   return `ws://127.0.0.1:${remotePort}/devtools/page/${targetId}`;
 }
 
-/**
- * Refuse every request this tab makes to chromium's own debugging port.
- * `/json/list` there names every target, private recipe tabs included, and
- * `/json/close/<id>` kills one; an agent drives this tab and can navigate it
- * by script, which no URL check on browser_navigate sees. Enforced by the
- * browser (Fetch interception), not by checking the URL an agent passed. Any
- * host is matched: 127.0.0.1, localhost, [::1], 0.0.0.0 and every other
- * spelling of loopback reach the same socket.
- *
- * A tab adopted while already showing the endpoint is sent to about:blank.
- */
-async function blockDebugEndpoint(cdp: CdpClient, port: number): Promise<void> {
-  cdp.on("Fetch.requestPaused", (p) => {
-    void cdp.send("Fetch.failRequest", { requestId: p.requestId, errorReason: "BlockedByClient" }).catch(() => {});
-  });
-  await cdp.send("Fetch.enable", { patterns: [{ urlPattern: `*:${port}/*` }] });
-  const r = (await cdp.send("Runtime.evaluate", { expression: "location.port", returnByValue: true }).catch(() => null)) as
-    | { result?: { value?: unknown } }
-    | null;
-  if (r?.result?.value === String(port)) await cdp.send("Page.navigate", { url: "about:blank" });
-}
-
 async function attachTab(
   s: WarmSession,
   targetId: string,
@@ -196,14 +177,6 @@ async function attachTab(
     }
   });
   await cdp.ready;
-  if (map === s.tabs) {
-    try {
-      await blockDebugEndpoint(cdp, s.remotePort);
-    } catch (e) {
-      cdp.close(); // fail closed: an agent tab without the block is not handed out
-      throw e;
-    }
-  }
   const now = Date.now();
   const tab: Tab = { id: targetId, cdp, lastActivity: now, createdAt: now };
   map.set(targetId, tab);
@@ -265,6 +238,12 @@ export interface WarmSession {
    * downloads should not pay for a second socket.
    */
   browserCdp?: CdpClient;
+  /**
+   * Network guard on the browser client (agent-net-guard.ts): every target
+   * but the private recipe tabs fails its requests to loopback. Installed
+   * before the session is handed out.
+   */
+  netGuard?: BrowserNetGuard;
   /** In-flight browserClient() promise, so concurrent callers share one socket. */
   browserCdpStarting?: Promise<CdpClient>;
   /**
@@ -359,6 +338,17 @@ async function startSession(userId: string): Promise<WarmSession> {
       authWs,
       audio,
     };
+    try {
+      const browser = await browserClient(session);
+      session.netGuard = await installBrowserNetGuard(browser, {
+        isPrivate: (id) => session.privateIds.has(id),
+        markPrivate: (id) => { session.privateIds.add(id); },
+      });
+    } catch (e) {
+      // No guard, no browser: an agent tab must never run unguarded.
+      try { spawned.proc.kill(); } catch { /* noop */ }
+      throw e;
+    }
     await attachTab(session, spawned.cdpPageTargetId, spawned.cdpPageWsUrl);
     warmSessions.set(userId, session);
     // Kick off download routing, but do not block on it: opening a browser
@@ -440,7 +430,11 @@ export function browserClient(s: WarmSession): Promise<CdpClient> {
   if (s.browserCdp) return Promise.resolve(s.browserCdp);
   if (!s.browserCdpStarting) {
     s.browserCdpStarting = (async () => {
-      const client = new CdpClient(s.cdpBrowserWsUrl);
+      // The browser socket carries the agent-tab network guard; if it drops
+      // unexpectedly the guard is gone, so the browser goes with it (fail closed).
+      const client = new CdpClient(s.cdpBrowserWsUrl, () => {
+        if (s.netGuard) { try { s.proc.kill(); } catch { /* already gone */ } }
+      });
       await client.ready;
       s.browserCdp = client;
       return client;
@@ -558,7 +552,11 @@ async function openTabIn(userId: string, isPrivate: boolean): Promise<OpenTabRes
       background: true,
     })) as { targetId: string };
     created = targetId;
-    if (isPrivate) s.privateIds.add(targetId); // same continuation as the reply
+    if (isPrivate) {
+      s.privateIds.add(targetId); // same continuation as the reply
+      // The guard may have attached before it could know: stop intercepting.
+      await s.netGuard?.release(targetId);
+    }
     const tab = await attachTab(s, targetId, pageWsUrl(s.remotePort, targetId), isPrivate ? s.privateTabs : s.tabs);
     s.lastActivity = Date.now();
     return { ok: true, tab };

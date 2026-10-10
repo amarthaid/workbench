@@ -289,9 +289,9 @@ reconnect: {
 `timeoutMs` (each step defaults to 10 s; the run deadline is enforced per step).
 The private tab is invisible to the `browser_*` tools and to the live view, so
 an agent cannot list it, evaluate in it or attach to it while it holds a
-credential. Agent tabs cannot load chromium's own debugging endpoint either
-(its `/json/list` would name the private tab), and `browser_navigate` refuses
-loopback URLs. The profile's password manager is turned off, so chromium never
+credential. Agent tabs cannot reach loopback at all, on any port, which is
+where every chromium's debugging endpoint listens (its `/json/list` would name
+the private tab). The profile's password manager is turned off, so chromium never
 saves a filled password.
 
 | Step | Meaning |

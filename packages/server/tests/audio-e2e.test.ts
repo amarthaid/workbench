@@ -20,6 +20,8 @@ const { cfg } = vi.hoisted(() => ({
     BROWSER_PROFILES_DIR: "",
     BROWSER_DISK_CACHE_MB: 32,
     BROWSER_LAUNCH_TIMEOUT_MS: 20_000,
+    // Test-only: the call fixture is served on 127.0.0.1 to an agent tab.
+    BROWSER_ALLOW_LOOPBACK: true,
     DATABASE_URL: process.env.DATABASE_URL, // pinned to a temp dir by vitest.config.ts
   },
 }));

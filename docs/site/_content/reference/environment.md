@@ -91,6 +91,7 @@ not portal-side.
 | `BROWSER_PROFILE_REAP_INTERVAL_SECONDS` | positive integer | `3600` | no | Disk-reaper interval. It also runs once immediately at boot |
 | `BROWSER_DISK_CACHE_MB` | non-negative integer | `32` | no | Becomes Chromium's `--disk-cache-size` |
 | `BROWSER_TAB_LIMIT` | positive integer | `8` | no | Maximum tabs one user's browser session may hold at once, including the default tab. `browser_start` past it returns `BROWSER_TAB_LIMIT` |
+| `BROWSER_ALLOW_LOOPBACK` | `true` / `false` | `false` | no | **Test only.** Lets agent browser tabs load loopback URLs (chromium e2e fixtures on 127.0.0.1). Agent tabs otherwise fail every request to loopback, any port, because every user's chromium debugging endpoint listens there. Ignored when `NODE_ENV=production`; never set it in a deployment |
 
 > [!WARNING] `BROWSER_PROFILE_TTL_DAYS` deletes credentials
 > Deleting a profile logs that user out of **every** cookie-auth integration at once.
