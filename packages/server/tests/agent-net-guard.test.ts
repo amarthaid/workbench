@@ -27,7 +27,7 @@ function fakeCdp() {
 }
 const flush = () => new Promise((r) => setTimeout(r, 10));
 
-const saved = { allow: config.BROWSER_ALLOW_LOOPBACK, internal: config.INTERNAL_MCP_URL, resolve: __netGuard.resolve, query: __netGuard.query };
+const saved = { allow: config.BROWSER_ALLOW_LOOPBACK, internal: config.INTERNAL_MCP_URL, resolve: __netGuard.resolve, query: __netGuard.query, readFile: (__netGuard as any).readFile };
 beforeEach(() => {
   config.BROWSER_ALLOW_LOOPBACK = false;
   config.INTERNAL_MCP_URL = undefined;
@@ -516,5 +516,73 @@ describe("only real resolver failures are negative-cached", () => {
     expect(await isBlockedAgentRequest("https://gone.example.com/", r)).toBe(true);
     expect(await isBlockedAgentRequest("https://gone.example.com/", r)).toBe(true);
     expect(calls).toBe(1);
+  });
+});
+
+describe("hostile hosts and unreadable system files", () => {
+  const pub = () => {
+    __netGuard.resolve = async () => ["93.184.216.34"];
+  };
+  afterEach(() => {
+    __netGuard.readFile = saved.readFile;
+    __netGuard.resetSystemFiles();
+  });
+
+  it("a host of 60k dots is refused in under 50 ms", async () => {
+    pub();
+    // dots then a non-dot: the shape that makes /\.+$/ backtrack quadratically
+    const url = `http://a${".".repeat(60_000)}b/`;
+    const t = performance.now();
+    expect(await isBlockedAgentRequest(url, createDnsResolver())).toBe(true);
+    expect(performance.now() - t).toBeLessThan(50);
+    const t2 = performance.now();
+    expect(isAgentNavigableUrl(url)).toBe(false);
+    expect(performance.now() - t2).toBeLessThan(50);
+  });
+
+  it("a host longer than 253 characters is refused", async () => {
+    pub();
+    const long = `${"a".repeat(60)}.`.repeat(5) + "example.com"; // > 253
+    expect(await isBlockedAgentRequest(`https://${long}/`, createDnsResolver())).toBe(true);
+  });
+
+  for (const which of ["hosts", "resolv.conf"] as const) {
+    it(`${which} unreadable with no earlier snapshot: every non-literal host is refused`, async () => {
+      pub();
+      __netGuard.hostsText = undefined;
+      __netGuard.resolvConfText = undefined;
+      __netGuard.resetSystemFiles();
+      __netGuard.readFile = (path: string) => {
+        if (path.includes(which)) throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+        return "";
+      };
+      expect(await isBlockedAgentRequest("https://public.example.com/", createDnsResolver())).toBe(true);
+      expect(await isBlockedAgentRequest("https://93.184.216.34/", createDnsResolver())).toBe(false); // literals need no lists
+    });
+
+    it(`${which} unreadable after a good read: the last snapshot is kept`, async () => {
+      pub();
+      __netGuard.hostsText = undefined;
+      __netGuard.resolvConfText = undefined;
+      __netGuard.resetSystemFiles();
+      __netGuard.readFile = (path: string) => (path.includes("hosts") ? "127.0.0.1 devbox.example.com\n" : "");
+      expect(await isBlockedAgentRequest("https://devbox.example.com/", createDnsResolver())).toBe(true);
+      __netGuard.readFile = (path: string) => {
+        if (path.includes(which)) throw new Error("EIO");
+        return path.includes("hosts") ? "127.0.0.1 devbox.example.com\n" : "";
+      };
+      __netGuard.expireSystemFiles();
+      expect(await isBlockedAgentRequest("https://devbox.example.com/", createDnsResolver())).toBe(true);
+      expect(await isBlockedAgentRequest("https://public.example.com/", createDnsResolver())).toBe(false);
+    });
+  }
+
+  it("a hosts file over 1 MB is not parsed: the last snapshot stays", async () => {
+    pub();
+    __netGuard.hostsText = undefined;
+    __netGuard.resolvConfText = undefined;
+    __netGuard.resetSystemFiles();
+    __netGuard.readFile = (path: string) => (path.includes("hosts") ? "x".repeat(1_048_577) : "");
+    expect(await isBlockedAgentRequest("https://public.example.com/", createDnsResolver())).toBe(true); // no snapshot: closed
   });
 });

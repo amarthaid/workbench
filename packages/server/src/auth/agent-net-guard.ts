@@ -23,7 +23,7 @@
 // slip through between the two lookups.
 
 import { Resolver } from "node:dns/promises";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { isIP } from "node:net";
 import { config } from "../config";
 import { effectivePort, isAllowedLoopbackPort, isInternalHost, isLoopbackAddress, isLoopbackHost } from "./browser-url";
@@ -71,6 +71,18 @@ export const __netGuard = {
   resolvConfText: undefined as string | undefined,
   hostsPath: "/etc/hosts",
   resolvConfPath: "/etc/resolv.conf",
+  /** Reads a system file; throws on error or past MAX_SYSTEM_FILE_BYTES. */
+  readFile: (path: string): string => readCapped(path),
+  /** Forget both snapshots (tests). */
+  resetSystemFiles(): void {
+    hostsSnap = undefined;
+    resolvSnap = undefined;
+    sysCache = undefined;
+  },
+  /** Make the next check re-read the files, keeping the snapshots (tests). */
+  expireSystemFiles(): void {
+    sysCache = undefined;
+  },
   /** Successful answers only (shared: real DNS data). Failures are cached per resolver. */
   cache: new Map<string, { at: number; result: Exclude<Resolved, "fail"> }>(),
   /** Overall bound for one request's decision: queue + lookup. Past it the request is failed. */
@@ -86,53 +98,96 @@ function loopbackAllowed(): boolean {
 }
 
 const SYSTEM_FILES_TTL_MS = 30_000;
-let sysCache: { at: number; hostsText?: string; resolvText?: string; hosts: Set<string>; search: string[]; ndots: number } | undefined;
+const MAX_SYSTEM_FILE_BYTES = 1_048_576;
 
-function readText(override: string | undefined, path: string): string {
-  if (override !== undefined) return override;
-  try { return readFileSync(path, "utf8"); } catch { return ""; }
+function readCapped(path: string): string {
+  if (statSync(path).size > MAX_SYSTEM_FILE_BYTES) throw new Error("system file too large");
+  const text = readFileSync(path, "utf8");
+  if (text.length > MAX_SYSTEM_FILE_BYTES) throw new Error("system file too large");
+  return text;
+}
+
+/** Read through the seam, refusing to parse past the cap (the last snapshot then stays). */
+function readSystem(path: string): string {
+  const text = __netGuard.readFile(path);
+  if (text.length > MAX_SYSTEM_FILE_BYTES) throw new Error("system file too large");
+  return text;
+}
+
+// The last good parse of each file. A failed or oversized read keeps it; with
+// no snapshot at all the lists are unknown and every name is refused.
+let hostsSnap: Set<string> | undefined;
+let resolvSnap: { search: string[]; ndots: number } | undefined;
+let sysCache:
+  | { at: number; hostsText?: string; resolvText?: string; hosts?: Set<string>; resolv?: { search: string[]; ndots: number } }
+  | undefined;
+
+function parseHosts(text: string): Set<string> {
+  const hosts = new Set<string>();
+  for (const line of text.split("\n")) {
+    const hash = line.indexOf("#");
+    const fields = (hash >= 0 ? line.slice(0, hash) : line).trim().split(/\s+/).filter(Boolean);
+    for (const name of fields.slice(1)) hosts.add(normaliseHost(name));
+  }
+  return hosts;
+}
+
+function parseResolv(text: string): { search: string[]; ndots: number } {
+  let search: string[] = [];
+  let ndots = 1;
+  for (const line of text.split("\n")) {
+    const cut = line.search(/[#;]/);
+    const f = (cut >= 0 ? line.slice(0, cut) : line).trim().split(/\s+/);
+    if (f[0] === "search" || f[0] === "domain") search = f.slice(1).map(normaliseHost).filter(Boolean).slice(0, 6);
+    if (f[0] === "options") for (const o of f.slice(1)) {
+      if (o.startsWith("ndots:") && /^\d{1,3}$/.test(o.slice(6))) ndots = Math.min(15, Number(o.slice(6)));
+    }
+  }
+  return { search, ndots };
 }
 
 /**
  * What chromium's resolver also consults: every name in /etc/hosts, and the
- * search list + ndots from /etc/resolv.conf. Re-read on a short TTL.
+ * search list + ndots from /etc/resolv.conf. Re-read on a short TTL; a read
+ * that fails keeps the last good snapshot. `undefined` lists mean unknown:
+ * the caller must refuse every non-literal host.
  */
-function systemFiles(): { hosts: Set<string>; search: string[]; ndots: number } {
+function systemFiles(): { hosts?: Set<string>; resolv?: { search: string[]; ndots: number } } {
   const now = Date.now();
   if (sysCache && now - sysCache.at < SYSTEM_FILES_TTL_MS
     && sysCache.hostsText === __netGuard.hostsText && sysCache.resolvText === __netGuard.resolvConfText) return sysCache;
-  const hostsText = readText(__netGuard.hostsText, __netGuard.hostsPath);
-  const hosts = new Set<string>();
-  for (const line of hostsText.split("\n")) {
-    const fields = line.replace(/#.*/, "").trim().split(/\s+/).filter(Boolean);
-    for (const name of fields.slice(1)) hosts.add(normaliseHost(name));
+  if (__netGuard.hostsText !== undefined) hostsSnap = parseHosts(__netGuard.hostsText);
+  else {
+    try { hostsSnap = parseHosts(readSystem(__netGuard.hostsPath)); } catch { /* keep the last snapshot */ }
   }
-  let search: string[] = [];
-  let ndots = 1;
-  for (const line of readText(__netGuard.resolvConfText, __netGuard.resolvConfPath).split("\n")) {
-    const f = line.replace(/[#;].*/, "").trim().split(/\s+/);
-    if (f[0] === "search" || f[0] === "domain") search = f.slice(1).map(normaliseHost).filter(Boolean).slice(0, 6);
-    if (f[0] === "options") for (const o of f.slice(1)) {
-      const m = /^ndots:(\d+)$/.exec(o);
-      if (m) ndots = Math.min(15, Number(m[1]));
-    }
+  if (__netGuard.resolvConfText !== undefined) resolvSnap = parseResolv(__netGuard.resolvConfText);
+  else {
+    try { resolvSnap = parseResolv(readSystem(__netGuard.resolvConfPath)); } catch { /* keep the last snapshot */ }
   }
-  sysCache = { at: now, hostsText: __netGuard.hostsText, resolvText: __netGuard.resolvConfText, hosts, search, ndots };
+  sysCache = { at: now, hostsText: __netGuard.hostsText, resolvText: __netGuard.resolvConfText, hosts: hostsSnap, resolv: resolvSnap };
   return sysCache;
 }
 
-/** Lowercase, no trailing dots. */
-function normaliseHost(h: string): string {
-  return h.toLowerCase().replace(/\.+$/, "");
+/** Lowercase, no trailing dots. A linear loop: `/\.+$/` backtracks quadratically. */
+export function normaliseHost(h: string): string {
+  let end = h.length;
+  while (end > 0 && h.charCodeAt(end - 1) === 46 /* . */) end -= 1;
+  return h.slice(0, end).toLowerCase();
 }
+
+/** DNS names are at most 253 characters (one more with a trailing dot). */
+export const MAX_HOST_LENGTH = 253;
 
 /**
  * Names chromium may actually query for `host`: the name itself and, when it
  * has fewer dots than ndots, each search-domain expansion.
  */
 function candidatesFor(host: string): string[] {
-  const { search, ndots } = systemFiles();
-  const dots = (host.match(/\./g) ?? []).length;
+  const resolv = systemFiles().resolv;
+  if (!resolv) return [host]; // callers refuse the host first when the lists are unknown
+  const { search, ndots } = resolv;
+  let dots = 0;
+  for (let i = 0; i < host.length && dots < ndots; i++) if (host.charCodeAt(i) === 46) dots += 1;
   return dots < ndots ? [host, ...search.map((d) => `${host}.${d}`)] : [host];
 }
 
@@ -232,7 +287,7 @@ export function createDnsResolver(): DnsResolver {
       const now = Date.now();
       // The verdict covers every name chromium may query (search expansions), so
       // the cache key does too: a resolv.conf change cannot reuse a stale verdict.
-      const key = candidatesFor(host).join(",");
+      const key = candidatesFor(host).join("\n");
       const hit = __netGuard.cache.get(key);
       if (hit && now - hit.at < DNS_CACHE_MS) return hit.result;
       const neg = negative.get(key);
@@ -288,8 +343,12 @@ export async function isBlockedAgentRequest(rawUrl: unknown, resolver: DnsResolv
   // Never reach the network.
   if (u.protocol === "data:" || u.protocol === "blob:" || u.protocol === "about:") return false;
   if (!["http:", "https:", "ws:", "wss:"].includes(u.protocol)) return true;
+  // Before any other processing: an over-long host cannot be a real name, and
+  // every later step is at least linear in its length.
+  if (u.hostname.length > MAX_HOST_LENGTH + 1) return true;
   const host = u.hostname.toLowerCase();
   const bare = host.startsWith("[") ? host.slice(1, -1) : normaliseHost(host);
+  if (bare.length > MAX_HOST_LENGTH) return true;
   if (isInternalHost(host) || isInternalHost(bare)) return true;
   const port = effectivePort(u);
   // A loopback target is refused unless its port is allow-listed; a chromium
@@ -300,7 +359,10 @@ export async function isBlockedAgentRequest(rawUrl: unknown, resolver: DnsResolv
   // Chromium's resolver reads /etc/hosts first; c-ares here does not. Any
   // name the hosts file knows (as itself or a search expansion) is refused
   // unless its port is allow-listed, whatever public DNS says.
-  const { hosts } = systemFiles();
+  const { hosts, resolv } = systemFiles();
+  // Unreadable /etc/hosts or resolv.conf and no earlier snapshot: what chromium
+  // would resolve is unknown, so refuse.
+  if (!hosts || !resolv) return true;
   if (candidatesFor(bare).some((c) => hosts.has(c))) return loopbackVerdict();
   // A single-label name only means something through search domains or the
   // hosts file: refused.

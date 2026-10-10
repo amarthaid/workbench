@@ -152,6 +152,13 @@ guide: Auto-reconnect in `plugins/auth-modes`.
     are both asked, loopback in either fails, and any error but NODATA on
     either fails; single-label names fail; trailing dots are stripped before
     every check. Verdicts are cached under the full candidate list.
+  - *Hostile hosts and unreadable system files.* `/\.+$/` on a host of 60k
+    dots then a letter took 1.66 s per call (quadratic backtracking), on the
+    shared event loop. Hosts over 253 characters are now refused before any
+    processing, and trailing dots are stripped with a linear loop. A failed or
+    oversized (> 1 MB) read of `/etc/hosts` or `resolv.conf` keeps the last
+    good snapshot; with none, every non-literal host is refused until a read
+    succeeds.
   - *The recipe window has its own timestamp.* With the cooldown after the fast
     path, a fast-path success overwrote the recipe's `last`, so recipe success,
     death, fast-path success, death let the recipe re-type the password at

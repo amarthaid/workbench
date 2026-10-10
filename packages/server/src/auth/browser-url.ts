@@ -87,6 +87,7 @@ export function isAgentNavigableUrl(raw: string): boolean {
     return false;
   }
   if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+  if (u.hostname.length > 254) return false; // not a real name; and keeps every check below cheap
   if (isInternalHost(u.hostname)) return false;
   return !isLoopbackHost(u.hostname) || isAllowedLoopbackPort(effectivePort(u));
 }
