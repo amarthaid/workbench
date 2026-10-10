@@ -3,6 +3,7 @@ import WebSocket from "ws";
 import { db } from "../db";
 import { encrypt, decrypt } from "./encryption";
 import { activeProfiles, userProfileDir } from "./profile-chromium";
+import { getReconnectState, updateReconnectState } from "./reconnect/state";
 
 export interface CookieData {
   domain: string;
@@ -114,6 +115,8 @@ export async function storeCookies(userId: string, integration: string, data: Co
        updated_at = ?`,
     [userId, integration, encrypt("cookie-auth"), encrypt(JSON.stringify(data)), now, now, now]
   );
+  // Fresh cookies (manual connect, import, or auto-reconnect) end a dead spell.
+  await updateReconnectState(userId, integration, { deadAt: undefined });
 }
 
 export async function getCookies(userId: string, integration: string): Promise<CookieData | null> {
@@ -141,6 +144,6 @@ export function isCookieExpired(data: CookieData): boolean {
 
 export async function hasValidCookies(userId: string, integration: string): Promise<boolean> {
   const data = await getCookies(userId, integration);
-  if (!data) return false;
-  return !isCookieExpired(data);
+  if (!data || isCookieExpired(data)) return false;
+  return !(await getReconnectState(userId, integration)).deadAt;
 }
