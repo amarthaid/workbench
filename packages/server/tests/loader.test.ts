@@ -120,6 +120,14 @@ describe("stripInvalidRecipe", () => {
     expect(m.auth.reconnect).toBeUndefined();
   });
 
+  it("does not throw when targetDomain is missing and strips the recipe", () => {
+    const m = { name: "acme", auth: { type: "cookie", loginUrl: "https://app.example.com/l", targetDomain: undefined, session: { dead: { status: [401] } }, reconnect: { steps: [{ goto: "/x" }] } } } as any;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(() => stripInvalidRecipe(m)).not.toThrow();
+    warn.mockRestore();
+    expect(m.auth.reconnect).toBeUndefined();
+  });
+
   it("leaves a valid recipe alone", () => {
     const m = { name: "acme", auth: { type: "cookie", loginUrl: "https://app.example.com/l", targetDomain: "app.example.com", session: { dead: { status: [401] } }, reconnect: { steps: [{ goto: "loginUrl" }] } } } as any;
     stripInvalidRecipe(m);

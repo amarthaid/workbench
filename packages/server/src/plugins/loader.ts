@@ -81,7 +81,13 @@ export function filterTools(module: Record<string, unknown>): PluginTool[] {
 export function stripInvalidRecipe(manifest: { name: string; auth: { type: string } }): void {
   if (manifest.auth?.type !== "cookie") return;
   const auth = manifest.auth as CookieConfig;
-  const errs = validateCookieRecipe(auth);
+  let errs: string[];
+  try {
+    errs = validateCookieRecipe(auth);
+  } catch (e) {
+    // A throwing validator must never fail the integration load.
+    errs = [`validator error: ${e instanceof Error ? e.message : String(e)}`];
+  }
   if (errs.length) {
     console.warn(`[plugins] ${manifest.name}: reconnect recipe disabled — ${errs.join("; ")}`);
     delete auth.reconnect;

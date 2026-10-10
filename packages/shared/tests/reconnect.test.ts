@@ -112,6 +112,37 @@ describe("validateCookieRecipe url and malformed input", () => {
     expect(validateCookieRecipe(withStep(step)).length).toBeGreaterThan(0);
   });
 
+  it.each([
+    ["tab smuggled host", { goto: "/\t/evil.example.org/x" }],
+    ["newline smuggled host", { goto: "/\n/evil.example.org" }],
+    ["space in path", { goto: "/ /x" }],
+    ["waitUrl absolute undeclared host", { waitUrl: "https://evil.example.org/x" }],
+  ])("rejects %s", (_n, step) => {
+    expect(validateCookieRecipe(withStep(step)).length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ["missing targetDomain", { targetDomain: undefined }],
+    ["numeric targetDomain", { targetDomain: 5 }],
+    ["non-array cookieDomains", { cookieDomains: "a.example.com" }],
+    ["non-array allowHosts", {}, { allowHosts: "x" }],
+    ["non-array credentials", {}, { credentials: "x" }],
+    ["null credential entry", {}, { credentials: [null] }],
+    ["non-string credential key", {}, { credentials: [{ key: 1, label: "x" }] }],
+    ["string timeoutMs", {}, { timeoutMs: "5" }],
+    ["NaN timeoutMs", {}, { timeoutMs: NaN }],
+  ])("returns errors without throwing: %s", (_n, authPatch, reconnectPatch) => {
+    const auth = {
+      ...base,
+      session: { dead: { status: [401] } },
+      ...authPatch,
+      reconnect: { steps: [{ goto: "/x" }], ...(reconnectPatch ?? {}) },
+    } as unknown as CookieConfig;
+    let errs: string[] = [];
+    expect(() => { errs = validateCookieRecipe(auth); }).not.toThrow();
+    expect(errs.length).toBeGreaterThan(0);
+  });
+
   it("accepts a single-slash path and an allowed absolute URL", () => {
     expect(validateCookieRecipe(withStep({ goto: "/login" }))).toEqual([]);
     expect(validateCookieRecipe(withStep({ waitUrl: "https://app.example.com/x" }))).toEqual([]);

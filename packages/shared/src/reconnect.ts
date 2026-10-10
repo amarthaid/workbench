@@ -7,8 +7,8 @@ export function credentialRefs(value: string): string[] {
   return [...value.matchAll(CRED_REF_RE)].map((m) => m[1]);
 }
 
-function hostOf(url: string): string | null {
-  try { return new URL(url).hostname.toLowerCase(); } catch { return null; }
+function hostnameOf(url: string, targetDomain: string): string | null {
+  try { return new URL(url, "https://" + targetDomain.replace(/^\./, "")).hostname.toLowerCase(); } catch { return null; }
 }
 
 function hostAllowed(host: string, allowed: string[]): boolean {
@@ -33,12 +33,42 @@ export function validateCookieRecipe(auth: CookieConfig): string[] {
   if (!auth.session?.dead) errs.push("reconnect requires session.dead");
   const steps: unknown[] = Array.isArray(r.steps) ? r.steps : [];
   if (steps.length === 0) errs.push("reconnect.steps must be a non-empty array");
-  if (r.timeoutMs !== undefined && (r.timeoutMs <= 0 || r.timeoutMs > RECONNECT_MAX_TIMEOUT_MS)) {
-    errs.push(`reconnect.timeoutMs must be in (0, ${RECONNECT_MAX_TIMEOUT_MS}]`);
+  if (r.timeoutMs !== undefined) {
+    if (typeof r.timeoutMs !== "number" || !(r.timeoutMs > 0 && r.timeoutMs <= RECONNECT_MAX_TIMEOUT_MS)) {
+      errs.push(`reconnect.timeoutMs must be a number in (0, ${RECONNECT_MAX_TIMEOUT_MS}]`);
+    }
   }
-  const declared = new Set((r.credentials ?? []).map((c) => c.key));
-  const allowed = [auth.targetDomain, ...(auth.cookieDomains ?? []), ...(r.allowHosts ?? [])]
-    .map((d) => d.replace(/^\./, "").toLowerCase());
+
+  const stringList = (v: unknown, name: string): string[] => {
+    if (v === undefined) return [];
+    if (!Array.isArray(v) || v.some((x) => typeof x !== "string")) {
+      errs.push(`${name} must be an array of strings`);
+      return [];
+    }
+    return v as string[];
+  };
+  const hasTarget = typeof auth.targetDomain === "string" && auth.targetDomain !== "";
+  if (!hasTarget) errs.push("targetDomain must be a non-empty string");
+
+  const declared = new Set<string>();
+  if (r.credentials !== undefined) {
+    if (!Array.isArray(r.credentials)) {
+      errs.push("reconnect.credentials must be an array");
+    } else {
+      r.credentials.forEach((c, i) => {
+        if (typeof c !== "object" || c === null || typeof (c as { key?: unknown }).key !== "string") {
+          errs.push(`credentials[${i}]: must be an object with a string key`);
+        } else {
+          declared.add((c as { key: string }).key);
+        }
+      });
+    }
+  }
+  const allowed = [
+    ...(hasTarget ? [auth.targetDomain] : []),
+    ...stringList(auth.cookieDomains, "cookieDomains"),
+    ...stringList(r.allowHosts, "reconnect.allowHosts"),
+  ].map((d) => d.replace(/^\./, "").toLowerCase());
 
   steps.forEach((raw, i) => {
     if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
@@ -66,10 +96,12 @@ export function validateCookieRecipe(auth: CookieConfig): string[] {
         errs.push(`step ${i}: ${kind} must be a string`);
       } else if (isGoto && url === "loginUrl") {
         // allowed literal
-      } else if (/^\/(?![/\\])/.test(url)) {
-        // single-slash path on the current origin
-      } else if (/^https?:\/\//i.test(url)) {
-        const host = hostOf(url);
+      } else if (/[\u0000-\u0020\u007f]/.test(url)) {
+        errs.push(`step ${i}: ${kind} must not contain whitespace or control characters`);
+      } else if (url.startsWith("/") || /^https?:\/\//i.test(url)) {
+        // Resolve instead of pattern-matching: the URL parser is what the
+        // browser will agree with, and relative paths resolve against targetDomain.
+        const host = hostnameOf(url, hasTarget ? auth.targetDomain : "invalid.invalid");
         if (!host || !hostAllowed(host, allowed)) {
           errs.push(`step ${i}: host ${host ?? url} not in targetDomain/cookieDomains/allowHosts`);
         }
