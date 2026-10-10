@@ -247,7 +247,8 @@ export interface CookieConfig {
 status in `status`, and, when `redirectTo` is set, a 3xx whose `Location` path
 starts with it. `reconnect` is rejected without `session.dead`. `session.probe`
 is optional; with it, a reconnect only counts once the probe returns a status in
-`alive`. Without it, success is "at least one cookie captured".
+`alive`. Without it, success is "at least one cookie captured, and the tab has
+left `loginUrl`" (its URL no longer starts with it).
 
 **SSO.** The identity provider's session in the persistent profile usually
 outlives the app session, so the recipe just clicks through:
@@ -284,14 +285,18 @@ reconnect: {
 },
 ```
 
-**Steps.** They run in order in a dedicated tab, under the overall `timeoutMs`
-(each step defaults to 10 s; the run deadline is enforced per step).
+**Steps.** They run in order in a dedicated private tab, under the overall
+`timeoutMs` (each step defaults to 10 s; the run deadline is enforced per step).
+The private tab is invisible to the `browser_*` tools and to the live view, so
+an agent cannot list it, evaluate in it or attach to it while it holds a
+credential. The profile's password manager is turned off, so chromium never
+saves a filled password.
 
 | Step | Meaning |
 |---|---|
 | `{ goto }` | Navigate. `"loginUrl"`, a single-slash path on `targetDomain`, or an `http(s)` URL on an allowed host. |
 | `{ click, optional?, timeoutMs? }` | Click the element. With `optional: true`, not found within the timeout means skip. |
-| `{ fill, value, timeoutMs? }` | Type `value` into the field. `{{cred:key}}` is valid only here. |
+| `{ fill, value, timeoutMs? }` | Set `value` on the field via the native value setter in an isolated world, then fire `input` and `change`. No keystrokes are typed. `{{cred:key}}` is valid only here. |
 | `{ press }` | Press a key, for example `"Enter"`. |
 | `{ waitFor, timeoutMs? }` | Wait for a selector to appear. |
 | `{ waitUrl, timeoutMs? }` | Wait until the URL starts with a path or absolute URL. |
@@ -313,8 +318,11 @@ control characters.
 **Cooldown.** After a failed reconnect the connection is marked as needing a
 manual reconnect and no further attempt runs for 10 minutes, at most six per
 hour, so a wrong password or an MFA wall never hammers a login form. A
-reconnect also stands down while the user is in the middle of a portal connect
-(the connect link or live view).
+reconnect whose retried request is still refused counts as a failed attempt.
+Saving new bindings, or reconnecting by hand, clears the cooldown. A reconnect
+stands down without recording anything while the user is in the middle of a
+portal connect (the connect link or live view), or when the browser is already
+at its tab limit.
 
 **Binding credentials.** For recipes with `credentials`, the user opens the
 integration's detail page in the portal, picks a vault entry for each slot
