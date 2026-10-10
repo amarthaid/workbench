@@ -27,6 +27,7 @@ import { verifyConnectToken } from "../auth/connect-token";
 import { markConnectStarted, markConnectEnded } from "../auth/reconnect/connect-lock";
 import { getReconnectState, updateReconnectState } from "../auth/reconnect/state";
 import { canAttemptReconnect } from "../auth/reconnect/runner";
+import { isAgentNavigableUrl } from "../auth/browser-url";
 import { db } from "../db";
 import { listSecrets } from "../vault/store";
 import { authenticatePortal } from "../auth/portal-session";
@@ -753,6 +754,10 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     }
     if (url && !isUrl(url)) {
       return reply.status(400).send({ error: "url must be http(s)" });
+    }
+    // Loopback is where chromium's debug endpoint lives (auth/browser-url.ts).
+    if (url && !isAgentNavigableUrl(url)) {
+      return reply.status(400).send({ error: "url must not point at a loopback host" });
     }
     try {
       const s = await defaultTab(user.userId);

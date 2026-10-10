@@ -158,6 +158,28 @@ function pageWsUrl(remotePort: number, targetId: string): string {
   return `ws://127.0.0.1:${remotePort}/devtools/page/${targetId}`;
 }
 
+/**
+ * Refuse every request this tab makes to chromium's own debugging port.
+ * `/json/list` there names every target, private recipe tabs included, and
+ * `/json/close/<id>` kills one; an agent drives this tab and can navigate it
+ * by script, which no URL check on browser_navigate sees. Enforced by the
+ * browser (Fetch interception), not by checking the URL an agent passed. Any
+ * host is matched: 127.0.0.1, localhost, [::1], 0.0.0.0 and every other
+ * spelling of loopback reach the same socket.
+ *
+ * A tab adopted while already showing the endpoint is sent to about:blank.
+ */
+async function blockDebugEndpoint(cdp: CdpClient, port: number): Promise<void> {
+  cdp.on("Fetch.requestPaused", (p) => {
+    void cdp.send("Fetch.failRequest", { requestId: p.requestId, errorReason: "BlockedByClient" }).catch(() => {});
+  });
+  await cdp.send("Fetch.enable", { patterns: [{ urlPattern: `*:${port}/*` }] });
+  const r = (await cdp.send("Runtime.evaluate", { expression: "location.port", returnByValue: true }).catch(() => null)) as
+    | { result?: { value?: unknown } }
+    | null;
+  if (r?.result?.value === String(port)) await cdp.send("Page.navigate", { url: "about:blank" });
+}
+
 async function attachTab(
   s: WarmSession,
   targetId: string,
@@ -174,6 +196,14 @@ async function attachTab(
     }
   });
   await cdp.ready;
+  if (map === s.tabs) {
+    try {
+      await blockDebugEndpoint(cdp, s.remotePort);
+    } catch (e) {
+      cdp.close(); // fail closed: an agent tab without the block is not handed out
+      throw e;
+    }
+  }
   const now = Date.now();
   const tab: Tab = { id: targetId, cdp, lastActivity: now, createdAt: now };
   map.set(targetId, tab);

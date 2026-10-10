@@ -472,4 +472,71 @@ describe.skipIf(!ENABLED)("cookie auto-reconnect against a real chromium", () =>
       });
     }, 60_000);
   });
+
+  // An agent tab that can load chromium's own /json endpoints reads every
+  // target, private recipe tabs included (id, url, title), and GET
+  // /json/close/<id> kills one. Agent tabs are blocked from the debug port
+  // in the browser itself, so a script-driven navigation or an iframe (which
+  // no URL check on browser_navigate sees) is refused as well.
+  describe("agent tabs cannot load chromium's debug endpoint", () => {
+    let u = "";
+    beforeAll(() => {
+      u = freshUser();
+    });
+    const settle = () => new Promise((r) => setTimeout(r, 800));
+    const evalIn = async (tab: { cdp: { send: (m: string, p?: any) => Promise<any> } }, expression: string) =>
+      (await tab.cdp.send("Runtime.evaluate", { expression, returnByValue: true })).result?.value;
+
+    it("a script navigation to /json/list lands on an error page, not the target list", async () => {
+      const opened = await openTab(u);
+      if (!opened.ok) throw new Error("no tab");
+      const { tab } = opened;
+      try {
+        const debug = `http://127.0.0.1:${getWarmSession(u)!.remotePort}`;
+        await tab.cdp.send("Page.navigate", { url: `${origin}/login` });
+        await settle();
+        await evalIn(tab, `location.href = ${JSON.stringify(`${debug}/json/list`)}`);
+        await settle();
+        const text = String(await evalIn(tab, "document.body ? document.body.innerText : ''"));
+        expect(text).not.toContain("webSocketDebuggerUrl");
+      } finally {
+        await closeTab(u, tab.id);
+      }
+    }, 60_000);
+
+    it("an iframe pointed at /json/list never loads it", async () => {
+      const opened = await openTab(u);
+      if (!opened.ok) throw new Error("no tab");
+      const { tab } = opened;
+      try {
+        const debug = `http://127.0.0.1:${getWarmSession(u)!.remotePort}`;
+        await tab.cdp.send("Page.navigate", { url: `${origin}/login` });
+        await settle();
+        await evalIn(
+          tab,
+          `(() => { const f = document.createElement("iframe"); f.src = ${JSON.stringify(`${debug}/json/list`)}; document.body.appendChild(f); })()`
+        );
+        await settle();
+        const tree = (await tab.cdp.send("Page.getFrameTree")) as any;
+        const child = tree.frameTree.childFrames?.[0]?.frame;
+        expect(child).toBeDefined();
+        expect(child.unreachableUrl ?? "").toContain("/json/list");
+      } finally {
+        await closeTab(u, tab.id);
+      }
+    }, 60_000);
+
+    it("the block does not touch other ports on loopback", async () => {
+      const opened = await openTab(u);
+      if (!opened.ok) throw new Error("no tab");
+      const { tab } = opened;
+      try {
+        await tab.cdp.send("Page.navigate", { url: `${origin}/login` });
+        await settle();
+        expect(await evalIn(tab, "!!document.getElementById('pass')")).toBe(true);
+      } finally {
+        await closeTab(u, tab.id);
+      }
+    }, 60_000);
+  });
 });

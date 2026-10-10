@@ -1327,6 +1327,22 @@ describe("API routes", () => {
       expect(res.statusCode).toBe(400);
     });
 
+    it("rejects a loopback url (chromium's debug endpoint lives there)", async () => {
+      const { navigate } = await import("../src/auth/browser-session");
+      vi.mocked(navigate).mockClear();
+      const app = await buildApp();
+      for (const url of ["http://127.0.0.1:9222/json/list", "http://localhost:9222/json", "http://[::1]:9222/"]) {
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/browser-session/live-url",
+          headers: { "x-workbench-api-key": "valid-api-key" },
+          payload: { url },
+        });
+        expect(res.statusCode, url).toBe(400);
+      }
+      expect(navigate).not.toHaveBeenCalled();
+    });
+
     it("401 without auth", async () => {
       const app = await buildApp();
       const res = await app.inject({ method: "POST", url: "/api/browser-session/live-url", payload: {} });

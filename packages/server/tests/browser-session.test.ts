@@ -32,7 +32,14 @@ vi.mock("ws", async () => {
   class FakeWebSocket extends EventEmitter {
     static OPEN = 1;
     readyState = 1;
-    send = vi.fn();
+    send = vi.fn(function (this: any, raw: string) {
+      // Answer every command so awaited sends (the debug-port block on agent
+      // tabs) resolve; fire-and-forget enables just get an unread reply.
+      try {
+        const m = JSON.parse(raw);
+        if (typeof m.id === "number") setImmediate(() => this.emit("message", JSON.stringify({ id: m.id, result: {} })));
+      } catch { /* not JSON */ }
+    });
     close = vi.fn(() => { this.readyState = 3; });
     constructor(url: string) {
       super();

@@ -4,7 +4,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // browser_* tool: an agent with main-world evaluate on that page could listen
 // for the input event that carries the plaintext.
 
-const { spawnMock, cdpCallMock } = vi.hoisted(() => ({ spawnMock: vi.fn(), cdpCallMock: vi.fn() }));
+const { spawnMock, cdpCallMock, sockets } = vi.hoisted(() => ({
+  spawnMock: vi.fn(),
+  cdpCallMock: vi.fn(),
+  sockets: [] as Array<{ url: string; frames: any[]; ws: any }>,
+}));
 
 vi.mock("../src/auth/profile-chromium", async () => {
   const real = await vi.importActual<typeof import("../src/auth/profile-chromium")>("../src/auth/profile-chromium");
@@ -16,10 +20,19 @@ vi.mock("ws", async () => {
   class FakeWebSocket extends EventEmitter {
     static OPEN = 1;
     readyState = 1;
-    send = vi.fn();
+    send = vi.fn(function (this: any, raw: string) {
+      // Answer every command so awaited sends (the debug-port block on agent
+      // tabs) resolve; fire-and-forget enables just get an unread reply.
+      try {
+        const m = JSON.parse(raw);
+        sockets.find((x) => x.ws === this)?.frames.push(m);
+        if (typeof m.id === "number") setImmediate(() => this.emit("message", JSON.stringify({ id: m.id, result: {} })));
+      } catch { /* not JSON */ }
+    });
     close = vi.fn(() => { this.readyState = 3; });
-    constructor(_url: string) {
+    constructor(url: string) {
       super();
+      sockets.push({ url, frames: [], ws: this });
       setImmediate(() => this.emit("open"));
     }
   }
@@ -43,6 +56,7 @@ import {
   defaultTab,
   closeTab,
   browserClient,
+  openTab,
 } from "../src/auth/browser-session";
 import { activeProfiles } from "../src/auth/profile-chromium";
 import { browserPlugin } from "../src/plugins/internal/browser";
@@ -64,6 +78,7 @@ let targets: Array<{ targetId: string; type: string; url: string; title: string 
 let sent: Array<{ method: string; params: Record<string, unknown> }>;
 
 beforeEach(async () => {
+  sockets.length = 0;
   spawnMock.mockReset();
   spawnMock.mockResolvedValue({
     proc: fakeProc(),
@@ -91,6 +106,31 @@ beforeEach(async () => {
 });
 
 afterEach(async () => { await closeBrowserSession(U); });
+
+describe("chromium's debug endpoint is blocked for agent tabs only", () => {
+  const framesOf = (suffix: string) => sockets.filter((x) => x.url.endsWith(suffix)).flatMap((x) => x.frames);
+  const fetchEnable = (suffix: string) => framesOf(suffix).find((f) => f.method === "Fetch.enable");
+
+  it("the default tab and a new agent tab intercept every request to the debug port", async () => {
+    expect(fetchEnable("/page")?.params).toEqual({ patterns: [{ urlPattern: "*:9999/*" }] });
+    const r = await openTab(U);
+    if (!r.ok) throw new Error("no tab");
+    expect(fetchEnable(`/devtools/page/${r.tab.id}`)?.params).toEqual({ patterns: [{ urlPattern: "*:9999/*" }] });
+  });
+
+  it("a paused request is failed, never continued", async () => {
+    const page = sockets.find((x) => x.url.endsWith("/page"))!;
+    page.ws.emit("message", JSON.stringify({ method: "Fetch.requestPaused", params: { requestId: "R1", request: { url: "http://127.0.0.1:9999/json/list" } } }));
+    await new Promise((r) => setImmediate(r));
+    expect(page.frames).toContainEqual(expect.objectContaining({ method: "Fetch.failRequest", params: { requestId: "R1", errorReason: "BlockedByClient" } }));
+    expect(page.frames.find((f) => f.method === "Fetch.continueRequest")).toBeUndefined();
+  });
+
+  it("the private recipe tab is not intercepted (the server drives it, not an agent)", async () => {
+    await openPrivateTab(U);
+    expect(fetchEnable("/devtools/page/RECIPE")).toBeUndefined();
+  });
+});
 
 describe("private (recipe) tabs", () => {
   it("open in chromium but are not registered as agent tabs", async () => {
