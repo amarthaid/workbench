@@ -3,7 +3,7 @@ import { getCookies, CookieData, isCookieExpired } from "../auth/cookie";
 import { getPluginOAuthCreds, resolveOAuthUrls } from "../auth/plugin-oauth";
 import { registry } from "./registry";
 import { matchesDead } from "../auth/reconnect/dead";
-import { reconnectSession, canAttemptReconnect } from "../auth/reconnect/runner";
+import { reconnectSession } from "../auth/reconnect/runner";
 import { getReconnectState, updateReconnectState } from "../auth/reconnect/state";
 
 function buildCookieHeader(data: CookieData, targetHost: string): string {
@@ -197,11 +197,8 @@ export async function createContext(userId: string, integration: string): Promis
           await updateReconnectState(userId, integration, { deadAt: Date.now() });
           return res;
         }
-        // Inside the cooldown, don't re-run the recipe; just keep the dead mark.
-        if (!canAttemptReconnect(await getReconnectState(userId, integration))) {
-          await updateReconnectState(userId, integration, { deadAt: Date.now() });
-          return res;
-        }
+        // The runner applies the cooldown itself, after its fast path (which
+        // types nothing), and marks the session dead when it refuses.
         const outcome = await reconnectSession(userId, integration);
         if (!outcome.ok || !isReplayableBody(init?.body)) return res;
         const fresh = await getCookies(userId, integration);

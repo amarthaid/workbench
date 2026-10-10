@@ -485,8 +485,31 @@ describe("the cooldown cannot be dodged", () => {
   it("a recipe success holds the recipe even after delete + import", async () => {
     expect(await reconnectSession(U, I)).toEqual({ ok: true });
     await deleteAndImport();
+    live.cookies = []; // the profile has no live session either: only the recipe could help
+    probeStatus = 401;
     sent.length = 0;
     expect(await reconnectSession(U, I)).toMatchObject({ ok: false, reason: "COOLDOWN" });
+    expect(navigations()).toHaveLength(0);
+  });
+
+  it("inside the cooldown the fast path still recovers a session the profile holds", async () => {
+    expect(await reconnectSession(U, I)).toEqual({ ok: true }); // recipe success: holds the window
+    // The session dies inside 10 minutes; the profile still has a live one.
+    live.cookies = [goodCookie];
+    probeStatus = 200;
+    sent.length = 0;
+    expect(await reconnectSession(U, I)).toEqual({ ok: true });
+    expect(navigations()).toHaveLength(0); // no recipe step ran
+    expect(deliveries()).toHaveLength(0);
+  });
+
+  it("after a failure, the fast path still recovers; the recipe stays held", async () => {
+    pageState.afterLogin = () => {};
+    expect((await reconnectSession(U, I)).ok).toBe(false);
+    live.cookies = [goodCookie];
+    probeStatus = 200;
+    sent.length = 0;
+    expect(await reconnectSession(U, I)).toEqual({ ok: true });
     expect(navigations()).toHaveLength(0);
   });
 
@@ -545,6 +568,15 @@ describe("ensureCookieSession", () => {
     await storeCookies(U, I, { domain: "app.example.com", cookies: [{ ...goodCookie, value: "tok-old", expires: 1 }], capturedAt: 1 });
     await updateReconnectState(U, I, { last: { at: Date.now(), ok: false, error: "verify: NO_COOKIES" } });
     expect(await ensureCookieSession(U, I)).toBe(false);
+    expect(openPrivateTab).not.toHaveBeenCalled();
+  });
+
+  it("inside the cooldown, a session the profile still holds is recovered without the recipe", async () => {
+    await storeCookies(U, I, { domain: "app.example.com", cookies: [{ ...goodCookie, value: "tok-old", expires: 1 }], capturedAt: 1 });
+    await updateReconnectState(U, I, { last: { at: Date.now(), ok: true, recipe: true } });
+    live.cookies = [goodCookie];
+    probeStatus = 200;
+    expect(await ensureCookieSession(U, I)).toBe(true);
     expect(openPrivateTab).not.toHaveBeenCalled();
   });
 

@@ -84,10 +84,15 @@ describe("ctx.http cookie reconnect", () => {
     expect(st.deadAt).toBeTypeOf("number");
     expect(st.last).toMatchObject({ ok: false, error: "verify: PROBE_FAILED" });
 
-    reconnect.mockClear();
+    // The next dead call asks the runner, which applies the cooldown after its
+    // fast path (reconnect-runner.test.ts); a refusal is not retried.
+    reconnect.mockReset();
+    reconnect.mockResolvedValue({ ok: false, reason: "COOLDOWN" });
+    fetchMock.mockClear();
     const next = await createContext(U, I);
     expect((await next.http("https://app.example.com/api/x")).status).toBe(401);
-    expect(reconnect).not.toHaveBeenCalled();
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("reconnect failure returns the original response", async () => {

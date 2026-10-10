@@ -184,11 +184,6 @@ function warn(what: string, code: string): void {
 async function attempt(userId: string, integration: string, auth: RecipeAuth): Promise<ReconnectOutcome> {
   const key = `${userId}:${integration}`;
   const state = await getReconnectState(userId, integration);
-  if (!canAttemptReconnect(withRemembered(key, state))) {
-    // Only ever asked on a dead or expired session: keep it marked dead.
-    await updateReconnectState(userId, integration, { deadAt: Date.now() });
-    return { ok: false, reason: "COOLDOWN" };
-  }
   // A human mid-connect owns the browser. `activeProfiles` is not this signal:
   // a warm chromium holds it for its whole life.
   if (isConnectInProgress(userId)) return { ok: false, reason: "BUSY" };
@@ -218,6 +213,14 @@ async function attempt(userId: string, integration: string, auth: RecipeAuth): P
         if (data.cookies.length && (await withDeadline(probeAlive(auth, data.cookies), deadline, run))) live = data;
       } catch { /* fall through to the recipe */ }
       if (live) return await commit(userId, integration, live, started);
+    }
+
+    // The cooldown holds the RECIPE (it types credentials), not the fast path
+    // above: a session the profile can still hand back is never refused.
+    if (!canAttemptReconnect(withRemembered(key, state))) {
+      // Only ever asked on a dead or expired session: keep it marked dead.
+      await updateReconnectState(userId, integration, { deadAt: Date.now() });
+      return { ok: false, reason: "COOLDOWN" };
     }
 
     phase = "open";
@@ -371,7 +374,9 @@ export async function ensureCookieSession(userId: string, integration: string): 
   // Dead (a response said so) or every stored cookie's expiry has passed,
   // which no response ever reports because ctx.http refuses to send them.
   const auth = registry.getIntegration(integration)?.auth;
-  if (auth?.type !== "cookie" || !auth.reconnect || !canAttemptReconnect(state)) return false;
+  // No cooldown check here: the runner applies it after its fast path, so a
+  // session the profile still holds is recovered even inside the window.
+  if (auth?.type !== "cookie" || !auth.reconnect) return false;
   const outcome = await reconnectSession(userId, integration);
   return outcome.ok;
 }
