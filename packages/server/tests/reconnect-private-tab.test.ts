@@ -141,12 +141,83 @@ describe("private (recipe) tabs", () => {
     expect(listed.tabs.map((t: { session_id: string }) => t.session_id)).not.toContain("RECIPE");
   });
 
-  it("isPrivateTarget marks the target for its whole life, and only then", async () => {
+  it("isPrivateTarget is scoped per user and per chromium session", async () => {
     await openPrivateTab(U);
-    expect(isPrivateTarget("RECIPE")).toBe(true);
-    expect(isPrivateTarget("T0")).toBe(false);
+    expect(isPrivateTarget(U, "RECIPE")).toBe(true);
+    expect(isPrivateTarget(U, "T0")).toBe(false);
+    expect(isPrivateTarget("someone-else", "RECIPE")).toBe(false);
+  });
+
+  it("close: the handle is dropped, the id stays hidden (tombstone) for this chromium's life", async () => {
+    await openPrivateTab(U);
     await closePrivateTab(U, "RECIPE");
-    expect(isPrivateTarget("RECIPE")).toBe(false);
+    expect(getWarmSession(U)!.privateTabs.size).toBe(0);
+    expect(await closePrivateTab(U, "RECIPE")).toBe(false); // second close is a no-op
+    // A late Target.getTargets answer may still list the dying target: it must never surface.
+    expect(isPrivateTarget(U, "RECIPE")).toBe(true);
+    expect((await call("browser_tabs")).tabs.map((t: { session_id: string }) => t.session_id)).toEqual(["T0"]);
+  });
+
+  it("a private tab whose socket dies is dropped from the handles but stays hidden", async () => {
+    const r = await openPrivateTab(U);
+    if (!r.ok) throw new Error("open failed");
+    (r.tab.cdp as unknown as { ws: { emit: (e: string) => void } }).ws.emit("close");
+    expect(getWarmSession(U)!.privateTabs.has("RECIPE")).toBe(false);
+    expect(isPrivateTarget(U, "RECIPE")).toBe(true);
+    expect(getTab(U, "RECIPE")).toBeUndefined();
+  });
+
+  it("exit + restart: the new chromium inherits no private ids, handles or pending opens", async () => {
+    await openPrivateTab(U);
+    const old = getWarmSession(U)!;
+    await closeBrowserSession(U);
+    expect(isPrivateTarget(U, "RECIPE")).toBe(false); // no session, nothing private
+    expect(old.privateTabs.size).toBe(0);
+    await ensureSession(U);
+    const fresh = getWarmSession(U)!;
+    expect(fresh).not.toBe(old);
+    expect(fresh.privateIds.size).toBe(0);
+    expect(fresh.privateTabs.size).toBe(0);
+    expect(fresh.pendingPrivateOpens).toBe(0);
+  });
+
+  describe("fail closed", () => {
+    it("a target info missing its id or type is never listed or adopted", async () => {
+      targets = [
+        { targetId: "T0", type: "page", url: "about:blank", title: "" },
+        { type: "page", url: "about:blank", title: "" } as any,
+        { targetId: "NOTYPE", url: "about:blank", title: "" } as any,
+      ];
+      const ids = (await call("browser_tabs")).tabs.map((t: { session_id: string }) => t.session_id);
+      expect(ids).toEqual(["T0"]);
+    });
+
+    it("a pending-open counter in any non-zero state (even an underflow) hides unregistered pages", async () => {
+      targets.push({ targetId: "POPUP", type: "page", url: "about:blank", title: "" });
+      getWarmSession(U)!.pendingPrivateOpens = -1;
+      const ids = (await call("browser_tabs")).tabs.map((t: { session_id: string }) => t.session_id);
+      expect(ids).toEqual(["T0"]);
+      getWarmSession(U)!.pendingPrivateOpens = 0;
+      expect((await call("browser_tabs")).tabs.map((t: { session_id: string }) => t.session_id)).toEqual(["T0", "POPUP"]);
+    });
+
+    it("an exception inside the privacy check hides the target", async () => {
+      targets.push({ targetId: "POPUP", type: "page", url: "about:blank", title: "" });
+      const s = getWarmSession(U)!;
+      const realHas = s.privateIds.has.bind(s.privateIds);
+      s.privateIds.has = (id: string) => { if (id === "POPUP") throw new Error("boom"); return realHas(id); };
+      const ids = (await call("browser_tabs")).tabs.map((t: { session_id: string }) => t.session_id);
+      expect(ids).toEqual(["T0"]);
+    });
+
+    it("an enumerator error propagates: nothing is listed and nothing is adopted", async () => {
+      await closeTab(U, "T0");
+      const client = await browserClient(getWarmSession(U)!);
+      (client as unknown as { send: unknown }).send = vi.fn(async () => { throw new Error("cdp down"); });
+      await expect(defaultTab(U)).rejects.toThrow();
+      await expect(call("browser_tabs")).rejects.toThrow();
+      expect(getWarmSession(U)!.defaultTabId).toBe("T0"); // unchanged, nothing adopted
+    });
   });
 
   it("closePrivateTab closes the target; it counts toward the tab limit while open", async () => {

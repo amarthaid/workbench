@@ -204,10 +204,21 @@ export interface WarmSession {
   privateTabs: Map<string, Tab>;
   /**
    * Private opens in flight. Between Target.createTarget and the target id
-   * landing in `privateTargets` the new page is in no map, so enumerators hide
+   * landing in `privateIds` the new page is in no map, so enumerators hide
    * every unregistered page while this is non-zero.
    */
   pendingPrivateOpens: number;
+  /**
+   * Every target id this chromium ever opened privately. Added in the same
+   * continuation that receives Target.createTarget's reply; never removed
+   * while this chromium lives (a tombstone), so a late Target.getTargets
+   * answer listing a dying private target still hides it. Chromium target ids
+   * are unique per browser, so a tombstone can never hide a later public tab.
+   * Dies with the session: a restarted chromium starts from an empty set.
+   */
+  privateIds: Set<string>;
+  /** Private ids already closed through closePrivateTab, so a second close is a no-op. */
+  closedPrivate: Set<string>;
   defaultTabId: string;
   /**
    * Tabs whose target is being created right now. openTab reserves its slot
@@ -313,6 +324,8 @@ async function startSession(userId: string): Promise<WarmSession> {
       defaultTabId: spawned.cdpPageTargetId,
       pendingOpens: 0,
       pendingPrivateOpens: 0,
+      privateIds: new Set(),
+      closedPrivate: new Set(),
       authWs,
       audio,
     };
@@ -339,7 +352,8 @@ async function startSession(userId: string): Promise<WarmSession> {
       for (const t of [...session.tabs.values(), ...session.privateTabs.values()]) { try { t.cdp.close(); } catch { /* noop */ } }
       session.tabs.clear();
       session.privateTabs.clear();
-      forgetPrivateTargets(userId);
+      session.privateIds.clear();
+      session.closedPrivate.clear();
       try { session.browserCdp?.close(); } catch { /* noop */ }
       try { session.authWs?.close(); } catch { /* noop */ }
       // Releases the whole per-user daemon; its devices die with it. Guarded by
@@ -423,33 +437,34 @@ export function getWarmSession(userId: string): WarmSession | undefined {
 }
 
 export function getTab(userId: string, tabId: string): Tab | undefined {
-  if (privateTargets.has(tabId)) return undefined;
-  return warmSessions.get(userId)?.tabs.get(tabId);
+  const s = warmSessions.get(userId);
+  if (!s || s.privateIds.has(tabId)) return undefined;
+  return s.tabs.get(tabId);
 }
+
+/** True when `targetId` was opened privately in this user's current chromium. */
+export function isPrivateTarget(userId: string, targetId: string): boolean {
+  return warmSessions.get(userId)?.privateIds.has(targetId) ?? false;
+}
+
+type TargetInfo = { targetId?: unknown; type?: unknown };
 
 /**
- * Every live private target id -> owning user. Module-level so any path that
- * names a target (tool lookup, enumeration, the live view) can refuse it
- * without holding the session. An id enters in the same continuation that
- * receives it from Target.createTarget and leaves only when the tab closes.
+ * Whether an agent or the live view may see this target. Fails closed: a
+ * target that is not a well-formed page, is private, or arrives while a
+ * private open is in flight (it may be the one being opened, not yet marked)
+ * is hidden, and so is anything the check itself cannot decide.
  */
-const privateTargets = new Map<string, string>();
-
-export function isPrivateTarget(targetId: string): boolean {
-  return privateTargets.has(targetId);
-}
-
-function forgetPrivateTargets(userId: string): void {
-  for (const [id, owner] of privateTargets) if (owner === userId) privateTargets.delete(id);
-}
-
-/**
- * Hide a page target from every enumeration an agent or the live view can
- * reach: a private target, or, while a private open is in flight, any page
- * not already registered (it may be the one being opened).
- */
-function hiddenTarget(s: WarmSession, targetId: string): boolean {
-  return privateTargets.has(targetId) || (s.pendingPrivateOpens > 0 && !s.tabs.has(targetId));
+function visiblePage(s: WarmSession, t: TargetInfo): boolean {
+  try {
+    if (t.type !== "page" || typeof t.targetId !== "string" || !t.targetId) return false;
+    if (s.privateIds.has(t.targetId)) return false;
+    // Any non-zero count, including a counter that went negative.
+    if (s.pendingPrivateOpens !== 0 && !s.tabs.has(t.targetId)) return false;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function touchTab(userId: string, tabId: string): void {
@@ -481,16 +496,17 @@ export function openPrivateTab(userId: string): Promise<OpenTabResult> {
 /** Close a tab opened by openPrivateTab. False when it is not one of this user's. */
 export async function closePrivateTab(userId: string, tabId: string): Promise<boolean> {
   const s = warmSessions.get(userId);
-  if (!s || privateTargets.get(tabId) !== userId) return false;
+  if (!s || !s.privateIds.has(tabId)) return false;
   const tab = s.privateTabs.get(tabId);
+  if (!tab && s.closedPrivate.has(tabId)) return false; // already closed
   s.privateTabs.delete(tabId);
+  s.closedPrivate.add(tabId);
   try { tab?.cdp.close(); } catch { /* noop */ }
   try {
     const browser = await browserClient(s);
     await browser.send("Target.closeTarget", { targetId: tabId });
   } catch { /* target already gone */ }
-  // Only once the target is closed may it stop being hidden.
-  privateTargets.delete(tabId);
+  // The id stays in privateIds: see WarmSession.privateIds.
   return true;
 }
 
@@ -512,7 +528,7 @@ async function openTabIn(userId: string, isPrivate: boolean): Promise<OpenTabRes
       background: true,
     })) as { targetId: string };
     created = targetId;
-    if (isPrivate) privateTargets.set(targetId, userId); // same continuation as the reply
+    if (isPrivate) s.privateIds.add(targetId); // same continuation as the reply
     const tab = await attachTab(s, targetId, pageWsUrl(s.remotePort, targetId), isPrivate ? s.privateTabs : s.tabs);
     s.lastActivity = Date.now();
     return { ok: true, tab };
@@ -541,7 +557,7 @@ export async function defaultTab(userId: string): Promise<Tab> {
   };
   // Never adopt a private (server-driven) tab: it would become the agent's
   // compat default and the live view's target.
-  const pages = (targetInfos ?? []).filter((t) => t.type === "page" && !hiddenTarget(s, t.targetId));
+  const pages = (targetInfos ?? []).filter((t) => visiblePage(s, t));
   // Prefer a page nothing is driving yet, so adopting a default does not hand
   // the live view a tab an agent is already working in.
   let targetId = (pages.find((t) => !s.tabs.has(t.targetId)) ?? pages[0])?.targetId;
@@ -557,7 +573,7 @@ export async function defaultTab(userId: string): Promise<Tab> {
 /** Close one tab. False when it is not a tab of this user's session. */
 export async function closeTab(userId: string, tabId: string): Promise<boolean> {
   const s = warmSessions.get(userId);
-  const tab = privateTargets.has(tabId) ? undefined : s?.tabs.get(tabId);
+  const tab = s?.privateIds.has(tabId) ? undefined : s?.tabs.get(tabId);
   if (!s || !tab) return false;
   s.tabs.delete(tabId);
   try { tab.cdp.close(); } catch { /* noop */ }
@@ -580,7 +596,7 @@ export async function listTabs(userId: string): Promise<TabInfo[]> {
     targetInfos?: Array<{ targetId: string; type: string; url: string; title: string }>;
   };
   return (targetInfos ?? [])
-    .filter((t) => t.type === "page" && !hiddenTarget(s, t.targetId))
+    .filter((t) => visiblePage(s, t))
     .map((t) => ({ id: t.targetId, url: t.url, title: t.title, active: s.tabs.has(t.targetId) }));
 }
 
@@ -616,7 +632,8 @@ export async function closeBrowserSession(userId: string): Promise<void> {
   for (const t of [...s.tabs.values(), ...s.privateTabs.values()]) { try { t.cdp.close(); } catch { /* noop */ } }
   s.tabs.clear();
   s.privateTabs.clear();
-  forgetPrivateTargets(userId);
+  s.privateIds.clear();
+  s.closedPrivate.clear();
   try { s.browserCdp?.close(); } catch { /* noop */ }
   try { s.authWs?.close(); } catch { /* noop */ }
   try { s.proc.kill("SIGKILL"); } catch { /* noop */ }
