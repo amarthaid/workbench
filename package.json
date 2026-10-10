@@ -21,7 +21,7 @@
     "turbo": "^2.11.4"
   },
   "dependencies": {
-    "pg": "^8.21.0"
+    "pg": "^8.23.1"
   },
   "engines": {
     "node": ">=22"
