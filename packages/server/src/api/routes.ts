@@ -25,7 +25,9 @@ import {
 import { verifyConnectToken } from "../auth/connect-token";
 import { markConnectStarted, markConnectEnded } from "../auth/reconnect/connect-lock";
 import { getReconnectState, updateReconnectState } from "../auth/reconnect/state";
+import { db } from "../db";
 import { listSecrets } from "../vault/store";
+import { authenticatePortal } from "../auth/portal-session";
 import { signConnectToken } from "../auth/connect-token";
 import {
   createCustomApp,
@@ -393,6 +395,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       if (!integ) {
         return reply.status(404).send({ error: "Integration not found" });
       }
+      const detailRecipe = recipeOf(integ.name);
       return {
         name: integ.name,
         version: integ.version,
@@ -403,7 +406,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
         authType: integ.auth.type,
         instance: integ.auth.type === "oauth2" ? integ.auth.instance : undefined,
         apikeyFields: integ.auth.type === "apikey" ? integ.auth.fields : undefined,
-        autoReconnect: recipeOf(integ.name) ? { credentials: recipeOf(integ.name)!.credentials ?? [] } : undefined,
+        autoReconnect: detailRecipe ? { credentials: detailRecipe.credentials ?? [] } : undefined,
         tools: registry.listToolsByIntegration(integration).map((t) => ({
           name: t.name,
           description: t.description,
@@ -908,24 +911,12 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
   app.put<{ Params: { integration: string }; Body: { bindings?: unknown } }>(
     "/api/connections/:integration/reconnect",
     async (request, reply) => {
-      const header = request.headers.authorization ?? "";
-      let userId: string | null = null;
-      if (header.startsWith("Bearer ")) {
-        try {
-          userId = (await verifySession(header.slice(7))).userId || null;
-        } catch {
-          /* not a portal session */
-        }
-      }
-      if (!userId) {
-        if (await authenticate(request)) {
-          return reply.status(403).send({
-            error: "PORTAL_SESSION_REQUIRED",
-            message: "Reconnect bindings are changed from the portal only.",
-          });
-        }
-        return reply.status(401).send({ error: "Unauthorized" });
-      }
+      const userId = await authenticatePortal(
+        request,
+        reply,
+        "Reconnect bindings are changed from the portal only."
+      );
+      if (!userId) return;
       const { integration } = request.params;
       const r = recipeOf(integration);
       if (!r) return reply.status(404).send({ error: "Integration has no auto-reconnect recipe" });
@@ -948,7 +939,11 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
         }
         next[k] = v;
       }
-      if (!(await getCookies(userId, integration))) {
+      const row = await db.get(
+        "SELECT 1 AS one FROM connections WHERE user_id = ? AND integration = ?",
+        [userId, integration]
+      );
+      if (!row) {
         return reply.status(409).send({ error: "Connect the integration first" });
       }
       await updateReconnectState(userId, integration, { bindings: next });

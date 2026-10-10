@@ -20,6 +20,7 @@ import { storeCookies } from "../src/auth/cookie";
 import { putSecret } from "../src/vault/store";
 import { getReconnectState, updateReconnectState } from "../src/auth/reconnect/state";
 import { db } from "../src/db";
+import { signAccessToken } from "../src/auth/oauth-server/tokens";
 
 const USER = "user-rc";
 const auth = { authorization: "Bearer valid-jwt" };
@@ -121,9 +122,16 @@ describe("auto-reconnect bindings API", () => {
   it("requires a portal session: no auth 401, API key 403, nothing written", async () => {
     await putSecret(USER, "acme_pw", "pw-abc");
     await storeCookies(USER, "acme", cookieData);
-    expect((await put({ password: "acme_pw" }, {})).statusCode).toBe(401);
+    const anon = await put({ password: "acme_pw" }, {});
+    expect(anon.statusCode).toBe(401);
+    expect(anon.headers["www-authenticate"]).toContain("Bearer");
+    const oauth = await signAccessToken({ userId: USER, scope: "mcp", clientId: "c1" });
+    const viaOauth = await put({ password: "acme_pw" }, { authorization: `Bearer ${oauth}` });
+    expect(viaOauth.statusCode).toBe(403);
+    expect(viaOauth.json().error).toBe("PORTAL_SESSION_REQUIRED");
     const viaKey = await put({ password: "acme_pw" }, { "x-workbench-api-key": "valid-api-key" });
-    expect(viaKey.statusCode).toBe(403);
+    // Same as the vault: an API-key header alone is not a session (401), never accepted.
+    expect(viaKey.statusCode).toBe(401);
     expect((await getReconnectState(USER, "acme")).bindings).toBeUndefined();
   });
 

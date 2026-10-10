@@ -10,7 +10,7 @@ import {
   VaultError,
 } from "./store";
 import { consumeOtl, mintAdhocOtl, OTL_MAX_TTL_SECONDS, revokeFor } from "./otl";
-import { verifySession } from "../auth/session";
+import { authenticatePortal as authenticatePortalSession } from "../auth/portal-session";
 
 async function authenticate(request: FastifyRequest, reply: FastifyReply): Promise<string | null> {
   const userId = await resolveMcpUser(request.headers as Record<string, string>);
@@ -21,48 +21,12 @@ async function authenticate(request: FastifyRequest, reply: FastifyReply): Promi
   return null;
 }
 
-// Writes are portal-only, deliberately narrower than `authenticate`.
-//
-// `resolveMcpUser` accepts an API key or an OAuth access token — the agent's
-// own credential. The vault's whole goal is that the agent can use a secret
-// but never read one (spec Goal); a credential that can overwrite or delete
-// a secret defeats that from the other side. It cannot read `hunter2`, but it
-// could rotate it to a value it chose and then read that, or wipe the vault.
-// So PUT/DELETE require the portal-session JWT, which only a signed-in human
-// holds, and `verifySession` accepts nothing else.
-// 401 and 403 mean different things here and the portal acts on the
-// difference. 401 = no usable credential at all (missing, malformed, or an
-// expired session JWT), carrying the same WWW-Authenticate header the rest of
-// the API sends, so the portal's existing 401 handling clears `awb_token` and
-// sends the human to sign in again. 403 = a credential the server does accept,
-// just not for this — an API key or OAuth token — and re-authenticating would
-// not help, so the portal must not log the human out over it.
-async function authenticatePortal(
-  request: FastifyRequest,
-  reply: FastifyReply
-): Promise<string | null> {
-  const header = (request.headers.authorization as string | undefined) ?? "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  if (token) {
-    try {
-      const { userId } = await verifySession(token);
-      if (userId) return userId;
-    } catch {
-      // Not a portal session. It may still be an agent credential — ask.
-    }
-    if (await resolveMcpUser(request.headers as Record<string, string>)) {
-      reply.status(403).send({
-        error: "PORTAL_SESSION_REQUIRED",
-        message: "Secrets are written and deleted from the portal only.",
-      });
-      return null;
-    }
-  }
-  const prm = `${config.SERVER_PUBLIC_URL}/.well-known/oauth-protected-resource`;
-  reply.header("WWW-Authenticate", `Bearer realm="a-workbench", resource_metadata="${prm}"`);
-  reply.status(401).send({ error: "Unauthorized", resource_metadata: prm });
-  return null;
-}
+// Writes are portal-only, deliberately narrower than `authenticate`: the
+// vault's goal is that the agent can use a secret but never read or rewrite
+// one. See ../auth/portal-session.ts.
+const VAULT_FORBIDDEN = "Secrets are written and deleted from the portal only.";
+const authenticatePortal = (request: FastifyRequest, reply: FastifyReply) =>
+  authenticatePortalSession(request, reply, VAULT_FORBIDDEN);
 
 // Portal-minted links default to 5 minutes: a human copies the URL into a chat
 // by hand. The hard ceiling stays OTL_MAX_TTL_SECONDS.
