@@ -26,10 +26,14 @@ const h = vi.hoisted(() => {
           if (p.returnByValue === false) return { result: present ? { objectId: "obj-1" } : {} };
           return { result: { value: present ? { x: 1, y: 1 } : null } };
         }
+        if (m === "Page.getFrameTree") return { frameTree: { frame: { id: "frame-1" } } };
+        if (m === "DOM.describeNode") return { node: { backendNodeId: 7 } };
+        if (m === "Page.createIsolatedWorld") return { executionContextId: 42 };
+        if (m === "DOM.resolveNode") return { object: { objectId: "iso-1" } };
         if (m === "Runtime.callFunctionOn") {
           const hosts: string[] = p.arguments?.[1]?.value ?? [];
           const host = hostOf(pageState.url);
-          const ok = hosts.some((d) => host === d || host.endsWith("." + d));
+          const ok = hosts.includes(host);
           return { result: { value: ok ? "OK" : "HOST" } };
         }
         if (m === "Input.dispatchKeyEvent" && p.type === "rawKeyDown") pageState.afterLogin();

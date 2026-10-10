@@ -61,18 +61,25 @@ export async function clickSelector(page: PageHandle, selector: string, timeoutM
   await click(page, x, y);
 }
 
-// Fixed constant: contains no credential. The value arrives as a CallArgument,
-// and the host check runs in the same call that writes it, bound to the element.
+// Fixed constant: contains no credential. The value arrives as a CallArgument.
+// It runs in an ISOLATED world (pristine built-ins; page scripts cannot patch
+// String/Array/Object prototypes or the value setter), and the host check is
+// an EXACT hostname match in the same call that writes the value.
 const DELIVER_FN = `function (v, hosts) {
   const h = location.hostname.toLowerCase();
-  if (!hosts.some((d) => h === d || h.endsWith("." + d))) return "HOST";
+  if (!hosts.includes(h)) return "HOST";
   if (document.activeElement !== this) this.focus();
   if (this.isContentEditable) { this.textContent = v; }
-  else { const set = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(this), "value").set; set.call(this, v); }
+  else {
+    const proto = this.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(proto, "value").set.call(this, v);
+  }
   this.dispatchEvent(new Event("input", { bubbles: true }));
   this.dispatchEvent(new Event("change", { bubbles: true }));
   return "OK";
 }`;
+
+const WORLD_NAME = "workbench-reconnect";
 
 export async function fillSelector(page: PageHandle, selector: string, value: string, timeoutMs: number, allowedHosts: string[]): Promise<void> {
   if (selector.startsWith("text=")) {
@@ -80,22 +87,41 @@ export async function fillSelector(page: PageHandle, selector: string, value: st
   }
   const { x, y } = await waitForSelector(page, selector, timeoutMs);
   await click(page, x, y);
-  // Prepare: built from the selector only. Returns the focused, cleared,
-  // editable element (remote object) or null.
-  const prep = (await page.cdp
-    .send("Runtime.evaluate", { expression: prepareFillExpr(selector), returnByValue: false })
-    .catch(() => null)) as { result?: { objectId?: string } } | null;
-  const objectId = prep?.result?.objectId;
-  if (!objectId) throw new StepError("SELECTOR_NOT_FOUND");
+  const send = (m: string, p?: Record<string, unknown>) => page.cdp.send(m, p) as Promise<any>;
+  // Prepare (main world, selector only): focused, cleared, editable element or null.
+  const prep = (await send("Runtime.evaluate", { expression: prepareFillExpr(selector), returnByValue: false }).catch(
+    () => null
+  )) as { result?: { objectId?: string }; exceptionDetails?: unknown } | null;
+  if (!prep || prep.exceptionDetails) throw new StepError("SELECTOR_NOT_FOUND");
+  const mainId = prep.result?.objectId;
+  if (!mainId) throw new StepError("SELECTOR_NOT_FOUND");
+  let isoId: string | undefined;
   try {
     let res: { result?: { value?: unknown }; exceptionDetails?: unknown };
     try {
-      res = (await page.cdp.send("Runtime.callFunctionOn", {
-        objectId,
+      // Re-resolve the same node inside an isolated world of the main frame.
+      // An element outside the main frame fails resolveNode: fail closed.
+      const tree = await send("Page.getFrameTree");
+      const frameId = tree?.frameTree?.frame?.id;
+      const desc = await send("DOM.describeNode", { objectId: mainId });
+      const backendNodeId = desc?.node?.backendNodeId;
+      if (!frameId || typeof backendNodeId !== "number") throw new Error("no frame/node");
+      const world = await send("Page.createIsolatedWorld", {
+        frameId,
+        worldName: WORLD_NAME,
+        grantUniveralAccess: false,
+      });
+      const executionContextId = world?.executionContextId;
+      if (typeof executionContextId !== "number") throw new Error("no context");
+      const resolved = await send("DOM.resolveNode", { backendNodeId, executionContextId });
+      isoId = resolved?.object?.objectId;
+      if (!isoId) throw new Error("no isolated handle");
+      res = await send("Runtime.callFunctionOn", {
+        objectId: isoId,
         functionDeclaration: DELIVER_FN,
         arguments: [{ value }, { value: allowedHosts.map((h) => h.toLowerCase()) }],
         returnByValue: true,
-      })) as typeof res;
+      });
     } catch {
       throw new StepError("BROWSER_ERROR");
     }
@@ -104,7 +130,8 @@ export async function fillSelector(page: PageHandle, selector: string, value: st
     if (out === "HOST") throw new StepError("HOST_NOT_ALLOWED");
     if (out !== "OK") throw new StepError("SELECTOR_NOT_FOUND");
   } finally {
-    await page.cdp.send("Runtime.releaseObject", { objectId }).catch(() => {});
+    await send("Runtime.releaseObject", { objectId: mainId }).catch(() => {});
+    if (isoId) await send("Runtime.releaseObject", { objectId: isoId }).catch(() => {});
   }
 }
 

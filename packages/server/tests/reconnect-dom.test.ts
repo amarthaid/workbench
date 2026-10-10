@@ -45,8 +45,15 @@ describe("reconnect dom", () => {
 
   // Fake: locate -> {x,y}; prepare (returnByValue:false) -> objectId or null;
   // callFunctionOn -> `deliver` (value, or a function that may throw).
-  const fillPage = (opts: { prepare?: unknown; deliver?: unknown } = {}) =>
+  const fillPage = (opts: { prepare?: unknown; deliver?: unknown; resolveFails?: boolean } = {}) =>
     page((m, params) => {
+      if (m === "Page.getFrameTree") return { frameTree: { frame: { id: "frame-1" } } };
+      if (m === "DOM.describeNode") return { node: { backendNodeId: 7 } };
+      if (m === "Page.createIsolatedWorld") return { executionContextId: 42 };
+      if (m === "DOM.resolveNode") {
+        if (opts.resolveFails) throw new Error("Node does not belong to the frame");
+        return { object: { objectId: "iso-1" } };
+      }
       if (m === "Runtime.evaluate") {
         if (params.returnByValue === false) return { result: opts.prepare === undefined ? { objectId: "obj-1" } : opts.prepare };
         return { result: { value: { x: 1, y: 1 } } };
@@ -69,13 +76,51 @@ describe("reconnect dom", () => {
       if (m === "Runtime.evaluate") expect(params.expression).not.toContain("pw-abc");
       if (m === "Runtime.callFunctionOn") {
         expect(params.functionDeclaration).not.toContain("pw-abc");
-        expect(params.objectId).toBe("obj-1");
+        expect(params.objectId).toBe("iso-1");
         expect(params.arguments).toEqual([{ value: "pw-abc" }, { value: hosts }]);
       }
     }
     expect(sent(p)).not.toContain("Input.insertText");
     expect(sent(p)).toContain("Runtime.callFunctionOn");
-    expect(sent(p)).toContain("Runtime.releaseObject");
+    expect(calls(p).filter(([m]) => m === "Runtime.releaseObject").map(([, a]) => a.objectId).sort()).toEqual(["iso-1", "obj-1"]);
+    expect(calls(p)).toContainEqual(["Page.createIsolatedWorld", expect.objectContaining({ frameId: "frame-1", grantUniveralAccess: false })]);
+    expect(calls(p)).toContainEqual(["DOM.resolveNode", { backendNodeId: 7, executionContextId: 42 }]);
+  });
+
+  it("fillSelector fails closed when the node cannot be resolved in the isolated world", async () => {
+    const p = fillPage({ resolveFails: true });
+    const err = await fillSelector(p, "#x", "pw-abc", 300, hosts).catch((e) => e);
+    expect(err.reason).toBe("BROWSER_ERROR");
+    expect(sent(p)).not.toContain("Runtime.callFunctionOn");
+  });
+
+  it("fillSelector treats prepare exceptionDetails as SELECTOR_NOT_FOUND", async () => {
+    const p = page((m, params) =>
+      m === "Runtime.evaluate" && params.returnByValue === false
+        ? { result: { objectId: "obj-1" }, exceptionDetails: { text: "boom" } }
+        : { result: { value: { x: 1, y: 1 } } }
+    );
+    const err = await fillSelector(p, "#x", "pw-abc", 300, hosts).catch((e) => e);
+    expect(err.reason).toBe("SELECTOR_NOT_FOUND");
+    expect(sent(p)).not.toContain("Runtime.callFunctionOn");
+  });
+
+  it("DELIVER_FN matches hosts exactly (no subdomain, no suffix)", async () => {
+    const p = fillPage();
+    await fillSelector(p, "#pass", "pw-abc", 300, hosts);
+    const fn = calls(p).find(([m]) => m === "Runtime.callFunctionOn")![1].functionDeclaration as string;
+    expect(fn).not.toContain("endsWith");
+    const run = (host: string) => {
+      const el: any = { isContentEditable: false, tagName: "INPUT", focus() {}, dispatchEvent() {} };
+      const f = new Function("location", "document", "HTMLInputElement", "HTMLTextAreaElement", "Event", `return (${fn});`)(
+        { hostname: host }, { activeElement: el }, { prototype: { set value(_: string) {} } }, { prototype: {} }, class {}
+      );
+      return f.call(el, "pw-abc", hosts);
+    };
+    expect(run("app.example.com")).toBe("OK");
+    expect(run("APP.example.com")).toBe("OK");
+    expect(run("evil.app.example.com")).toBe("HOST");
+    expect(run("example.com")).toBe("HOST");
   });
 
   it("fillSelector rejects a non-editable/unfocused target (prepare null) without delivering", async () => {
