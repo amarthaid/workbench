@@ -2,6 +2,33 @@ import { getToken, storeToken, getConnectionConfig, TokenData } from "../auth/to
 import { getCookies, CookieData, isCookieExpired } from "../auth/cookie";
 import { getPluginOAuthCreds, resolveOAuthUrls } from "../auth/plugin-oauth";
 import { registry } from "./registry";
+import { matchesDead } from "../auth/reconnect/dead";
+import { reconnectSession } from "../auth/reconnect/runner";
+import { updateReconnectState } from "../auth/reconnect/state";
+
+function buildCookieHeader(data: CookieData, targetHost: string): string {
+  const nowSec = Math.floor(Date.now() / 1000);
+  return data.cookies
+    .filter((c) => !c.expires || c.expires >= nowSec)
+    .filter((c) => {
+      const cd = c.domain.replace(/^\./, "").toLowerCase();
+      return targetHost === cd || targetHost.endsWith("." + cd);
+    })
+    .map((c) => `${c.name}=${c.value}`)
+    .join("; ");
+}
+
+// A login bounce means the upstream never processed the request, so it is
+// safe to re-send, but only a body we still hold. A stream is spent.
+function isReplayableBody(body: RequestInit["body"]): boolean {
+  return (
+    body == null ||
+    typeof body === "string" ||
+    body instanceof URLSearchParams ||
+    body instanceof ArrayBuffer ||
+    ArrayBuffer.isView(body)
+  );
+}
 
 // Refresh a few seconds before the actual expiry to absorb clock skew.
 const TOKEN_EXPIRY_SKEW_SECONDS = 30;
@@ -159,18 +186,23 @@ export async function createContext(userId: string, integration: string): Promis
           );
         }
 
-        const nowSec = Math.floor(Date.now() / 1000);
-        const cookieHeader = cookieData.cookies
-          .filter((c) => !c.expires || c.expires >= nowSec)
-          .filter((c) => {
-            const cd = c.domain.replace(/^\./, "").toLowerCase();
-            return targetHost === cd || targetHost.endsWith("." + cd);
-          })
-          .map((c) => `${c.name}=${c.value}`)
-          .join("; ");
-        headers.set("Cookie", cookieHeader);
-
-        return fetch(url, { ...init, headers, redirect: "manual" });
+        const send = () => {
+          headers.set("Cookie", buildCookieHeader(cookieData!, targetHost));
+          return fetch(url, { ...init, headers, redirect: "manual" });
+        };
+        const res = await send();
+        const session = integrationConfig.auth.session;
+        if (!session || !matchesDead(res, session.dead, url)) return res;
+        if (!integrationConfig.auth.reconnect) {
+          await updateReconnectState(userId, integration, { deadAt: Date.now() });
+          return res;
+        }
+        const outcome = await reconnectSession(userId, integration);
+        if (!outcome.ok || !isReplayableBody(init?.body)) return res;
+        const fresh = await getCookies(userId, integration);
+        if (!fresh) return res;
+        cookieData = fresh;
+        return send();
       }
 
       const token = await ctx.getToken();

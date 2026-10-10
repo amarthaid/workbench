@@ -3,7 +3,7 @@ import { registry } from "../../plugins/registry";
 import { auditLogger } from "../../audit/logger";
 import { readSecretValue, touchUsed } from "../../vault/store";
 import { openTab, closeTab, getWarmSession, captureLiveCookies, pressKey, type PageHandle } from "../browser-session";
-import { storeCookies, type CookieData } from "../cookie";
+import { storeCookies, hasValidCookies, type CookieData } from "../cookie";
 import { getReconnectState, updateReconnectState, type ReconnectState } from "./state";
 import { clickSelector, fillSelector, waitForSelector, waitForUrl, currentUrl, StepError, type ReconnectReason } from "./dom";
 import { mayOwnBrowser } from "./affinity";
@@ -283,4 +283,17 @@ async function runStep(
   if ("press" in step) { assertLive(run); await pressKey(page, step.press); return; }
   if ("waitFor" in step) { await waitForSelector(page, step.waitFor, timeoutMs); return; }
   if ("waitUrl" in step) { await waitForUrl(page, step.waitUrl, timeoutMs); return; }
+}
+
+/**
+ * Connected-check for cookie integrations that also revives a session found
+ * dead earlier (e.g. overnight), so the first call of the day works instead of
+ * answering NOT_CONNECTED.
+ */
+export async function ensureCookieSession(userId: string, integration: string): Promise<boolean> {
+  if (await hasValidCookies(userId, integration)) return true;
+  const state = await getReconnectState(userId, integration);
+  if (!state.deadAt || !canAttemptReconnect(state)) return false;
+  const outcome = await reconnectSession(userId, integration);
+  return outcome.ok;
 }

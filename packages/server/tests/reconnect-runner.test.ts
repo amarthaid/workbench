@@ -90,7 +90,7 @@ import { closeTab, openTab } from "../src/auth/browser-session";
 import { touchUsed } from "../src/vault/store";
 import { getReconnectState, updateReconnectState } from "../src/auth/reconnect/state";
 import { markConnectStarted, markConnectEnded } from "../src/auth/reconnect/connect-lock";
-import { reconnectSession, canAttemptReconnect, __deps, RECONNECT_COOLDOWN_MS } from "../src/auth/reconnect/runner";
+import { reconnectSession, canAttemptReconnect, ensureCookieSession, __deps, RECONNECT_COOLDOWN_MS } from "../src/auth/reconnect/runner";
 import { runWithBrowserAffinity, mayOwnBrowser } from "../src/auth/reconnect/affinity";
 
 const { pageState, sent, live, vault } = h;
@@ -415,5 +415,13 @@ describe("affinity + cooldown helpers", () => {
     expect(canAttemptReconnect({ last: { at: now - 1000, ok: true } }, now)).toBe(true);
     expect(canAttemptReconnect({ last: { at: now - 1000, ok: false } }, now)).toBe(false);
     expect(canAttemptReconnect({ last: { at: now - RECONNECT_COOLDOWN_MS, ok: false } }, now)).toBe(true);
+  });
+});
+
+describe("ensureCookieSession", () => {
+  it("revives a dead session", async () => {
+    await updateReconnectState(U, I, { deadAt: Date.now() });
+    expect(await ensureCookieSession(U, I)).toBe(true);
+    expect((await getReconnectState(U, I)).deadAt).toBeUndefined();
   });
 });

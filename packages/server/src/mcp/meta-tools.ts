@@ -11,6 +11,7 @@ import { resolveAuthHeaders, upstreamAuthHint, redactHeaderValues } from "../cus
 import { callRemoteTool } from "../custom-apps/client";
 import { getUserById } from "../auth/users";
 import { hasValidCookies } from "../auth/cookie";
+import { ensureCookieSession } from "../auth/reconnect/runner";
 import { withSpan } from "../telemetry/tracing";
 import { toolExecutionsTotal, toolExecutionDuration } from "../telemetry/metrics";
 import { config } from "../config";
@@ -319,7 +320,7 @@ export async function executeSingle(
         integ?.auth.type === "none"
           ? true
           : integ?.auth.type === "cookie"
-            ? await hasValidCookies(userId, targetTool.integration)
+            ? await ensureCookieSession(userId, targetTool.integration)
             : !!(await getToken(userId, targetTool.integration));
 
       if (!isConnected) {
