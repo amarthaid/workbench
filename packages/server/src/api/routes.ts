@@ -24,6 +24,8 @@ import {
 } from "../auth/cookie";
 import { verifyConnectToken } from "../auth/connect-token";
 import { markConnectStarted, markConnectEnded } from "../auth/reconnect/connect-lock";
+import { getReconnectState, updateReconnectState } from "../auth/reconnect/state";
+import { listSecrets } from "../vault/store";
 import { signConnectToken } from "../auth/connect-token";
 import {
   createCustomApp,
@@ -122,6 +124,25 @@ async function authenticate(request: {
     }
   }
   return null;
+}
+
+function recipeOf(name: string) {
+  const a = registry.getIntegration(name)?.auth;
+  return a?.type === "cookie" && a.reconnect ? a.reconnect : null;
+}
+
+// Names only, never values: bindings hold vault entry names.
+async function autoReconnectStatus(userId: string, name: string) {
+  const r = recipeOf(name);
+  if (!r) return undefined;
+  const st = await getReconnectState(userId, name);
+  const bindings = st.bindings ?? {};
+  return {
+    bindings,
+    missing: (r.credentials ?? []).map((c) => c.key).filter((k) => !bindings[k]),
+    last: st.last,
+    dead: !!st.deadAt,
+  };
 }
 
 function accountDisabledUrl(): string {
@@ -382,6 +403,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
         authType: integ.auth.type,
         instance: integ.auth.type === "oauth2" ? integ.auth.instance : undefined,
         apikeyFields: integ.auth.type === "apikey" ? integ.auth.fields : undefined,
+        autoReconnect: recipeOf(integ.name) ? { credentials: recipeOf(integ.name)!.credentials ?? [] } : undefined,
         tools: registry.listToolsByIntegration(integration).map((t) => ({
           name: t.name,
           description: t.description,
@@ -867,6 +889,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
             : i.auth.type === "cookie"
               ? await hasValidCookies(user.userId, i.name)
               : !!(await getToken(user.userId, i.name)),
+        autoReconnect: i.auth.type === "cookie" ? await autoReconnectStatus(user.userId, i.name) : undefined,
       }))
     );
     const customApps = await listCustomApps(user.userId);
@@ -878,6 +901,60 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     );
     return { connections: [...connections, ...customConnections] };
   });
+
+  // Bind vault entries to a recipe's credential slots. Portal session only:
+  // which vault secret gets typed into a login form is a credential-routing
+  // decision, so an API key / OAuth bearer (the agent's credential) is refused.
+  app.put<{ Params: { integration: string }; Body: { bindings?: unknown } }>(
+    "/api/connections/:integration/reconnect",
+    async (request, reply) => {
+      const header = request.headers.authorization ?? "";
+      let userId: string | null = null;
+      if (header.startsWith("Bearer ")) {
+        try {
+          userId = (await verifySession(header.slice(7))).userId || null;
+        } catch {
+          /* not a portal session */
+        }
+      }
+      if (!userId) {
+        if (await authenticate(request)) {
+          return reply.status(403).send({
+            error: "PORTAL_SESSION_REQUIRED",
+            message: "Reconnect bindings are changed from the portal only.",
+          });
+        }
+        return reply.status(401).send({ error: "Unauthorized" });
+      }
+      const { integration } = request.params;
+      const r = recipeOf(integration);
+      if (!r) return reply.status(404).send({ error: "Integration has no auto-reconnect recipe" });
+      const raw = request.body?.bindings;
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        return reply.status(400).send({ error: "bindings must be an object" });
+      }
+      const declared = new Set((r.credentials ?? []).map((c) => c.key));
+      const owned = new Set((await listSecrets(userId)).map((s) => s.name));
+      const current = (await getReconnectState(userId, integration)).bindings ?? {};
+      const next: Record<string, string> = { ...current };
+      for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+        if (!declared.has(k)) return reply.status(400).send({ error: `Unknown credential: ${k}` });
+        if (v === "") {
+          delete next[k];
+          continue;
+        }
+        if (typeof v !== "string" || !owned.has(v)) {
+          return reply.status(400).send({ error: `No vault entry named ${String(v)}` });
+        }
+        next[k] = v;
+      }
+      if (!(await getCookies(userId, integration))) {
+        return reply.status(409).send({ error: "Connect the integration first" });
+      }
+      await updateReconnectState(userId, integration, { bindings: next });
+      return { success: true };
+    }
+  );
 
   // Disconnect: drop stored creds (OAuth tokens or cookies) for one integration.
   app.delete<{ Params: { integration: string } }>(
