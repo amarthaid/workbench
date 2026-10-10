@@ -71,7 +71,7 @@ export const configSchema = z.object({
     .enum(["true", "false", "1", "0"])
     .default("false")
     .transform((v) => v === "true" || v === "1"),
-  // Loopback ports agent tabs MAY open, comma-separated (e.g. "5173,8080"), so
+  // Loopback ports agent tabs MAY open, comma-separated (e.g. "8080"), so
   // a local developer can point the agent at a dev server. Honoured in every
   // environment. Never opens a live chromium debug port or this server's own
   // port, even when listed (src/auth/browser-url.ts).

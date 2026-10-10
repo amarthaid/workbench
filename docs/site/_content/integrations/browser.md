@@ -28,7 +28,9 @@ The cookie-auth capture flow uses that same browser. The two **share** it rather
 
 **No loopback.** Agent tabs cannot load `localhost`, `127.0.0.0/8`, `0.0.0.0`, `[::1]` or a hostname that resolves to one of them, nor the server's own internal host. Every user's Chromium listens for remote debugging on a loopback port. Every HTTP(S) request (navigations, redirect hops, popups, frames, subresources, dedicated, shared and service workers) is checked inside the browser before it is sent, and a blocked one fails as `net::ERR_BLOCKED_BY_CLIENT`. A hostname that does not resolve is refused too. `browser_navigate` refuses a loopback URL up front.
 
-**Local development.** Set `BROWSER_LOOPBACK_ALLOW_PORTS` (for example `5173,8080`) to let the agent open a dev server on those loopback ports. A live Chromium debugging port and the server's own `PORT` stay refused even when listed.
+**Local development.** Set `BROWSER_LOOPBACK_ALLOW_PORTS` (for example `8080`) to let the agent open a dev server on those loopback ports. A live Chromium debugging port and the server's own `PORT` stay refused even when listed. Never list a port that proxies to the workbench server, such as the portal's Vite dev server on `5173`: the agent's tab would reach the server through it.
+
+**Hostnames.** The guard resolves names itself and is at least as strict as Chromium: a name listed in `/etc/hosts` is refused (unless its port is allow-listed), a name that resolves to loopback over A or AAAA is refused, a single-label name is refused, and a name that does not resolve is refused. Short names that only resolve through `resolv.conf` search domains, such as Kubernetes service names like `my-svc` or `my-svc.my-ns`, therefore fail closed. Use the fully qualified name (`my-svc.my-ns.svc.cluster.local`).
 
 **WebSockets are not intercepted.** Chromium's request interception never pauses a WebSocket handshake, and `Network.setBlockedURLs` did not stop one either. So a page can still open a plain WebSocket to a loopback service. Chromium's own DevTools sockets are not reachable this way: Chromium accepts them only from an origin no page can have (`--remote-allow-origins`).
 

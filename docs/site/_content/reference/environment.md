@@ -91,7 +91,7 @@ not portal-side.
 | `BROWSER_PROFILE_REAP_INTERVAL_SECONDS` | positive integer | `3600` | no | Disk-reaper interval. It also runs once immediately at boot |
 | `BROWSER_DISK_CACHE_MB` | non-negative integer | `32` | no | Becomes Chromium's `--disk-cache-size` |
 | `BROWSER_TAB_LIMIT` | positive integer | `8` | no | Maximum tabs one user's browser session may hold at once, including the default tab. `browser_start` past it returns `BROWSER_TAB_LIMIT` |
-| `BROWSER_LOOPBACK_ALLOW_PORTS` | comma-separated ports | empty | no | Loopback ports agent browser tabs may open (a local dev server, for example `5173`). Honoured in every environment. A live Chromium debugging port and the server's own `PORT` are refused even when listed |
+| `BROWSER_LOOPBACK_ALLOW_PORTS` | comma-separated ports | empty | no | Loopback ports agent browser tabs may open (a local dev server, for example `8080`). Honoured in every environment. A live Chromium debugging port and the server's own `PORT` are refused even when listed, and no Chromium is ever started on a listed port. **Never list a port that proxies to the workbench server** (the portal's Vite dev server on `5173` does): the agent's tab would reach the server through it |
 | `BROWSER_ALLOW_LOOPBACK` | `true` / `false` | `false` | no | **Test only.** Lets agent browser tabs load loopback URLs (chromium e2e fixtures on 127.0.0.1). Agent tabs otherwise fail every request to loopback, any port, because every user's chromium debugging endpoint listens there. Ignored when `NODE_ENV=production`; never set it in a deployment |
 
 > [!WARNING] `BROWSER_PROFILE_TTL_DAYS` deletes credentials

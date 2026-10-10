@@ -187,6 +187,12 @@ guide: Auto-reconnect in `plugins/auth-modes`.
   DevTools HTTP handler likely rejects a non-IP, non-`localhost` Host header,
   which would leave the debug endpoints out of reach through a rebound name
   (unverified).
+- The recipe tab and its popups are unguarded, so the third-party login pages
+  they load can reach loopback. `/json/close` needs a target id, which those
+  pages cannot read (`/json/list` is a cross-origin read they cannot make).
+- Kubernetes short service names (and any name that resolves only through
+  `resolv.conf` search domains) fail closed for agent tabs: the name itself
+  must resolve. Use FQDNs.
 - WebSockets: Fetch never pauses a WebSocket handshake and `Network.setBlockedURLs`
   did not block one, so an agent page can open a plain WebSocket to a loopback
   service (pinned by an e2e "residual" case). DevTools sockets stay refused by
