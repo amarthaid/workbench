@@ -112,6 +112,14 @@ describe("stripInvalidRecipe", () => {
     expect(m.auth.loginUrl).toBe("https://app.example.com/l");
   });
 
+  it.each([["x"], [[null]], [[{ fill: "#p" }]]])("does not throw on malformed steps %j", (steps) => {
+    const m = { name: "acme", auth: { type: "cookie", loginUrl: "https://app.example.com/l", targetDomain: "app.example.com", session: { dead: { status: [401] } }, reconnect: { steps } } } as any;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(() => stripInvalidRecipe(m)).not.toThrow();
+    warn.mockRestore();
+    expect(m.auth.reconnect).toBeUndefined();
+  });
+
   it("leaves a valid recipe alone", () => {
     const m = { name: "acme", auth: { type: "cookie", loginUrl: "https://app.example.com/l", targetDomain: "app.example.com", session: { dead: { status: [401] } }, reconnect: { steps: [{ goto: "loginUrl" }] } } } as any;
     stripInvalidRecipe(m);

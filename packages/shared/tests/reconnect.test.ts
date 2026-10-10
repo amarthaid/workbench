@@ -94,6 +94,38 @@ describe("validateCookieRecipe", () => {
   });
 });
 
+describe("validateCookieRecipe url and malformed input", () => {
+  const withStep = (step: unknown) =>
+    ({ ...base, session: { dead: { status: [401] } }, reconnect: { steps: [step] } }) as unknown as CookieConfig;
+
+  it.each([
+    ["protocol-relative goto", { goto: "//evil.example.org/login" }],
+    ["backslash goto", { goto: "/\\evil.example.org" }],
+    ["javascript: goto", { goto: "javascript:alert(1)" }],
+    ["file: goto", { goto: "file:///etc/passwd" }],
+    ["data: goto", { goto: "data:text/html,x" }],
+    ["malformed absolute goto", { goto: "http://" }],
+    ["bare host/path waitUrl", { waitUrl: "app.example.com/x" }],
+    ["protocol-relative waitUrl", { waitUrl: "//evil.example.org/" }],
+    ["loginUrl as waitUrl", { waitUrl: "loginUrl" }],
+  ])("rejects %s", (_n, step) => {
+    expect(validateCookieRecipe(withStep(step)).length).toBeGreaterThan(0);
+  });
+
+  it("accepts a single-slash path and an allowed absolute URL", () => {
+    expect(validateCookieRecipe(withStep({ goto: "/login" }))).toEqual([]);
+    expect(validateCookieRecipe(withStep({ waitUrl: "https://app.example.com/x" }))).toEqual([]);
+  });
+
+  it("returns errors instead of throwing on malformed input", () => {
+    const run = (r: unknown) =>
+      validateCookieRecipe({ ...base, session: { dead: { status: [401] } }, reconnect: r } as unknown as CookieConfig);
+    expect(run({ steps: "x" }).join()).toMatch(/steps/);
+    expect(run({ steps: [null] }).length).toBeGreaterThan(0);
+    expect(run({ steps: [{ fill: "#p" }] }).length).toBeGreaterThan(0);
+  });
+});
+
 describe("credentialRefs", () => {
   it("lists referenced keys", () => {
     expect(credentialRefs("{{cred:a}}-{{cred:b_2}}")).toEqual(["a", "b_2"]);

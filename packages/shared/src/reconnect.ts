@@ -31,7 +31,8 @@ export function validateCookieRecipe(auth: CookieConfig): string[] {
   const r = auth.reconnect;
   if (!r) return errs;
   if (!auth.session?.dead) errs.push("reconnect requires session.dead");
-  if (!Array.isArray(r.steps) || r.steps.length === 0) errs.push("reconnect.steps must be non-empty");
+  const steps: unknown[] = Array.isArray(r.steps) ? r.steps : [];
+  if (steps.length === 0) errs.push("reconnect.steps must be a non-empty array");
   if (r.timeoutMs !== undefined && (r.timeoutMs <= 0 || r.timeoutMs > RECONNECT_MAX_TIMEOUT_MS)) {
     errs.push(`reconnect.timeoutMs must be in (0, ${RECONNECT_MAX_TIMEOUT_MS}]`);
   }
@@ -39,20 +40,41 @@ export function validateCookieRecipe(auth: CookieConfig): string[] {
   const allowed = [auth.targetDomain, ...(auth.cookieDomains ?? []), ...(r.allowHosts ?? [])]
     .map((d) => d.replace(/^\./, "").toLowerCase());
 
-  (r.steps ?? []).forEach((step, i) => {
+  steps.forEach((raw, i) => {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      errs.push(`step ${i}: must be an object`);
+      return;
+    }
+    const step = raw as ReconnectStep;
     for (const s of nonFillStrings(step)) {
       if (credentialRefs(s).length) errs.push(`step ${i}: {{cred:…}} is only allowed in fill.value`);
     }
     if ("fill" in step) {
-      for (const key of credentialRefs(step.value)) {
-        if (!declared.has(key)) errs.push(`step ${i}: undeclared credential "${key}"`);
+      if (typeof step.value !== "string") {
+        errs.push(`step ${i}: fill.value must be a string`);
+      } else {
+        for (const key of credentialRefs(step.value)) {
+          if (!declared.has(key)) errs.push(`step ${i}: undeclared credential "${key}"`);
+        }
       }
     }
-    const url = "goto" in step ? step.goto : "waitUrl" in step ? step.waitUrl : null;
-    if (url && url !== "loginUrl" && /^https?:\/\//i.test(url)) {
-      const host = hostOf(url);
-      if (!host || !hostAllowed(host, allowed)) {
-        errs.push(`step ${i}: host ${host ?? url} not in targetDomain/cookieDomains/allowHosts`);
+    const isGoto = "goto" in step;
+    const url = isGoto ? step.goto : "waitUrl" in step ? step.waitUrl : undefined;
+    if (isGoto || "waitUrl" in step) {
+      const kind = isGoto ? "goto" : "waitUrl";
+      if (typeof url !== "string") {
+        errs.push(`step ${i}: ${kind} must be a string`);
+      } else if (isGoto && url === "loginUrl") {
+        // allowed literal
+      } else if (/^\/(?![/\\])/.test(url)) {
+        // single-slash path on the current origin
+      } else if (/^https?:\/\//i.test(url)) {
+        const host = hostOf(url);
+        if (!host || !hostAllowed(host, allowed)) {
+          errs.push(`step ${i}: host ${host ?? url} not in targetDomain/cookieDomains/allowHosts`);
+        }
+      } else {
+        errs.push(`step ${i}: ${kind} must be ${isGoto ? '"loginUrl", ' : ""}a /path, or an absolute http(s) URL on an allowed host`);
       }
     }
   });
