@@ -141,9 +141,17 @@ guide: Auto-reconnect in `plugins/auth-modes`.
     hard bound on top, and at most 512 paused requests per chromium await a
     verdict (more are failed at once). Lookups go through c-ares
     (`dns.Resolver`), not `dns.lookup`: getaddrinfo runs on libuv's 4-thread
-    pool, so a handful of hung lookups would stall every session. c-ares does
-    not read `/etc/hosts`, so a hosts-file-only name does not resolve and is
-    refused.
+    pool, so a handful of hung lookups would stall every session.
+  - *The guard must be at least as strict as chromium's resolver.* c-ares
+    skips `/etc/hosts` and search domains, which chromium honours, so a name
+    the hosts file maps to loopback (public DNS saying otherwise) was
+    continued and chromium then connected to loopback. Now: any name in
+    `/etc/hosts` (re-read every 30 s) is refused unless its port is
+    allow-listed; when a name has fewer dots than `ndots`, every search-domain
+    expansion is resolved too and loopback in any of them fails; A and AAAA
+    are both asked, loopback in either fails, and any error but NODATA on
+    either fails; single-label names fail; trailing dots are stripped before
+    every check. Verdicts are cached under the full candidate list.
   - *The recipe window has its own timestamp.* With the cooldown after the fast
     path, a fast-path success overwrote the recipe's `last`, so recipe success,
     death, fast-path success, death let the recipe re-type the password at

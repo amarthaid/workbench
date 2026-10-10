@@ -27,11 +27,15 @@ function fakeCdp() {
 }
 const flush = () => new Promise((r) => setTimeout(r, 10));
 
-const saved = { allow: config.BROWSER_ALLOW_LOOPBACK, internal: config.INTERNAL_MCP_URL, resolve: __netGuard.resolve };
+const saved = { allow: config.BROWSER_ALLOW_LOOPBACK, internal: config.INTERNAL_MCP_URL, resolve: __netGuard.resolve, query: __netGuard.query };
 beforeEach(() => {
   config.BROWSER_ALLOW_LOOPBACK = false;
   config.INTERNAL_MCP_URL = undefined;
   __netGuard.cache.clear();
+  // Deterministic system files: no hosts entries, no search domains.
+  __netGuard.hostsText = "";
+  __netGuard.resolvConfText = "";
+  __netGuard.query = saved.query;
   __netGuard.resolve = async (host: string) => {
     if (host === "localtest.me" || host === "rebind.example.com") return ["127.0.0.1"];
     if (host === "v6loop.example.com") return ["::1"];
@@ -42,6 +46,9 @@ afterEach(() => {
   config.BROWSER_ALLOW_LOOPBACK = saved.allow;
   config.INTERNAL_MCP_URL = saved.internal;
   __netGuard.resolve = saved.resolve;
+  __netGuard.query = saved.query;
+  __netGuard.hostsText = undefined;
+  __netGuard.resolvConfText = undefined;
 });
 
 describe("isBlockedAgentRequest", () => {
@@ -417,5 +424,73 @@ describe("DNS limits are per session and every wait is bounded", () => {
     f.emit("Fetch.requestPaused", { requestId: "RH", request: { url: "https://hang.example.com/" } }, "S1");
     await new Promise((r) => setTimeout(r, 600));
     expect(f.frames).toContainEqual({ method: "Fetch.failRequest", params: { requestId: "RH", errorReason: "BlockedByClient" }, sessionId: "S1" });
+  });
+});
+
+describe("the guard is at least as strict as chromium's own resolver", () => {
+  // Fresh resolver per case: no cache carried over.
+  const blocked = (url: string) => isBlockedAgentRequest(url, createDnsResolver());
+  const dns = (answers: Record<string, { 4?: string[] | "ENODATA" | "ETIMEOUT"; 6?: string[] | "ENODATA" | "ETIMEOUT" }>) => {
+    __netGuard.resolve = saved.resolve; // the real A + AAAA logic, over a fake query
+    __netGuard.query = async (host: string, family: 4 | 6) => {
+      const a = answers[host]?.[family];
+      if (a === undefined) throw Object.assign(new Error("nx"), { code: "ENOTFOUND" });
+      if (typeof a === "string") throw Object.assign(new Error(a), { code: a });
+      return a;
+    };
+  };
+
+  it("a name /etc/hosts maps to loopback fails, though public DNS says otherwise", async () => {
+    dns({ "devbox.example.com": { 4: ["93.184.216.34"], 6: "ENODATA" } });
+    expect(await blocked("http://devbox.example.com/")).toBe(false);
+    __netGuard.hostsText = "# comment\n127.0.0.1 localhost\n127.0.1.1   devbox.example.com devbox  # alias\n";
+    expect(await blocked("http://devbox.example.com/")).toBe(true);
+    expect(await blocked("http://DEVBOX.example.com./")).toBe(true);
+  });
+
+  it("any name that appears in /etc/hosts fails closed, whatever it maps to", async () => {
+    dns({ "pod-7.example.com": { 4: ["93.184.216.34"], 6: "ENODATA" } });
+    __netGuard.hostsText = "10.1.2.3 pod-7.example.com\n";
+    expect(await blocked("http://pod-7.example.com/")).toBe(true);
+  });
+
+  it("an AAAA-only ::1 answer fails", async () => {
+    dns({ "v6only.example.com": { 4: "ENODATA", 6: ["::1"] } });
+    expect(await blocked("http://v6only.example.com/")).toBe(true);
+  });
+
+  it("a public A with a loopback AAAA fails", async () => {
+    dns({ "mixed.example.com": { 4: ["93.184.216.34"], 6: ["::1"] } });
+    expect(await blocked("http://mixed.example.com/")).toBe(true);
+    dns({ "mixed4.example.com": { 4: ["93.184.216.34", "127.0.0.1"], 6: "ENODATA" } });
+    expect(await blocked("http://mixed4.example.com/")).toBe(true);
+  });
+
+  it("an error on either family fails; NODATA for one family is just no records", async () => {
+    dns({ "ipv4only.example.com": { 4: ["93.184.216.34"], 6: "ENODATA" } });
+    expect(await blocked("http://ipv4only.example.com/")).toBe(false);
+    dns({ "half.example.com": { 4: ["93.184.216.34"], 6: "ETIMEOUT" } });
+    expect(await blocked("http://half.example.com/")).toBe(true);
+  });
+
+  it("a single-label name fails", async () => {
+    dns({ intranet: { 4: ["10.0.0.9"], 6: "ENODATA" } });
+    expect(await blocked("http://intranet/")).toBe(true);
+    expect(await blocked("http://intranet./")).toBe(true);
+  });
+
+  it("a trailing-dot name is normalised before every check", async () => {
+    dns({ "public.example.com": { 4: ["93.184.216.34"], 6: "ENODATA" }, "loop.example.com": { 4: ["127.0.0.1"], 6: "ENODATA" } });
+    expect(await blocked("http://public.example.com./")).toBe(false);
+    expect(await blocked("http://loop.example.com./")).toBe(true);
+    expect(await blocked("http://localhost./")).toBe(true);
+  });
+
+  it("search-domain expansions (dots < ndots) are checked too", async () => {
+    __netGuard.resolvConfText = "search corp.example.net\noptions ndots:5\n";
+    dns({ "app.dev": { 4: ["93.184.216.34"], 6: "ENODATA" }, "app.dev.corp.example.net": { 4: ["127.0.0.1"], 6: "ENODATA" } });
+    expect(await blocked("http://app.dev/")).toBe(true);
+    __netGuard.resolvConfText = "search corp.example.net\n"; // ndots 1: absolute first, no expansion needed
+    expect(await blocked("http://app.dev/")).toBe(false);
   });
 });

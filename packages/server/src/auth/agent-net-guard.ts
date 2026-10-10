@@ -23,6 +23,7 @@
 // slip through between the two lookups.
 
 import { Resolver } from "node:dns/promises";
+import { readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import { config } from "../config";
 import { effectivePort, isAllowedLoopbackPort, isInternalHost, isLoopbackAddress, isLoopbackHost } from "./browser-url";
@@ -47,14 +48,29 @@ export const __netGuard = {
   // c-ares queries, not dns.lookup: getaddrinfo runs on libuv's small shared
   // threadpool (4 threads by default), so a few hung lookups from one page
   // would stall every session's lookups (and fs work). c-ares is asynchronous
-  // and needs no thread. It does not read /etc/hosts: a name only the hosts
-  // file knows does not resolve here and is therefore refused (fail closed).
+  // and needs no thread. It does not read /etc/hosts or apply search domains
+  // the way chromium's resolver does; both are handled in the resolver below.
+  //
+  // A and AAAA are both asked. NODATA for one family is "no records"; any
+  // other error on either family throws, so the request is failed: chromium
+  // might get an answer the guard never saw.
   async resolve(host: string): Promise<string[]> {
-    const [v4, v6] = await Promise.allSettled([dnsResolver.resolve4(host), dnsResolver.resolve6(host)]);
-    const addrs = [...(v4.status === "fulfilled" ? v4.value : []), ...(v6.status === "fulfilled" ? v6.value : [])];
+    const one = (f: 4 | 6) =>
+      __netGuard.query(host, f).catch((e: { code?: string }) => {
+        if (e?.code === "ENODATA") return [] as string[];
+        throw e;
+      });
+    const [v4, v6] = await Promise.all([one(4), one(6)]);
+    const addrs = [...v4, ...v6];
     if (!addrs.length) throw new Error("unresolved");
     return addrs;
   },
+  query: (h: string, f: 4 | 6): Promise<string[]> => (f === 4 ? dnsResolver.resolve4(h) : dnsResolver.resolve6(h)),
+  /** Overrides for /etc/hosts and /etc/resolv.conf content (tests). */
+  hostsText: undefined as string | undefined,
+  resolvConfText: undefined as string | undefined,
+  hostsPath: "/etc/hosts",
+  resolvConfPath: "/etc/resolv.conf",
   /** Successful answers only (shared: real DNS data). Failures are cached per resolver. */
   cache: new Map<string, { at: number; result: Exclude<Resolved, "fail"> }>(),
   /** Overall bound for one request's decision: queue + lookup. Past it the request is failed. */
@@ -67,6 +83,57 @@ export const __netGuard = {
 /** The test-only opt-out. Never honoured in production. */
 function loopbackAllowed(): boolean {
   return config.BROWSER_ALLOW_LOOPBACK && process.env.NODE_ENV !== "production";
+}
+
+const SYSTEM_FILES_TTL_MS = 30_000;
+let sysCache: { at: number; hostsText?: string; resolvText?: string; hosts: Set<string>; search: string[]; ndots: number } | undefined;
+
+function readText(override: string | undefined, path: string): string {
+  if (override !== undefined) return override;
+  try { return readFileSync(path, "utf8"); } catch { return ""; }
+}
+
+/**
+ * What chromium's resolver also consults: every name in /etc/hosts, and the
+ * search list + ndots from /etc/resolv.conf. Re-read on a short TTL.
+ */
+function systemFiles(): { hosts: Set<string>; search: string[]; ndots: number } {
+  const now = Date.now();
+  if (sysCache && now - sysCache.at < SYSTEM_FILES_TTL_MS
+    && sysCache.hostsText === __netGuard.hostsText && sysCache.resolvText === __netGuard.resolvConfText) return sysCache;
+  const hostsText = readText(__netGuard.hostsText, __netGuard.hostsPath);
+  const hosts = new Set<string>();
+  for (const line of hostsText.split("\n")) {
+    const fields = line.replace(/#.*/, "").trim().split(/\s+/).filter(Boolean);
+    for (const name of fields.slice(1)) hosts.add(normaliseHost(name));
+  }
+  let search: string[] = [];
+  let ndots = 1;
+  for (const line of readText(__netGuard.resolvConfText, __netGuard.resolvConfPath).split("\n")) {
+    const f = line.replace(/[#;].*/, "").trim().split(/\s+/);
+    if (f[0] === "search" || f[0] === "domain") search = f.slice(1).map(normaliseHost).filter(Boolean).slice(0, 6);
+    if (f[0] === "options") for (const o of f.slice(1)) {
+      const m = /^ndots:(\d+)$/.exec(o);
+      if (m) ndots = Math.min(15, Number(m[1]));
+    }
+  }
+  sysCache = { at: now, hostsText: __netGuard.hostsText, resolvText: __netGuard.resolvConfText, hosts, search, ndots };
+  return sysCache;
+}
+
+/** Lowercase, no trailing dots. */
+function normaliseHost(h: string): string {
+  return h.toLowerCase().replace(/\.+$/, "");
+}
+
+/**
+ * Names chromium may actually query for `host`: the name itself and, when it
+ * has fewer dots than ndots, each search-domain expansion.
+ */
+function candidatesFor(host: string): string[] {
+  const { search, ndots } = systemFiles();
+  const dots = (host.match(/\./g) ?? []).length;
+  return dots < ndots ? [host, ...search.map((d) => `${host}.${d}`)] : [host];
 }
 
 /**
@@ -123,9 +190,30 @@ export function createDnsResolver(): DnsResolver {
   const lookupOnce = async (host: string, deadline: number): Promise<Resolved> => {
     if (!(await acquire(deadline))) return "fail";
     try {
-      const addrs = await bounded(__netGuard.resolve(host), deadline);
-      if (!addrs || !addrs.length) return "fail";
-      return addrs.some(isLoopbackAddress) ? "loopback" : "public";
+      // Every name chromium might use for `host`. The name itself must resolve
+      // cleanly; an expansion that does not exist is skipped (NXDOMAIN /
+      // NODATA), but any other error on it fails. Loopback anywhere fails.
+      const [self, ...expansions] = candidatesFor(host);
+      const results = await bounded(
+        Promise.all([
+          __netGuard.resolve(self).then((a) => ({ ok: true as const, a }), () => ({ ok: false as const, a: [] as string[] })),
+          ...expansions.map((c) =>
+            __netGuard.resolve(c).then(
+              (a) => ({ ok: true as const, a }),
+              (e: { code?: string; message?: string }) =>
+                e?.code === "ENOTFOUND" || e?.message === "unresolved"
+                  ? { ok: true as const, a: [] as string[] }
+                  : { ok: false as const, a: [] as string[] }
+            )
+          ),
+        ]),
+        deadline
+      );
+      if (!results) return "fail";
+      if (results.some((r) => !r.ok)) return "fail";
+      const all = results.flatMap((r) => r.a);
+      if (!all.length) return "fail";
+      return all.some(isLoopbackAddress) ? "loopback" : "public";
     } catch {
       return "fail"; // NXDOMAIN, SERVFAIL: fail closed
     } finally {
@@ -138,25 +226,28 @@ export function createDnsResolver(): DnsResolver {
   return {
     async resolve(host: string, deadline: number): Promise<Resolved> {
       const now = Date.now();
-      const hit = __netGuard.cache.get(host);
+      // The verdict covers every name chromium may query (search expansions), so
+      // the cache key does too: a resolv.conf change cannot reuse a stale verdict.
+      const key = candidatesFor(host).join(",");
+      const hit = __netGuard.cache.get(key);
       if (hit && now - hit.at < DNS_CACHE_MS) return hit.result;
-      const neg = negative.get(host);
+      const neg = negative.get(key);
       if (neg !== undefined && neg > now) return "fail";
-      let p = inFlight.get(host);
+      let p = inFlight.get(key);
       if (!p) {
         p = lookupOnce(host, now + __netGuard.timeoutMs)
           .then((result) => {
             if (result === "fail") {
               if (negative.size >= DNS_CACHE_MAX) negative.clear();
-              negative.set(host, Date.now() + DNS_NEGATIVE_CACHE_MS);
+              negative.set(key, Date.now() + DNS_NEGATIVE_CACHE_MS);
             } else {
               if (__netGuard.cache.size >= DNS_CACHE_MAX) __netGuard.cache.clear();
-              __netGuard.cache.set(host, { at: Date.now(), result });
+              __netGuard.cache.set(key, { at: Date.now(), result });
             }
             return result;
           })
-          .finally(() => inFlight.delete(host));
-        inFlight.set(host, p);
+          .finally(() => inFlight.delete(key));
+        inFlight.set(key, p);
       }
       // Waiting on someone else's lookup is bounded by this request's deadline.
       return (await bounded(p, deadline)) ?? "fail";
@@ -193,7 +284,7 @@ export async function isBlockedAgentRequest(rawUrl: unknown, resolver: DnsResolv
   if (u.protocol === "data:" || u.protocol === "blob:" || u.protocol === "about:") return false;
   if (!["http:", "https:", "ws:", "wss:"].includes(u.protocol)) return true;
   const host = u.hostname.toLowerCase();
-  const bare = host.startsWith("[") ? host.slice(1, -1) : host.replace(/\.$/, "");
+  const bare = host.startsWith("[") ? host.slice(1, -1) : normaliseHost(host);
   if (isInternalHost(host) || isInternalHost(bare)) return true;
   const port = effectivePort(u);
   // A loopback target is refused unless its port is allow-listed; a chromium
@@ -201,6 +292,14 @@ export async function isBlockedAgentRequest(rawUrl: unknown, resolver: DnsResolv
   const loopbackVerdict = () => !(isAllowedLoopbackPort(port) || loopbackAllowed());
   if (isLoopbackHost(host)) return loopbackVerdict();
   if (isIP(bare)) return false; // a literal that is not loopback
+  // Chromium's resolver reads /etc/hosts first; c-ares here does not. Any
+  // name the hosts file knows (as itself or a search expansion) is refused
+  // unless its port is allow-listed, whatever public DNS says.
+  const { hosts } = systemFiles();
+  if (candidatesFor(bare).some((c) => hosts.has(c))) return loopbackVerdict();
+  // A single-label name only means something through search domains or the
+  // hosts file: refused.
+  if (!bare.includes(".")) return true;
   const r = await resolver.resolve(bare, Date.now() + __netGuard.timeoutMs);
   if (r === "fail") return true;
   return r === "loopback" ? loopbackVerdict() : false;
