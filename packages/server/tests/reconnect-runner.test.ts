@@ -513,6 +513,35 @@ describe("the cooldown cannot be dodged", () => {
     expect(navigations()).toHaveLength(0);
   });
 
+  it("a fast-path success never shortens the recipe's window", async () => {
+    expect(await reconnectSession(U, I)).toEqual({ ok: true }); // 1. recipe success
+    // 2-3. death, the profile still has a live session: fast path recovers
+    live.cookies = [goodCookie];
+    probeStatus = 200;
+    expect(await reconnectSession(U, I)).toEqual({ ok: true });
+    // 4. death again, and this time the profile has nothing
+    live.cookies = [];
+    probeStatus = 401;
+    sent.length = 0;
+    // 5. the recipe must not run again inside its window
+    expect(await reconnectSession(U, I)).toMatchObject({ ok: false, reason: "COOLDOWN" });
+    expect(navigations()).toHaveLength(0);
+    expect(deliveries()).toHaveLength(0);
+  });
+
+  it("... nor after the row is deleted and re-imported in between", async () => {
+    expect(await reconnectSession(U, I)).toEqual({ ok: true });
+    live.cookies = [goodCookie];
+    probeStatus = 200;
+    expect(await reconnectSession(U, I)).toEqual({ ok: true });
+    await deleteAndImport();
+    live.cookies = [];
+    probeStatus = 401;
+    sent.length = 0;
+    expect(await reconnectSession(U, I)).toMatchObject({ ok: false, reason: "COOLDOWN" });
+    expect(navigations()).toHaveLength(0);
+  });
+
   it("a fast-path success does not hold the recipe", async () => {
     live.cookies = [goodCookie];
     probeStatus = 200;
@@ -542,8 +571,11 @@ describe("affinity + cooldown helpers", () => {
 
   it("canAttemptReconnect: a recipe success holds too; a later portal clear lifts either", () => {
     const now = 1_000_000_000;
-    expect(canAttemptReconnect({ last: { at: now - 1000, ok: true, recipe: true } }, now)).toBe(false);
-    expect(canAttemptReconnect({ last: { at: now - RECONNECT_COOLDOWN_MS, ok: true, recipe: true } }, now)).toBe(true);
+    expect(canAttemptReconnect({ recipeAt: now - 1000 }, now)).toBe(false);
+    expect(canAttemptReconnect({ recipeAt: now - RECONNECT_COOLDOWN_MS }, now)).toBe(true);
+    // a later fast-path success does not lift it; a later portal clear does
+    expect(canAttemptReconnect({ recipeAt: now - 1000, last: { at: now - 10, ok: true } }, now)).toBe(false);
+    expect(canAttemptReconnect({ recipeAt: now - 1000, clearedAt: now - 10 }, now)).toBe(true);
     expect(canAttemptReconnect({ last: { at: now - 1000, ok: false }, clearedAt: now - 500 }, now)).toBe(true);
     expect(canAttemptReconnect({ last: { at: now - 1000, ok: false }, clearedAt: now - 2000 }, now)).toBe(false);
   });
@@ -573,7 +605,7 @@ describe("ensureCookieSession", () => {
 
   it("inside the cooldown, a session the profile still holds is recovered without the recipe", async () => {
     await storeCookies(U, I, { domain: "app.example.com", cookies: [{ ...goodCookie, value: "tok-old", expires: 1 }], capturedAt: 1 });
-    await updateReconnectState(U, I, { last: { at: Date.now(), ok: true, recipe: true } });
+    await updateReconnectState(U, I, { recipeAt: Date.now(), last: { at: Date.now(), ok: true } });
     live.cookies = [goodCookie];
     probeStatus = 200;
     expect(await ensureCookieSession(U, I)).toBe(true);

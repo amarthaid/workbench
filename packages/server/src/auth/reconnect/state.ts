@@ -9,8 +9,13 @@ export interface ReconnectState {
   bindings?: Record<string, string>;
   /** epoch ms when the session was found dead and not recovered */
   deadAt?: number;
-  /** `recipe`: the success came from running the recipe (it typed credentials), not the fast path. */
-  last?: { at: number; ok: boolean; error?: string; recipe?: boolean };
+  last?: { at: number; ok: boolean; error?: string };
+  /**
+   * epoch ms of the last recipe run (credentials may have been typed),
+   * whatever its outcome. Holds the cooldown on its own: a later fast-path
+   * success writes `last`, never this, so it cannot shorten the window.
+   */
+  recipeAt?: number;
   /**
    * epoch ms of the last portal-session clear (a human reconnected by hand or
    * changed the bindings). Recipe runs before it no longer hold a cooldown.

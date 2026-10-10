@@ -31,17 +31,18 @@ export const __deps = {
 };
 
 /**
- * False inside the cooldown that follows a recipe run that failed, or that
- * succeeded but is being asked to run again (its session died within the
- * window, so the "success" predicted nothing). A fast-path success holds
- * nothing: it typed no credential. A portal-session clear after the run lifts it.
+ * False inside the cooldown that follows (a) any recipe run, whatever its
+ * outcome (`recipeAt`; a success whose session dies within the window
+ * predicted nothing), or (b) a failed attempt (`last`). A fast-path success
+ * holds nothing (it typed no credential) and cannot shorten (a): it never
+ * writes `recipeAt`. Only a portal-session clear after the run lifts either.
  */
 export function canAttemptReconnect(state: ReconnectState, now = Date.now()): boolean {
-  const last = state.last;
-  if (!last) return true;
-  if (state.clearedAt !== undefined && state.clearedAt >= last.at) return true;
-  if (now - last.at >= RECONNECT_COOLDOWN_MS) return true;
-  return last.ok && !last.recipe;
+  const held = (t: number | undefined) =>
+    t !== undefined && now - t < RECONNECT_COOLDOWN_MS && !(state.clearedAt !== undefined && state.clearedAt >= t);
+  if (held(state.recipeAt)) return false;
+  if (state.last && !state.last.ok && held(state.last.at)) return false;
+  return true;
 }
 
 const locks = new Map<string, Promise<ReconnectOutcome>>();
@@ -55,21 +56,28 @@ const locks = new Map<string, Promise<ReconnectOutcome>>();
  * process that owns the user's chromium (affinity.ts), so this copy is
  * consulted wherever a run can start.
  */
-const lastRuns = new Map<string, NonNullable<ReconnectState["last"]>>();
+const lastRuns = new Map<string, { recipeAt?: number; failAt?: number }>();
 
-function rememberRun(key: string, last: NonNullable<ReconnectState["last"]>): void {
+function remember(key: string, patch: { recipeAt?: number; failAt?: number }): void {
   const now = Date.now();
-  for (const [k, v] of lastRuns) if (now - v.at >= RECONNECT_COOLDOWN_MS) lastRuns.delete(k);
-  lastRuns.set(key, last);
+  for (const [k, v] of lastRuns) {
+    if (Math.max(v.recipeAt ?? 0, v.failAt ?? 0) <= now - RECONNECT_COOLDOWN_MS) lastRuns.delete(k);
+  }
+  lastRuns.set(key, { ...lastRuns.get(key), ...patch });
 }
 
-/** DB state, with this process's newer run in `last` unless a portal clear came after it. */
+/**
+ * DB state merged with this process's record: the later recipe run, and this
+ * process's failure when it is newer than what the DB holds. canAttemptReconnect
+ * applies `clearedAt` to each timestamp, so a portal clear still lifts them.
+ */
 function withRemembered(key: string, state: ReconnectState): ReconnectState {
   const mem = lastRuns.get(key);
   if (!mem) return state;
-  if (state.clearedAt !== undefined && state.clearedAt >= mem.at) return state;
-  if (state.last && state.last.at >= mem.at) return state;
-  return { ...state, last: mem };
+  const out: ReconnectState = { ...state };
+  if (mem.recipeAt !== undefined && (state.recipeAt === undefined || mem.recipeAt > state.recipeAt)) out.recipeAt = mem.recipeAt;
+  if (mem.failAt !== undefined && (!state.last || state.last.at < mem.failAt)) out.last = { at: mem.failAt, ok: false };
+  return out;
 }
 
 /** Test seam: forget this process's record of recent recipe runs. */
@@ -202,6 +210,7 @@ async function attempt(userId: string, integration: string, auth: RecipeAuth): P
     await closePrivateTab(userId, id).catch(() => false);
   };
   let phase = "verify"; // label for the failure record: "open", "step i", or "verify"
+  let recipeAt: number | undefined; // set once the recipe has a tab: a run that counts
   let stepIndex = -1;
   try {
     // Fast path: the profile may already hold a live app session. Only capture
@@ -231,6 +240,10 @@ async function attempt(userId: string, integration: string, auth: RecipeAuth): P
     // Tab limit: the browser is full, not broken. Like BUSY, nothing is recorded.
     if (!opened.ok) throw new RunBusy();
     tabId = opened.tab.id;
+    // From here the recipe may type a credential: the window starts now, in
+    // memory first (the DB copy is written with the outcome).
+    recipeAt = Date.now();
+    remember(key, { recipeAt });
     const page: PageHandle = opened.tab;
     const allowed = allowedHosts(auth);
     const credHosts = credentialHosts(auth);
@@ -276,7 +289,7 @@ async function attempt(userId: string, integration: string, auth: RecipeAuth): P
       if (!href || href.startsWith(auth.loginUrl)) throw new StepError("PROBE_FAILED");
     }
     if (usedNames.length) await touchUsed(userId, usedNames).catch(() => warn("vault touchUsed", "TOUCH_FAILED"));
-    return await commit(userId, integration, data, started, key);
+    return await commit(userId, integration, data, started, recipeAt);
   } catch (e) {
     // Stop every orphaned step from acting, and take the page away from it,
     // before spending time on the state and audit writes.
@@ -286,8 +299,8 @@ async function attempt(userId: string, integration: string, auth: RecipeAuth): P
     const reason: ReconnectReason = e instanceof StepError ? e.reason : "BROWSER_ERROR";
     const now = Date.now();
     const last = { at: now, ok: false, error: `${phase}: ${reason}` };
-    rememberRun(key, last); // first: the DB write below may write nothing (row gone) or throw
-    await updateReconnectState(userId, integration, { deadAt: now, last });
+    remember(key, { failAt: now }); // first: the DB write below may write nothing (row gone) or throw
+    await updateReconnectState(userId, integration, { deadAt: now, last, ...(recipeAt !== undefined ? { recipeAt } : {}) });
     await auditLogger
       .log({ user_id: userId, integration, action: "REFRESH", success: false, error: reason, duration_ms: now - started })
       .catch(() => warn("audit log REFRESH", reason));
@@ -301,18 +314,21 @@ function stepTimeout(step: ReconnectStep): number {
   return ("timeoutMs" in step && step.timeoutMs) || DEFAULT_STEP_MS;
 }
 
-/** `recipeKey` is set when the recipe ran (credentials typed): that success holds the cooldown too. */
+/**
+ * `recipeAt` is set when the recipe ran; it is persisted with the success. A
+ * fast-path commit (no `recipeAt`) writes `last` only and leaves any earlier
+ * `recipeAt` alone, so it can never shorten the recipe's window.
+ */
 async function commit(
   userId: string,
   integration: string,
   data: CookieData,
   started: number,
-  recipeKey?: string
+  recipeAt?: number
 ): Promise<ReconnectOutcome> {
-  const last = { at: Date.now(), ok: true, ...(recipeKey ? { recipe: true } : {}) };
-  if (recipeKey) rememberRun(recipeKey, last);
+  const last = { at: Date.now(), ok: true };
   await storeCookies(userId, integration, data); // clears deadAt
-  await updateReconnectState(userId, integration, { last });
+  await updateReconnectState(userId, integration, { last, ...(recipeAt !== undefined ? { recipeAt } : {}) });
   await auditLogger
     .log({ user_id: userId, integration, action: "REFRESH", success: true, duration_ms: Date.now() - started })
     .catch(() => warn("audit log REFRESH", "OK"));
