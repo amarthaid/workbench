@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { db } from "../src/db";
 import { storeCookies, hasValidCookies } from "../src/auth/cookie";
 import { getReconnectState, updateReconnectState } from "../src/auth/reconnect/state";
@@ -55,5 +55,27 @@ describe("reconnect state", () => {
     await storeCookies(U, I, cookies);
     await db.run("UPDATE connections SET config = 'not json' WHERE user_id = ?", [U]);
     expect(await getReconnectState(U, I)).toEqual({});
+  });
+
+  it("never rewrites a config that failed to parse: it survives storeCookies and updates", async () => {
+    await storeCookies(U, I, cookies);
+    await db.run("UPDATE connections SET config = 'not json' WHERE user_id = ?", [U]);
+    await storeCookies(U, I, cookies);
+    await updateReconnectState(U, I, { deadAt: 1 });
+    expect(await getConnectionConfig(U, I)).toBe("not json");
+  });
+
+  it("storeCookies issues no config UPDATE when there is no reconnect state", async () => {
+    await storeCookies(U, I, cookies);
+    await db.run("UPDATE connections SET config = ? WHERE user_id = ?", [JSON.stringify({ instanceUrl: "x" }), U]);
+    const run = vi.spyOn(db, "run");
+    try {
+      await storeCookies(U, I, cookies);
+      const configWrites = run.mock.calls.filter(([sql]) => /UPDATE connections SET config/.test(String(sql)));
+      expect(configWrites).toHaveLength(0);
+    } finally {
+      run.mockRestore();
+    }
+    expect(JSON.parse((await getConnectionConfig(U, I))!)).toEqual({ instanceUrl: "x" });
   });
 });

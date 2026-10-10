@@ -21,6 +21,21 @@ export function touchesBrowser(executions: unknown, directTool?: unknown): boole
   );
 }
 
+/** Forward budget for a browser_* call. */
+export const FORWARD_TIMEOUT_MS = 30_000;
+/** Forward budget for a call that may run a reconnect recipe (max run 120s plus the tool). */
+export const RECIPE_FORWARD_TIMEOUT_MS = 150_000;
+
+// Errors raised before any byte of the request left this process.
+const CONNECT_CODES = new Set([
+  "ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "EHOSTUNREACH", "ENETUNREACH", "UND_ERR_CONNECT_TIMEOUT",
+]);
+
+function isConnectFailure(e: unknown): boolean {
+  const code = (e as { code?: unknown })?.code ?? (e as { cause?: { code?: unknown } })?.cause?.code;
+  return typeof code === "string" && CONNECT_CODES.has(code);
+}
+
 export interface ForwardOpts {
   userId: string;
   request: FastifyRequest;
@@ -28,14 +43,16 @@ export interface ForwardOpts {
   /** Absolute URL on the internal service, e.g. `${INTERNAL_MCP_URL}` or `/rest/browser` on its origin. */
   target: string;
   body: unknown;
+  /** Hop budget; defaults to FORWARD_TIMEOUT_MS. */
+  timeoutMs?: number;
 }
 
 /**
  * Forward `body` to `target` with the caller's routing key. Returns true when
- * the reply has been sent (the upstream answered), false when the caller
- * should handle the request locally: the inbound request already carried *our
- * own* routing key (we are the owning replica), or the hop failed at the
- * network layer.
+ * a reply has been sent (the upstream answered, or 504/502 when the hop broke
+ * after the request was sent), false when the caller should handle the
+ * request locally: the inbound request already carried *our own* routing key
+ * (we are the owning replica), or the connect itself failed.
  *
  * The inbound header is checked against the bearer's user, not merely for
  * presence: an authenticated agent that sent any value would otherwise
@@ -63,11 +80,21 @@ export async function forwardForBrowserAffinity(opts: ForwardOpts): Promise<bool
       method: "POST",
       headers,
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(opts.timeoutMs ?? FORWARD_TIMEOUT_MS),
     });
     text = await res.text();
-  } catch {
-    return false;
+  } catch (e) {
+    // Only a failed connect proves the owner never saw the request. After
+    // that, the owner may still be running the tool (a slow recipe), and
+    // running it here as well would duplicate its side effects.
+    if (isConnectFailure(e)) return false;
+    const name = (e as { name?: string })?.name;
+    if (name === "TimeoutError" || name === "AbortError") {
+      reply.status(504).send({ error: "UPSTREAM_TIMEOUT" });
+    } else {
+      reply.status(502).send({ error: "UPSTREAM_ERROR" });
+    }
+    return true;
   }
   if (res.status === 202 || !text) {
     reply.status(202).send();

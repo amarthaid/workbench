@@ -164,7 +164,7 @@ describe("browser affinity forward", () => {
   });
 
   it("falls through to local handling on a network error", async () => {
-    fetchMock.mockRejectedValue(new Error("ECONNREFUSED"));
+    fetchMock.mockRejectedValue(connRefused());
     const app = await buildApp();
     const res = await app.inject({
       method: "POST", url: "/mcp",
@@ -172,6 +172,19 @@ describe("browser affinity forward", () => {
       payload: wrapped("browser_navigate", { url: "https://example.com" }),
     });
     expect(res.json().result).toEqual({ local: true });
+    await app.close();
+  });
+
+  it("an error after the request was sent (not a connect failure) does not run locally", async () => {
+    fetchMock.mockRejectedValue(Object.assign(new TypeError("fetch failed"), { cause: { code: "UND_ERR_SOCKET" } }));
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "POST", url: "/mcp",
+      headers: { "x-workbench-api-key": "valid-key", "content-type": "application/json" },
+      payload: wrapped("browser_navigate", { url: "https://example.com" }),
+    });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ error: "UPSTREAM_ERROR" });
     await app.close();
   });
 
@@ -187,3 +200,8 @@ describe("browser affinity forward", () => {
     await app.close();
   });
 });
+
+// What undici throws when the connect itself fails: nothing was sent.
+function connRefused() {
+  return Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("connect ECONNREFUSED a-workbench:80"), { code: "ECONNREFUSED" }) });
+}

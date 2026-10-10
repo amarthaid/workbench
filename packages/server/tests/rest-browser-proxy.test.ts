@@ -191,7 +191,7 @@ describe("POST /rest/<recipe integration> affinity", () => {
   // local handling, which is exactly where the gate must say no.
   it("grants chromium ownership only for this user's verified key", async () => {
     vi.mocked(hasValidCookies).mockResolvedValue(true as never);
-    fetchMock.mockRejectedValue(new Error("ECONNREFUSED"));
+    fetchMock.mockRejectedValue(connRefused());
     for (const [key, expected] of [
       [mintSessionKey("user-1"), true],
       [undefined, false],
@@ -208,6 +208,25 @@ describe("POST /rest/<recipe integration> affinity", () => {
     }
   });
 
+  it("a timeout after the request was sent is 504 UPSTREAM_TIMEOUT and never runs locally", async () => {
+    vi.mocked(hasValidCookies).mockResolvedValue(true as never);
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    fetchMock.mockRejectedValue(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+    const res = await app.inject({ method: "POST", url: "/rest/acme", headers, payload: { tool: "list" } });
+    expect(res.statusCode).toBe(504);
+    expect(res.json()).toEqual({ error: "UPSTREAM_TIMEOUT" });
+    expect(acmeList.handler).not.toHaveBeenCalled();
+    expect(timeout).toHaveBeenLastCalledWith(150_000); // sized for a recipe run
+  });
+
+  it("connection refused (nothing sent) falls back to local handling", async () => {
+    vi.mocked(hasValidCookies).mockResolvedValue(true as never);
+    fetchMock.mockRejectedValue(connRefused());
+    const res = await app.inject({ method: "POST", url: "/rest/acme", headers, payload: { tool: "list" } });
+    expect(res.statusCode).toBe(200);
+    expect(acmeList.handler).toHaveBeenCalledTimes(1);
+  });
+
   it("forwards, rather than runs, another user's key", async () => {
     fetchMock.mockResolvedValue({ status: 200, text: async () => JSON.stringify({ integration: "acme", result: {} }) });
     await app.inject({
@@ -220,3 +239,8 @@ describe("POST /rest/<recipe integration> affinity", () => {
     expect(acmeList.handler).not.toHaveBeenCalled();
   });
 });
+
+// What undici throws when the connect itself fails: nothing was sent.
+function connRefused() {
+  return Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("connect ECONNREFUSED a-workbench:80"), { code: "ECONNREFUSED" }) });
+}

@@ -74,6 +74,22 @@ describe("ctx.http cookie reconnect", () => {
     expect(reconnect).toHaveBeenCalledTimes(1);
   });
 
+  it("retry still dead after a 'successful' reconnect: records a failure so the next call is in cooldown", async () => {
+    withAuth({ ...baseAuth, session: { dead: { status: [401] } }, reconnect: { steps: [{ goto: "loginUrl" }] } });
+    fetchMock.mockImplementation(async () => new Response("no", { status: 401 }));
+    reconnect.mockImplementation(async () => { await storeCookies(U, I, cookie("tok-new")); return { ok: true }; });
+    const ctx = await createContext(U, I);
+    expect((await ctx.http("https://app.example.com/api/x")).status).toBe(401);
+    const st = await getReconnectState(U, I);
+    expect(st.deadAt).toBeTypeOf("number");
+    expect(st.last).toMatchObject({ ok: false, error: "verify: PROBE_FAILED" });
+
+    reconnect.mockClear();
+    const next = await createContext(U, I);
+    expect((await next.http("https://app.example.com/api/x")).status).toBe(401);
+    expect(reconnect).not.toHaveBeenCalled();
+  });
+
   it("reconnect failure returns the original response", async () => {
     withAuth({ ...baseAuth, session: { dead: { status: [401] } }, reconnect: { steps: [{ goto: "loginUrl" }] } });
     fetchMock.mockResolvedValue(new Response("no", { status: 401 }));

@@ -4,7 +4,7 @@ import { handleMcpRequest } from "./server";
 import { resolveMcpUser } from "../auth/oauth-server/resolve";
 import { SESSION_HEADER, verifySessionKey } from "../auth/cdp-bridge";
 import { forwardForBrowserAffinity } from "../auth/affinity-forward";
-import { needsBrowserAffinity, runWithBrowserAffinity } from "../auth/reconnect/affinity";
+import { needsBrowserAffinity, runWithBrowserAffinity, affinityTimeoutMs } from "../auth/reconnect/affinity";
 import { VIA_HEADER, mcpLoopRefusal, parseVia, runWithVia } from "../custom-apps/loop-guard";
 
 export function registerMcpRoute(app: FastifyInstance): void {
@@ -44,6 +44,7 @@ export function registerMcpRoute(app: FastifyInstance): void {
     ) {
       const sent = await forwardForBrowserAffinity({
         userId, request, reply, target: config.INTERNAL_MCP_URL, body,
+        timeoutMs: affinityTimeoutMs(params?.arguments?.executions, params?.name),
       });
       if (sent) return reply;
     }

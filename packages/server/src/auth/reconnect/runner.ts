@@ -3,7 +3,7 @@ import { registry } from "../../plugins/registry";
 import { auditLogger } from "../../audit/logger";
 import { readSecretValue, touchUsed } from "../../vault/store";
 import { openPrivateTab, closePrivateTab, getWarmSession, captureLiveCookies, pressKey, type PageHandle } from "../browser-session";
-import { storeCookies, hasValidCookies, type CookieData } from "../cookie";
+import { storeCookies, getCookies, hasValidCookies, isCookieExpired, type CookieData } from "../cookie";
 import { getReconnectState, updateReconnectState, type ReconnectState } from "./state";
 import { clickSelector, fillSelector, waitForSelector, waitForUrl, currentUrl, StepError, type ReconnectReason } from "./dom";
 import { mayOwnBrowser } from "./affinity";
@@ -292,8 +292,14 @@ async function runStep(
  */
 export async function ensureCookieSession(userId: string, integration: string): Promise<boolean> {
   if (await hasValidCookies(userId, integration)) return true;
+  const data = await getCookies(userId, integration);
+  if (!data) return false; // never connected: nothing to revive
   const state = await getReconnectState(userId, integration);
-  if (!state.deadAt || !canAttemptReconnect(state)) return false;
+  if (!isCookieExpired(data) && !state.deadAt) return true;
+  // Dead (a response said so) or every stored cookie's expiry has passed,
+  // which no response ever reports because ctx.http refuses to send them.
+  const auth = registry.getIntegration(integration)?.auth;
+  if (auth?.type !== "cookie" || !auth.reconnect || !canAttemptReconnect(state)) return false;
   const outcome = await reconnectSession(userId, integration);
   return outcome.ok;
 }

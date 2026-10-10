@@ -12,40 +12,54 @@ export interface ReconnectState {
   last?: { at: number; ok: boolean; error?: string };
 }
 
-async function readConfig(userId: string, integration: string): Promise<Record<string, unknown> | null> {
+type ConfigRead =
+  | { kind: "none" } // no connection row
+  | { kind: "unparsable" } // config text that is not a JSON object: never ours to rewrite
+  | { kind: "ok"; cfg: Record<string, unknown> };
+
+async function readConfig(userId: string, integration: string): Promise<ConfigRead> {
   const row = await db.get<{ config: string | null }>(
     "SELECT config FROM connections WHERE user_id = ? AND integration = ?",
     [userId, integration]
   );
-  if (!row) return null;
-  if (!row.config) return {};
+  if (!row) return { kind: "none" };
+  if (!row.config) return { kind: "ok", cfg: {} };
   try {
     const parsed = JSON.parse(row.config) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? { kind: "ok", cfg: parsed as Record<string, unknown> }
+      : { kind: "unparsable" };
   } catch {
-    return {};
+    return { kind: "unparsable" };
   }
 }
 
 export async function getReconnectState(userId: string, integration: string): Promise<ReconnectState> {
-  const cfg = await readConfig(userId, integration);
-  const r = cfg?.reconnect;
+  const read = await readConfig(userId, integration);
+  const r = read.kind === "ok" ? read.cfg.reconnect : undefined;
   return r && typeof r === "object" ? (r as ReconnectState) : {};
 }
 
-/** Shallow-merge `patch` into the state. No-op when there is no connection row. */
+/**
+ * Shallow-merge `patch` into the state. Writes nothing when there is no
+ * connection row, when the stored config is not a JSON object (it is left
+ * untouched), or when the patch would not change the state.
+ */
 export async function updateReconnectState(
   userId: string,
   integration: string,
   patch: Partial<ReconnectState>
 ): Promise<void> {
-  const cfg = await readConfig(userId, integration);
-  if (cfg === null) return;
-  const next: Record<string, unknown> = { ...((cfg.reconnect as object) ?? {}) };
+  const read = await readConfig(userId, integration);
+  if (read.kind !== "ok") return;
+  const cfg = read.cfg;
+  const prev = cfg.reconnect && typeof cfg.reconnect === "object" ? (cfg.reconnect as Record<string, unknown>) : {};
+  const next: Record<string, unknown> = { ...prev };
   for (const [k, v] of Object.entries(patch)) {
     if (v === undefined) delete next[k];
     else next[k] = v;
   }
+  if (JSON.stringify(next) === JSON.stringify(prev)) return;
   const out = { ...cfg };
   if (Object.keys(next).length) out.reconnect = next;
   else delete out.reconnect;

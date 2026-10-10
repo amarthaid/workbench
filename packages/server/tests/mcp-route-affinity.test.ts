@@ -72,7 +72,7 @@ describe("/mcp owner gate", () => {
   // When the hop fails the request falls through to local handling, which is
   // where the gate decides whether the handler may drive chromium.
   it("grants chromium ownership only for this user's verified key", async () => {
-    fetchMock.mockRejectedValue(new Error("ECONNREFUSED"));
+    fetchMock.mockRejectedValue(connRefused());
     for (const [key, expected] of [
       [mintSessionKey("user-1"), true],
       [undefined, false],
@@ -97,6 +97,32 @@ describe("/mcp owner gate", () => {
     expect(url).toBe("http://a-workbench/mcp");
     expect(init.headers[SESSION_HEADER]).toBe(mintSessionKey("user-1"));
     expect(handleMcpRequest).not.toHaveBeenCalled();
+  });
+
+  it("a timeout after the request was sent is 504 UPSTREAM_TIMEOUT and never runs locally", async () => {
+    // The owner may still be running the tool (a slow recipe). Running it here
+    // too would duplicate its side effects.
+    fetchMock.mockRejectedValue(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+    const res = await app.inject({ method: "POST", url: "/mcp", headers, payload: call("acme_list") });
+    expect(res.statusCode).toBe(504);
+    expect(res.json()).toEqual({ error: "UPSTREAM_TIMEOUT" });
+    expect(handleMcpRequest).not.toHaveBeenCalled();
+  });
+
+  it("connection refused (nothing sent) still falls back to local handling", async () => {
+    fetchMock.mockRejectedValue(connRefused());
+    const res = await app.inject({ method: "POST", url: "/mcp", headers, payload: call("acme_list") });
+    expect(res.statusCode).toBe(200);
+    expect(handleMcpRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("a recipe integration's call gets a 150s forward budget; a browser_* call keeps 30s", async () => {
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    fetchMock.mockResolvedValue({ status: 200, text: async () => JSON.stringify({ result: {} }) });
+    await app.inject({ method: "POST", url: "/mcp", headers, payload: call("acme_list") });
+    expect(timeout).toHaveBeenLastCalledWith(150_000);
+    await app.inject({ method: "POST", url: "/mcp", headers, payload: call("browser_navigate") });
+    expect(timeout).toHaveBeenLastCalledWith(30_000);
   });
 
   it("forwards, rather than runs, another user's key", async () => {
@@ -128,3 +154,8 @@ describe("/mcp owner gate", () => {
     }
   });
 });
+
+// What undici throws when the connect itself fails: nothing was sent.
+function connRefused() {
+  return Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("connect ECONNREFUSED a-workbench:80"), { code: "ECONNREFUSED" }) });
+}

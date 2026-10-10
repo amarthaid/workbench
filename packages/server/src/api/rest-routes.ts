@@ -7,7 +7,7 @@ import { executeSingle, executeMany, type ExecResult } from "../mcp/meta-tools";
 import { resolveMcpUser } from "../auth/oauth-server/resolve";
 import { getToken } from "../auth/tokens";
 import { hasValidCookies } from "../auth/cookie";
-import { forwardForBrowserAffinity } from "../auth/affinity-forward";
+import { forwardForBrowserAffinity, FORWARD_TIMEOUT_MS, RECIPE_FORWARD_TIMEOUT_MS } from "../auth/affinity-forward";
 import { SESSION_HEADER, verifySessionKey } from "../auth/cdp-bridge";
 import { hasRecipe, runWithBrowserAffinity } from "../auth/reconnect/affinity";
 
@@ -186,6 +186,8 @@ export async function registerRestRoutes(app: FastifyInstance): Promise<void> {
           const target = new URL(`/rest/${encodeURIComponent(integration)}`, config.INTERNAL_MCP_URL).toString();
           const sent = await forwardForBrowserAffinity({
             userId, request, reply, target, body: request.body ?? {},
+            // A recipe integration's tool may run a reconnect first.
+            timeoutMs: integration === "browser" ? FORWARD_TIMEOUT_MS : RECIPE_FORWARD_TIMEOUT_MS,
           });
           if (sent) return reply;
         }

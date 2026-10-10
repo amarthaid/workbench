@@ -424,4 +424,25 @@ describe("ensureCookieSession", () => {
     expect(await ensureCookieSession(U, I)).toBe(true);
     expect((await getReconnectState(U, I)).deadAt).toBeUndefined();
   });
+
+  it("revives cookies whose expiry passed overnight (no deadAt was ever set): exactly one run", async () => {
+    await storeCookies(U, I, { domain: "app.example.com", cookies: [{ ...goodCookie, value: "tok-old", expires: 1 }], capturedAt: 1 });
+    expect((await getReconnectState(U, I)).deadAt).toBeUndefined();
+    expect(await ensureCookieSession(U, I)).toBe(true);
+    expect(openPrivateTab).toHaveBeenCalledTimes(1);
+    expect(deliveries()).toHaveLength(1);
+  });
+
+  it("expired cookies inside the cooldown do not run the recipe", async () => {
+    await storeCookies(U, I, { domain: "app.example.com", cookies: [{ ...goodCookie, value: "tok-old", expires: 1 }], capturedAt: 1 });
+    await updateReconnectState(U, I, { last: { at: Date.now(), ok: false, error: "verify: NO_COOKIES" } });
+    expect(await ensureCookieSession(U, I)).toBe(false);
+    expect(openPrivateTab).not.toHaveBeenCalled();
+  });
+
+  it("no cookie row: no run", async () => {
+    await db.run("DELETE FROM connections WHERE user_id = ?", [U]);
+    expect(await ensureCookieSession(U, I)).toBe(false);
+    expect(openPrivateTab).not.toHaveBeenCalled();
+  });
 });

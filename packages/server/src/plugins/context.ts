@@ -3,8 +3,8 @@ import { getCookies, CookieData, isCookieExpired } from "../auth/cookie";
 import { getPluginOAuthCreds, resolveOAuthUrls } from "../auth/plugin-oauth";
 import { registry } from "./registry";
 import { matchesDead } from "../auth/reconnect/dead";
-import { reconnectSession } from "../auth/reconnect/runner";
-import { updateReconnectState } from "../auth/reconnect/state";
+import { reconnectSession, canAttemptReconnect } from "../auth/reconnect/runner";
+import { getReconnectState, updateReconnectState } from "../auth/reconnect/state";
 
 function buildCookieHeader(data: CookieData, targetHost: string): string {
   const nowSec = Math.floor(Date.now() / 1000);
@@ -197,12 +197,27 @@ export async function createContext(userId: string, integration: string): Promis
           await updateReconnectState(userId, integration, { deadAt: Date.now() });
           return res;
         }
+        // Inside the cooldown, don't re-run the recipe; just keep the dead mark.
+        if (!canAttemptReconnect(await getReconnectState(userId, integration))) {
+          await updateReconnectState(userId, integration, { deadAt: Date.now() });
+          return res;
+        }
         const outcome = await reconnectSession(userId, integration);
         if (!outcome.ok || !isReplayableBody(init?.body)) return res;
         const fresh = await getCookies(userId, integration);
         if (!fresh) return res;
         cookieData = fresh;
-        return send();
+        const retried = await send();
+        if (matchesDead(retried, session.dead, url)) {
+          // The recipe "succeeded" but its cookies are still refused. Record it
+          // as a failed attempt so the cooldown holds the rate at its promised cap.
+          const now = Date.now();
+          await updateReconnectState(userId, integration, {
+            deadAt: now,
+            last: { at: now, ok: false, error: "verify: PROBE_FAILED" },
+          });
+        }
+        return retried;
       }
 
       const token = await ctx.getToken();
