@@ -20,6 +20,7 @@ import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { ConfirmDialog } from "../components/dialogs/ConfirmDialog";
+import { AutoReconnectPanel } from "../components/AutoReconnectPanel";
 import { CustomAppHeadersEditor } from "../components/CustomAppHeadersEditor";
 import IntegrationLogo from "../components/IntegrationLogo";
 import { useConnectFlow } from "../hooks/useConnectFlow";
@@ -166,6 +167,14 @@ export default function AppDetail() {
           <CustomAppHeaders id={data.name.replace(/^custom:/, "")} names={data.headerNames ?? []} />
         )}
         {data.authType === "cookie" && <SessionTransfer name={data.name} />}
+        {data.authType === "cookie" && data.autoReconnect && (
+          <AutoReconnectPanel
+            integration={data.name}
+            credentials={data.autoReconnect.credentials}
+            status={connectionsData?.connections?.find((c: { name: string }) => c.name === name)?.autoReconnect}
+            connected={connected}
+          />
+        )}
         {data.name === "browser" && <BrowserControls />}
 
         <Box title={`Tools (${data.tools.length})`}>

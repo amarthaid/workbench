@@ -112,8 +112,23 @@ export interface IntegrationSummary {
   headerNames?: string[];
 }
 
+export interface ReconnectCredential {
+  key: string;
+  label: string;
+  secret?: boolean;
+}
+
+// Per-connection auto-reconnect state; `last.at` is epoch ms.
+export interface ReconnectStatus {
+  bindings: Record<string, string>;
+  missing: string[];
+  last?: { at: number; ok: boolean; error?: string };
+  dead: boolean;
+}
+
 export interface IntegrationDetail extends IntegrationSummary {
   authType: string;
+  autoReconnect?: { credentials: ReconnectCredential[] };
   tools: { name: string; description: string }[];
 }
 
@@ -203,6 +218,19 @@ export async function fetchConnections() {
     throw new Error("Unauthorized");
   }
   if (!res.ok) throw new Error("Failed to fetch connections");
+  return res.json();
+}
+
+export async function saveReconnectBindings(
+  integration: string,
+  bindings: Record<string, string>
+): Promise<{ success: boolean }> {
+  const res = await fetch(`${API_URL}/api/connections/${encodeURIComponent(integration)}/reconnect`, {
+    method: "PUT",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ bindings }),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `Save failed (${res.status})`);
   return res.json();
 }
 

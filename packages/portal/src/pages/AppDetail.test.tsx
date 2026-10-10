@@ -15,6 +15,8 @@ vi.mock("../api", () => ({
   disconnectIntegration: vi.fn(),
   removeCustomApp: vi.fn(),
   updateCustomAppHeaders: vi.fn(),
+  fetchVaultSecrets: vi.fn().mockResolvedValue([]),
+  saveReconnectBindings: vi.fn(),
 }));
 
 vi.mock("../context/AuthContext", () => ({
@@ -110,6 +112,25 @@ describe("AppDetail", () => {
     vi.mocked(fetchIntegration).mockResolvedValue({ ...DETAIL, authType: "cookie" });
     renderAt("acme");
     expect(await screen.findByRole("heading", { name: "Session transfer" })).toBeInTheDocument();
+  });
+
+  it("shows the auto-reconnect panel only for cookie apps with a recipe", async () => {
+    vi.mocked(fetchIntegration).mockResolvedValue({ ...DETAIL, authType: "cookie" });
+    renderAt("acme");
+    await screen.findByRole("heading", { name: "Session transfer" });
+    expect(screen.queryByRole("heading", { name: "Auto-reconnect" })).toBeNull();
+
+    vi.mocked(fetchIntegration).mockResolvedValue({
+      ...DETAIL,
+      authType: "cookie",
+      autoReconnect: { credentials: [{ key: "password", label: "Password", secret: true }] },
+    });
+    vi.mocked(fetchConnections).mockResolvedValue({
+      connections: [{ name: "acme", connected: true, autoReconnect: { bindings: {}, missing: ["password"], dead: false } }],
+    });
+    renderAt("acme");
+    expect(await screen.findByRole("heading", { name: "Auto-reconnect" })).toBeInTheDocument();
+    expect(await screen.findByText("Bind credentials to enable")).toBeInTheDocument();
   });
 
   it("shows browser controls only for the built-in browser", async () => {
