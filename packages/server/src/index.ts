@@ -23,8 +23,9 @@ import { registry } from "./plugins/registry";
 import { isIntegrationDisabled, loadSettings, startSettingsPoll } from "./settings/instance-settings";
 import { resolveMcpUser } from "./auth/oauth-server/resolve";
 import { startBrowserReaper } from "./auth/browser-session";
-import { registerCdpBridgeRoutes, startChannelReaper } from "./auth/cdp-bridge";
-import { forwardForBrowserAffinity, touchesBrowser } from "./auth/affinity-forward";
+import { registerCdpBridgeRoutes, startChannelReaper, SESSION_HEADER, verifySessionKey } from "./auth/cdp-bridge";
+import { forwardForBrowserAffinity } from "./auth/affinity-forward";
+import { needsBrowserAffinity, runWithBrowserAffinity } from "./auth/reconnect/affinity";
 import cluster from "node:cluster";
 import { availableParallelism } from "node:os";
 import { db } from "./db.js";
@@ -115,7 +116,7 @@ async function main() {
     if (
       config.INTERNAL_MCP_URL &&
       body.method === "tools/call" &&
-      touchesBrowser(params?.arguments?.executions, params?.name)
+      needsBrowserAffinity(params?.arguments?.executions, params?.name)
     ) {
       const sent = await forwardForBrowserAffinity({
         userId, request, reply, target: config.INTERNAL_MCP_URL, body,
@@ -124,7 +125,12 @@ async function main() {
     }
 
     // Outbound custom-app calls made while handling this request extend its chain.
-    const result = await runWithVia(parseVia(via), () => handleMcpRequest(body, userId));
+    // A verified routing key means this replica owns the user's chromium, so a
+    // cookie reconnect recipe may drive it.
+    const inboundKey = request.headers[SESSION_HEADER];
+    const isOwner = verifySessionKey(Array.isArray(inboundKey) ? inboundKey[0] : inboundKey, userId);
+    const run = () => runWithVia(parseVia(via), () => handleMcpRequest(body, userId));
+    const result = await (isOwner ? runWithBrowserAffinity(run) : run());
     // JSON-RPC notifications return null — no body, just 202 Accepted.
     if (result === null) {
       reply.status(202).send();

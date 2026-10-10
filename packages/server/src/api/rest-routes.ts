@@ -8,6 +8,8 @@ import { resolveMcpUser } from "../auth/oauth-server/resolve";
 import { getToken } from "../auth/tokens";
 import { hasValidCookies } from "../auth/cookie";
 import { forwardForBrowserAffinity } from "../auth/affinity-forward";
+import { SESSION_HEADER, verifySessionKey } from "../auth/cdp-bridge";
+import { hasRecipe, runWithBrowserAffinity } from "../auth/reconnect/affinity";
 
 // Plain-REST alternative to `POST /mcp`: same credentials, same execution
 // engine (`executeSingle`/`executeMany` from the meta-tools module), same
@@ -176,17 +178,22 @@ export async function registerRestRoutes(app: FastifyInstance): Promise<void> {
           return reply.status(404).send({ error: `Integration not found: ${integration}` });
         }
 
-        // The browser integration is process-local: route it to the replica
-        // that owns this user's chromium, exactly as /mcp does. Same origin as
+        // The browser integration, and cookie integrations with a reconnect
+        // recipe, are process-local: route them to the replica that owns this
+        // user's chromium, exactly as /mcp does. Same origin as
         // INTERNAL_MCP_URL, this endpoint's own path.
-        if (integration === "browser" && config.INTERNAL_MCP_URL) {
-          const target = new URL("/rest/browser", config.INTERNAL_MCP_URL).toString();
+        if ((integration === "browser" || hasRecipe(integration)) && config.INTERNAL_MCP_URL) {
+          const target = new URL(`/rest/${integration}`, config.INTERNAL_MCP_URL).toString();
           const sent = await forwardForBrowserAffinity({
             userId, request, reply, target, body: request.body ?? {},
           });
           if (sent) return reply;
         }
 
+        // A verified routing key means this replica owns the user's chromium.
+        const inboundKey = request.headers[SESSION_HEADER];
+        const isOwner = verifySessionKey(Array.isArray(inboundKey) ? inboundKey[0] : inboundKey, userId);
+        const execute = async () => {
         const body = request.body;
         if (!body || typeof body !== "object" || Array.isArray(body)) {
           return reply.status(400).send({ error: "Body must be a JSON object" });
@@ -260,6 +267,8 @@ export async function registerRestRoutes(app: FastifyInstance): Promise<void> {
         // No result cap: the whole payload is serialized as-is. That is the
         // point of this endpoint.
         return reply.send({ integration, tool: resolution.name, result: outcome.result });
+        };
+        return isOwner ? runWithBrowserAffinity(execute) : execute();
       }
     );
   });

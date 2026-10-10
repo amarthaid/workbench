@@ -35,6 +35,7 @@ vi.mock("../src/auth/oauth-server/resolve", () => ({
 
 import { registerRestRoutes } from "../src/api/rest-routes";
 import { registry } from "../src/plugins/registry";
+import { hasValidCookies } from "../src/auth/cookie";
 import { SESSION_HEADER, mintSessionKey } from "../src/auth/cdp-bridge";
 
 const browserInteg = {
@@ -65,16 +66,31 @@ const listRepos = {
   handler: vi.fn(async () => ({ local: true })),
 };
 
+const acmeInteg = {
+  name: "acme",
+  version: "1.0.0",
+  displayName: "Acme",
+  auth: { type: "cookie" as const, reconnect: { steps: [{ goto: "loginUrl" }] } },
+};
+const acmeList = {
+  name: "acme_list",
+  description: "list",
+  integration: "acme",
+  inputSchema: z.object({}),
+  handler: vi.fn(async () => ({ local: true })),
+};
+
 function stubRegistry() {
   vi.spyOn(registry, "getIntegration").mockImplementation((name: string) =>
-    name === "browser" ? (browserInteg as any) : name === "github" ? (githubInteg as any) : undefined
+    name === "browser" ? (browserInteg as any) : name === "github" ? (githubInteg as any) : name === "acme" ? (acmeInteg as any) : undefined
   );
   vi.spyOn(registry, "listToolsByIntegration").mockImplementation((name: string) =>
-    name === "browser" ? ([browserStart] as any) : name === "github" ? ([listRepos] as any) : []
+    name === "browser" ? ([browserStart] as any) : name === "github" ? ([listRepos] as any) : name === "acme" ? ([acmeList] as any) : []
   );
   vi.spyOn(registry, "getTool").mockImplementation((name: string) => {
     if (name === "browser_start") return browserStart as any;
     if (name === "github_list_repos") return listRepos as any;
+    if (name === "acme_list") return acmeList as any;
     return undefined;
   });
 }
@@ -136,5 +152,29 @@ describe("POST /rest/browser affinity", () => {
     expect(res.statusCode).toBe(200);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0][1].headers[SESSION_HEADER]).toBe(mintSessionKey("user-1"));
+  });
+});
+
+describe("POST /rest/<recipe integration> affinity", () => {
+  it("forwards to its own path with the user's routing key", async () => {
+    fetchMock.mockResolvedValue({ status: 200, text: async () => JSON.stringify({ integration: "acme", result: { remote: true } }) });
+    const res = await app.inject({ method: "POST", url: "/rest/acme", headers, payload: { tool: "list" } });
+    expect(res.statusCode).toBe(200);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://a-workbench/rest/acme");
+    expect(init.headers[SESSION_HEADER]).toBe(mintSessionKey("user-1"));
+    expect(acmeList.handler).not.toHaveBeenCalled();
+  });
+
+  it("handles locally when the header carries this user's own key", async () => {
+    vi.mocked(hasValidCookies).mockResolvedValueOnce(true as never);
+    const res = await app.inject({
+      method: "POST", url: "/rest/acme",
+      headers: { ...headers, [SESSION_HEADER]: mintSessionKey("user-1") },
+      payload: { tool: "list" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(acmeList.handler).toHaveBeenCalled();
   });
 });
