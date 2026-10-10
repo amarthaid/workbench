@@ -51,6 +51,16 @@ describe("reconnect state", () => {
     expect(await getReconnectState(U, I)).toEqual({ bindings: { password: "acme_pw" } });
   });
 
+  it("storeCookies (manual connect/capture/import) clears a stale failure, keeps a success", async () => {
+    await storeCookies(U, I, cookies);
+    await updateReconnectState(U, I, { deadAt: 5, last: { at: 5, ok: false, error: "verify: NO_COOKIES" } });
+    await storeCookies(U, I, cookies);
+    expect(await getReconnectState(U, I)).toEqual({});
+    await updateReconnectState(U, I, { last: { at: 6, ok: true } });
+    await storeCookies(U, I, cookies);
+    expect(await getReconnectState(U, I)).toEqual({ last: { at: 6, ok: true } });
+  });
+
   it("tolerates a non-JSON config", async () => {
     await storeCookies(U, I, cookies);
     await db.run("UPDATE connections SET config = 'not json' WHERE user_id = ?", [U]);

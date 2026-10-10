@@ -133,10 +133,14 @@ function recipeOf(name: string) {
   return a?.type === "cookie" && a.reconnect ? a.reconnect : null;
 }
 
-// Names only, never values: bindings hold vault entry names.
+// Names only, never values: bindings hold vault entry names. Present only
+// when a connection row exists (bindings live on it), dead or not, so the
+// portal can tell "bindable" apart from "connected".
 async function autoReconnectStatus(userId: string, name: string) {
   const r = recipeOf(name);
   if (!r) return undefined;
+  const row = await db.get("SELECT 1 AS one FROM connections WHERE user_id = ? AND integration = ?", [userId, name]);
+  if (!row) return undefined;
   const st = await getReconnectState(userId, name);
   const bindings = st.bindings ?? {};
   return {
@@ -946,7 +950,14 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       if (!row) {
         return reply.status(409).send({ error: "Connect the integration first" });
       }
-      await updateReconnectState(userId, integration, { bindings: next });
+      // New bindings deserve a try on the next call: a failure recorded under
+      // the old ones no longer predicts anything, so drop its cooldown.
+      const prev = await getReconnectState(userId, integration);
+      const changed = JSON.stringify(prev.bindings ?? {}) !== JSON.stringify(next);
+      await updateReconnectState(userId, integration, {
+        bindings: next,
+        ...(changed && prev.last && !prev.last.ok ? { last: undefined } : {}),
+      });
       return { success: true };
     }
   );

@@ -84,6 +84,31 @@ describe("auto-reconnect bindings API", () => {
     expect(row.autoReconnect).toMatchObject({ dead: true, last: { at: 6, ok: false, error: "TIMEOUT" }, missing: ["username", "password"] });
   });
 
+  it("autoReconnect is present only when a connection row exists (dead rows included)", async () => {
+    let list = await app.inject({ method: "GET", url: "/api/connections", headers: auth });
+    expect(list.json().connections.find((c: any) => c.name === "acme").autoReconnect).toBeUndefined();
+    await storeCookies(USER, "acme", cookieData);
+    await updateReconnectState(USER, "acme", { deadAt: 5 });
+    list = await app.inject({ method: "GET", url: "/api/connections", headers: auth });
+    const row = list.json().connections.find((c: any) => c.name === "acme");
+    expect(row.connected).toBe(false); // dead
+    expect(row.autoReconnect).toMatchObject({ dead: true }); // still bindable
+  });
+
+  it("changing bindings clears a failed attempt's cooldown; an unchanged PUT keeps it", async () => {
+    await putSecret(USER, "acme_pw", "pw-abc");
+    await storeCookies(USER, "acme", cookieData);
+    await updateReconnectState(USER, "acme", { deadAt: 5, last: { at: Date.now(), ok: false, error: "step 1: CREDENTIAL_UNBOUND" } });
+    expect((await put({ password: "acme_pw" })).statusCode).toBe(200);
+    let st = await getReconnectState(USER, "acme");
+    expect(st.last).toBeUndefined();
+    expect(st.deadAt).toBe(5);
+    await updateReconnectState(USER, "acme", { last: { at: 7, ok: false, error: "verify: PROBE_FAILED" } });
+    expect((await put({ password: "acme_pw" })).statusCode).toBe(200);
+    st = await getReconnectState(USER, "acme");
+    expect(st.last).toMatchObject({ ok: false });
+  });
+
   it("rejects an undeclared key", async () => {
     await putSecret(USER, "acme_pw", "pw-abc");
     await storeCookies(USER, "acme", cookieData);

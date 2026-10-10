@@ -244,11 +244,14 @@ describe("reconnectSession", () => {
     expect((await getReconnectState(U, I)).last).toMatchObject({ ok: false });
   });
 
-  it("openPrivateTab returning !ok is BROWSER_ERROR, recorded under 'open'", async () => {
+  it("tab limit reached is BUSY like a human mid-connect: no cooldown, no deadAt, no audit", async () => {
     vi.mocked(openPrivateTab).mockResolvedValueOnce({ ok: false, error: "BROWSER_TAB_LIMIT", limit: 1 });
     const out = await reconnectSession(U, I);
-    expect(out).toEqual({ ok: false, reason: "BROWSER_ERROR" });
-    expect((await getReconnectState(U, I)).last?.error).toBe("open: BROWSER_ERROR");
+    expect(out).toEqual({ ok: false, reason: "BUSY" });
+    const st = await getReconnectState(U, I);
+    expect(st.last).toBeUndefined();
+    expect(st.deadAt).toBeUndefined();
+    expect(auditLog).not.toHaveBeenCalled();
     expect(closePrivateTab).not.toHaveBeenCalled();
   });
 
@@ -361,6 +364,17 @@ describe("reconnectSession", () => {
     expect(st.deadAt).toBeTypeOf("number");
     expect(st.last).toMatchObject({ ok: false, error: "step 1: HOST_NOT_ALLOWED" });
     expect(auditLog).toHaveBeenCalledWith(expect.objectContaining({ success: false, error: "HOST_NOT_ALLOWED" }));
+  });
+
+  it("credential delivery is allowed only on targetDomain + allowHosts, never cookieDomains", async () => {
+    vi.spyOn(registry, "getIntegration").mockReturnValue({
+      name: I, version: "1",
+      auth: { ...auth, cookieDomains: ["app.example.com", ".example.com"], reconnect: { ...auth.reconnect, allowHosts: [".Login.Example.com"] } },
+    } as any);
+    expect(await reconnectSession(U, I)).toEqual({ ok: true });
+    const hostLists = sent.filter(([m]) => m === "Runtime.callFunctionOn").map(([, p]) => p.arguments[1].value);
+    expect(hostLists.length).toBeGreaterThan(0);
+    for (const hosts of hostLists) expect(hosts).toEqual(["app.example.com", "login.example.com"]);
   });
 
   it("unbound credential fails with CREDENTIAL_UNBOUND and leaks nothing", async () => {

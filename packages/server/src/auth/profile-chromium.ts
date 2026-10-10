@@ -1,6 +1,6 @@
 import { chromium } from "playwright";
 import { spawn, ChildProcess } from "node:child_process";
-import { mkdirSync, chmodSync, rmSync } from "node:fs";
+import { mkdirSync, chmodSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { createServer } from "node:net";
 import WebSocket from "ws";
@@ -153,6 +153,38 @@ export interface SpawnedChromium {
   timings: SpawnStageTimings;
 }
 
+/**
+ * Turn chromium's password manager off in the profile before it starts. A
+ * reconnect recipe fills a vault password into a login form, and chromium
+ * would otherwise offer to save it, or save it, into the profile's Login
+ * Data. There is no stable command-line switch for this, so it is the
+ * profile prefs. Other prefs are kept. A Preferences file that does not parse
+ * is left alone rather than clobbered (chromium resets it itself).
+ */
+function disablePasswordManager(userDataDir: string): void {
+  const dir = join(userDataDir, "Default");
+  const file = join(dir, "Preferences");
+  let prefs: Record<string, unknown> = {};
+  if (existsSync(file)) {
+    try {
+      const parsed = JSON.parse(readFileSync(file, "utf8")) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+      prefs = parsed as Record<string, unknown>;
+    } catch {
+      return;
+    }
+  }
+  const profile = prefs.profile && typeof prefs.profile === "object" ? (prefs.profile as Record<string, unknown>) : {};
+  prefs.credentials_enable_service = false;
+  prefs.profile = { ...profile, password_manager_enabled: false };
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(file, JSON.stringify(prefs), { mode: 0o600 });
+  } catch (e) {
+    console.warn(`[browser] could not disable the password manager: ${(e as NodeJS.ErrnoException).code ?? "ERROR"}`);
+  }
+}
+
 // Launch a headless Chromium on the user's persistent profile and resolve once
 // its DevTools endpoint and a non-blank page target are up. Caller owns the
 // activeProfiles lock (acquire before calling, release on failure/teardown).
@@ -166,6 +198,7 @@ export async function spawnProfileChromium(
   mkdirSync(userDataDir, { recursive: true, mode: 0o700 });
   chmodSync(userDataDir, 0o700);
   clearStaleSingletonLocks(userDataDir);
+  disablePasswordManager(userDataDir);
   const execPath = chromium.executablePath();
   const args = [
     "--headless=new",

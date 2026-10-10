@@ -63,6 +63,16 @@ function allowedHosts(auth: RecipeAuth): string[] {
 }
 
 /**
+ * Hosts a credential may be typed on, matched exactly by the page-side check.
+ * Narrower than navigation: a cookie domain like `.example.com` must not let
+ * every subdomain receive the password.
+ */
+function credentialHosts(auth: RecipeAuth): string[] {
+  return [auth.targetDomain, ...(auth.reconnect.allowHosts ?? [])]
+    .map((d) => d.replace(/^\./, "").toLowerCase());
+}
+
+/**
  * `""`/`about:blank` pass only before the first goto: the fresh tab's blank
  * page. Afterwards an empty href means the evaluate failed, so fail closed.
  */
@@ -83,6 +93,9 @@ function hostOk(href: string, allowed: string[], navigated: boolean): boolean {
  * act on the page checks this first.
  */
 interface RunCtl { aborted: boolean }
+
+/** No attempt was made (the browser had no room for a tab): record nothing. */
+class RunBusy extends Error {}
 
 function assertLive(run: RunCtl): void {
   if (run.aborted) throw new StepError("TIMEOUT");
@@ -167,10 +180,12 @@ async function attempt(userId: string, integration: string, auth: RecipeAuth): P
     // A tab that opens only after the run was abandoned would otherwise leak.
     openP.then((r) => { if (run.aborted && r.ok) void closePrivateTab(userId, r.tab.id).catch(() => false); }, () => {});
     const opened = await withDeadline(openP, deadline, run);
-    if (!opened.ok) throw new StepError("BROWSER_ERROR");
+    // Tab limit: the browser is full, not broken. Like BUSY, nothing is recorded.
+    if (!opened.ok) throw new RunBusy();
     tabId = opened.tab.id;
     const page: PageHandle = opened.tab;
     const allowed = allowedHosts(auth);
+    const credHosts = credentialHosts(auth);
     const bindings = state.bindings ?? {};
     const usedNames: string[] = [];
     let navigated = false;
@@ -198,7 +213,7 @@ async function attempt(userId: string, integration: string, auth: RecipeAuth): P
       if (!hostOk(href, allowed, navigated)) throw new StepError("HOST_NOT_ALLOWED");
       const timeoutMs = Math.min(stepTimeout(step), deadline - Date.now());
       if (timeoutMs <= 0) throw new StepError("TIMEOUT");
-      await withDeadline(runStep(page, step, auth, timeoutMs, allowed, resolveValue, run), deadline, run);
+      await withDeadline(runStep(page, step, auth, timeoutMs, credHosts, resolveValue, run), deadline, run);
       if ("goto" in step) navigated = true;
     }
 
@@ -219,6 +234,7 @@ async function attempt(userId: string, integration: string, auth: RecipeAuth): P
     // before spending time on the state and audit writes.
     run.aborted = true;
     await closeOnce();
+    if (e instanceof RunBusy) return { ok: false, reason: "BUSY" };
     const reason: ReconnectReason = e instanceof StepError ? e.reason : "BROWSER_ERROR";
     const now = Date.now();
     await updateReconnectState(userId, integration, { deadAt: now, last: { at: now, ok: false, error: `${phase}: ${reason}` } });
@@ -249,7 +265,7 @@ async function runStep(
   step: ReconnectStep,
   auth: RecipeAuth,
   timeoutMs: number,
-  allowed: string[],
+  credHosts: string[],
   resolveValue: (v: string) => Promise<string>,
   run: RunCtl
 ): Promise<void> {
@@ -277,7 +293,7 @@ async function runStep(
     // resolveValue), right here, and again just before delivery.
     const value = await resolveValue(step.value);
     assertLive(run);
-    await fillSelector(page, step.fill, value, timeoutMs, allowed, () => run.aborted);
+    await fillSelector(page, step.fill, value, timeoutMs, credHosts, () => run.aborted);
     return;
   }
   if ("press" in step) { assertLive(run); await pressKey(page, step.press); return; }

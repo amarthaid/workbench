@@ -23,7 +23,6 @@ function renderPanel(props: Partial<React.ComponentProps<typeof AutoReconnectPan
         integration="acme"
         credentials={CREDS}
         status={{ bindings: {}, missing: ["username", "password"], dead: false }}
-        connected
         {...props}
       />
     </MemoryRouter>
@@ -54,7 +53,7 @@ describe("AutoReconnectPanel", () => {
     const panel = (status?: React.ComponentProps<typeof AutoReconnectPanel>["status"]) => (
       <QueryClientProvider client={qc}>
         <MemoryRouter>
-          <AutoReconnectPanel integration="acme" credentials={CREDS} status={status} connected />
+          <AutoReconnectPanel integration="acme" credentials={CREDS} status={status} />
         </MemoryRouter>
       </QueryClientProvider>
     );
@@ -76,7 +75,6 @@ describe("AutoReconnectPanel", () => {
           integration={key}
           credentials={CREDS}
           status={{ bindings: {}, missing: ["username", "password"], dead: false }}
-          connected
         />
       </MemoryRouter>
       </QueryClientProvider>
@@ -146,9 +144,19 @@ describe("AutoReconnectPanel", () => {
     expect(screen.getByText("Session expired")).toBeInTheDocument();
   });
 
-  it("disables pickers with a hint when not connected", () => {
-    renderPanel({ connected: false, status: undefined });
+  it("disables pickers with a hint when there is no connection row", () => {
+    renderPanel({ status: undefined });
     expect(screen.getByText("Connect first")).toBeInTheDocument();
     expect(screen.getByLabelText("Password")).toBeDisabled();
+  });
+
+  it("an expired (dead) connection can still be bound: that is when binding matters", async () => {
+    renderPanel({ status: { bindings: {}, missing: ["username", "password"], dead: true } });
+    expect(screen.queryByText("Connect first")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Password")).toBeEnabled();
+    await screen.findAllByRole("option", { name: "acme_pw" });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "acme_pw" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(saveReconnectBindings).toHaveBeenCalledWith("acme", { password: "acme_pw" }));
   });
 });

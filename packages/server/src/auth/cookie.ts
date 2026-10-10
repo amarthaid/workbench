@@ -115,8 +115,14 @@ export async function storeCookies(userId: string, integration: string, data: Co
        updated_at = ?`,
     [userId, integration, encrypt("cookie-auth"), encrypt(JSON.stringify(data)), now, now, now]
   );
-  // Fresh cookies (manual connect, import, or auto-reconnect) end a dead spell.
-  await updateReconnectState(userId, integration, { deadAt: undefined });
+  // Fresh cookies (manual connect, import, or auto-reconnect) end a dead spell,
+  // and a failed attempt from before them is stale: drop it so the panel stops
+  // showing "Auto-reconnect failed" and the cooldown no longer applies.
+  const { last } = await getReconnectState(userId, integration);
+  await updateReconnectState(userId, integration, {
+    deadAt: undefined,
+    ...(last && !last.ok ? { last: undefined } : {}),
+  });
 }
 
 export async function getCookies(userId: string, integration: string): Promise<CookieData | null> {

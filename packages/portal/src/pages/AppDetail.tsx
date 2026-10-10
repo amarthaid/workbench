@@ -175,7 +175,6 @@ export default function AppDetail() {
             integration={data.name}
             credentials={data.autoReconnect.credentials}
             status={connectionRow?.autoReconnect}
-            connected={connected}
           />
         )}
         {data.name === "browser" && <BrowserControls />}

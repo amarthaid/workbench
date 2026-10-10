@@ -21,17 +21,18 @@ export function AutoReconnectPanel({
   integration,
   credentials,
   status,
-  connected,
 }: {
   integration: string;
   credentials: ReconnectCredential[];
+  /** Present only when a connection row exists (connected or expired). */
   status?: ReconnectStatus;
-  connected: boolean;
 }) {
   const initial = status?.bindings ?? {};
   // Only the user's edits are state; everything else derives from the server
   // status, so a status that loads late can never be overwritten by a stale seed.
   const [edits, setEdits] = useState<Record<string, string>>({});
+  // Bindable whenever a connection row exists, including an expired one:
+  // that is exactly when a user needs to bind.
   const ready = status !== undefined;
   const initialRef = useRef(initial);
   initialRef.current = initial;
@@ -85,7 +86,7 @@ export function AutoReconnectPanel({
             <p className="wb-detail-desc">
               Bind vault entries to the credentials this app signs in with. <Link to="/vault">Add a vault entry</Link>
             </p>
-            {!connected && <p className="wb-detail-desc">Connect first</p>}
+            {!ready && <p className="wb-detail-desc">Connect first</p>}
             {credentials.map((c) => {
               const value = edits[c.key] ?? initial[c.key] ?? "";
               const names = (secrets ?? []).map((s) => s.name);
@@ -96,7 +97,7 @@ export function AutoReconnectPanel({
                 <Select
                   id={`reconnect-${c.key}`}
                   value={value}
-                  disabled={!connected || !ready || busy}
+                  disabled={!ready || busy}
                   onChange={(e) => setEdits((v) => ({ ...v, [c.key]: e.target.value }))}
                 >
                   <option value="">— none —</option>
@@ -108,7 +109,7 @@ export function AutoReconnectPanel({
               </div>
               );
             })}
-            <Button onClick={onSave} disabled={!connected || !ready || busy || !dirty}>Save</Button>
+            <Button onClick={onSave} disabled={!ready || busy || !dirty}>Save</Button>
           </>
         )}
         {msg && <div className={msg.ok ? "wb-ok" : "ui-form-error"}>{msg.text}</div>}

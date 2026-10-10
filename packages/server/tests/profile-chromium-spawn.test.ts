@@ -7,7 +7,9 @@ vi.mock("node:child_process", async (orig) => ({
   spawn: spawnMock,
 }));
 
-import { spawnProfileChromium } from "../src/auth/profile-chromium";
+import { mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { spawnProfileChromium, userProfileDir } from "../src/auth/profile-chromium";
 
 // A chromium that dies at once: spawnProfileChromium rejects fast, and the
 // only thing under test is what it handed to spawn().
@@ -30,6 +32,28 @@ describe("spawnProfileChromium spawn options", () => {
     expect(args).toContain("--use-mock-keychain");
     expect(args).toContain("--password-store=basic");
     expect(options.env).toBe(env);
+  });
+
+  it("turns the password manager off in the profile before spawn, keeping other prefs", async () => {
+    // A recipe fills a vault password into the page; chromium must not offer
+    // to save it, or save it, into the profile's Login Data.
+    const dir = join(userProfileDir("spawn-pm-user"), "Default");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "Preferences"), JSON.stringify({ profile: { name: "Test User", password_manager_enabled: true }, other: 1 }));
+    await expect(spawnProfileChromium("spawn-pm-user")).rejects.toThrow(/exited/);
+    const prefs = JSON.parse(readFileSync(join(dir, "Preferences"), "utf8"));
+    expect(prefs.credentials_enable_service).toBe(false);
+    expect(prefs.profile.password_manager_enabled).toBe(false);
+    expect(prefs.profile.name).toBe("Test User");
+    expect(prefs.other).toBe(1);
+  });
+
+  it("writes the password-manager prefs into a fresh profile too", async () => {
+    const dir = join(userProfileDir("spawn-pm-fresh"), "Default");
+    rmSync(userProfileDir("spawn-pm-fresh"), { recursive: true, force: true });
+    await expect(spawnProfileChromium("spawn-pm-fresh")).rejects.toThrow(/exited/);
+    const prefs = JSON.parse(readFileSync(join(dir, "Preferences"), "utf8"));
+    expect(prefs).toEqual({ credentials_enable_service: false, profile: { password_manager_enabled: false } });
   });
 
   it("defaults env to process.env", async () => {
