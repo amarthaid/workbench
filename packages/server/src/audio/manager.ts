@@ -17,8 +17,35 @@ import {
 } from "../auth/browser-session";
 
 export const KEEPALIVE_MS = 10_000;
-/** A session with neither an SSE reader nor an uplink for this long ends ("idle"), and its capability with it. */
+/**
+ * After a reader or uplink has detached, a session with neither for this long
+ * ends ("idle"), and its capability with it. Before the first attach the
+ * allowance is BROWSER_AUDIO_FIRST_ATTACH_SECONDS instead: the client may wait
+ * on a human approving the call before it connects.
+ */
 export const IDLE_MS = 60_000;
+
+/**
+ * Pages a meeting app shows once you are out of the call. The tab stays open on
+ * them and the audio pipe has nothing left to carry, so landing on one ends the
+ * session ("page_left") — the voice client has no other way to learn the call
+ * is over. Only pages seen in a real run belong here; an origin change is not
+ * a signal, since join flows hop origins (landing page, web client, SSO).
+ */
+const POST_CALL_PAGES: Array<(u: URL) => boolean> = [
+  // Jitsi Meet's close page after any hangup, kick or meeting end
+  // (enableClosePage; close.html, close2.html, close3.html).
+  (u) => /^\/static\/close\d*\.html$/.test(u.pathname),
+];
+
+export function isPostCallPage(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return (u.protocol === "https:" || u.protocol === "http:") && POST_CALL_PAGES.some((m) => m(u));
+  } catch {
+    return false;
+  }
+}
 export const IDLE_CHECK_MS = 5_000;
 
 export type StartAudioResult =
@@ -134,6 +161,7 @@ async function doStart(
   if (warm?.audio) await warm.audio.pm.ensureDaemon();
   warm = getWarmSession(userId);
   let restarted = false;
+  let reopenUrl: string | null = null;
   if (!warm?.audio || warm.audio.epoch !== warm.audio.pm.epoch) {
     if (!opts.restart) {
       return {
@@ -149,7 +177,9 @@ async function doStart(
       await closeBrowserSession(userId);
       const opened = await openTab(userId);
       if (!opened.ok) return { ok: false, error: "BROWSER_RESTART_FAILED", detail: `browser restart failed: ${opened.error}` };
-      if (originOf(url)) await navigate(opened.tab, url);
+      // Reopened only once the mic is granted (below): a meeting page asks for
+      // the mic as it loads, and a request before the grant is denied for good.
+      if (originOf(url)) reopenUrl = url;
       tabId = opened.tab.id;
     } catch (e) {
       return { ok: false, error: "BROWSER_RESTART_FAILED", detail: `browser restart failed: ${(e as Error).message}` };
@@ -207,7 +237,9 @@ async function doStart(
   // so the grant follows every main-frame navigation, not just the first page.
   const offNav = tab.cdp.on("Page.frameNavigated", (p) => {
     const frame = (p as { frame?: { parentId?: string; url?: string } }).frame;
-    if (frame && !frame.parentId && frame.url) grant(originOf(frame.url));
+    if (!frame || frame.parentId || !frame.url) return;
+    if (isPostCallPage(frame.url)) session.end("page_left");
+    else grant(originOf(frame.url));
   });
   const keepAlive = setInterval(() => {
     if (session.attached) touchTab(userId, tabId);
@@ -216,16 +248,28 @@ async function doStart(
   // The capability URL is the only credential on the audio routes, so it must
   // not outlive the call: nobody attached for IDLE_MS ends the session.
   let lastAttached = Date.now();
+  let everAttached = false;
+  const firstAttachMs = config.BROWSER_AUDIO_FIRST_ATTACH_SECONDS * 1000;
   const idleCheck = setInterval(() => {
-    if (session.attached) lastAttached = Date.now();
-    else if (Date.now() - lastAttached >= IDLE_MS) session.end("idle");
+    if (session.attached) {
+      lastAttached = Date.now();
+      everAttached = true;
+    } else if (Date.now() - lastAttached >= (everAttached ? IDLE_MS : firstAttachMs)) {
+      session.end("idle");
+    }
   }, IDLE_CHECK_MS);
   idleCheck.unref?.();
   audio.pm.on("daemon-exit", onDaemonExit);
 
   sessions.set(userId, session);
   session.start();
-  grant(originOf(await tabUrl(userId, tabId).catch(() => "")));
+  if (reopenUrl) {
+    grant(originOf(reopenUrl));
+    await chain;
+    if (!session.ended) await navigate(tab, reopenUrl).catch(() => undefined);
+  } else {
+    grant(originOf(await tabUrl(userId, tabId).catch(() => "")));
+  }
   return { ok: true, session, session_id: tabId, restarted };
 }
 

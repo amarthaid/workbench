@@ -288,12 +288,15 @@ const tools: PluginTool[] = [
   {
     name: "browser_audio_start",
     description:
-      "Give this tab a live audio pipe so you can take part in a browser call (Zoom web, Slack huddle, Meet). " +
-      "Call it after opening the meeting page, before joining. Returns stream_url: GET it as SSE for the call audio " +
+      "Give this tab a live audio pipe so you can take part in a browser call (Zoom web, Slack huddle, Meet, Jitsi). " +
+      "Call it BEFORE navigating to the meeting: meeting pages ask for the mic as they load, and a page that loaded " +
+      "before this call has no mic (reload it). Returns stream_url: GET it as SSE for the call audio " +
       "(`audio` events: base64 PCM16 mono, 40 ms each) and POST one long chunked `Content-Type: audio/pcm` body to it " +
       "with your voice at the same rate. POST clear_url to stop your audio at once (barge-in); it returns played_ms. " +
       "The URLs are secrets valid only while this audio session is open: no Authorization header, send only `headers`. " +
-      "One reader and one POST at a time (409 otherwise); nothing attached for 60 s ends the session. One call per user at a time.",
+      "One reader and one POST at a time (409 otherwise). The session ends `idle` if nothing attaches within " +
+      "BROWSER_AUDIO_FIRST_ATTACH_SECONDS (default 600) or nothing is attached for 60 s after that, and `page_left` " +
+      "when the tab lands on a meeting app's post-call page. One call per user at a time.",
     integration: BROWSER_INTEGRATION_NAME,
     inputSchema: z.object({
       session_id: z.string().describe(SESSION_ID_DESC),
