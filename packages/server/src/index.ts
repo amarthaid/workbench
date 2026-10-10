@@ -1,6 +1,6 @@
 import Fastify from "fastify";
 import { config } from "./config";
-import { handleMcpRequest } from "./mcp/server";
+import { registerMcpRoute } from "./mcp/route";
 import { registerApiRoutes } from "./api/routes";
 import { registerAdminRoutes } from "./api/admin-routes";
 import { registerOAuthRoutes } from "./api/oauth-routes";
@@ -21,17 +21,13 @@ import { startUploadReaper } from "./jots/pending";
 import { loadPlugins } from "./plugins/loader";
 import { registry } from "./plugins/registry";
 import { isIntegrationDisabled, loadSettings, startSettingsPoll } from "./settings/instance-settings";
-import { resolveMcpUser } from "./auth/oauth-server/resolve";
 import { startBrowserReaper } from "./auth/browser-session";
-import { registerCdpBridgeRoutes, startChannelReaper, SESSION_HEADER, verifySessionKey } from "./auth/cdp-bridge";
-import { forwardForBrowserAffinity } from "./auth/affinity-forward";
-import { needsBrowserAffinity, runWithBrowserAffinity } from "./auth/reconnect/affinity";
+import { registerCdpBridgeRoutes, startChannelReaper } from "./auth/cdp-bridge";
 import cluster from "node:cluster";
 import { availableParallelism } from "node:os";
 import { db } from "./db.js";
 import "./telemetry/tracing";
 import { metricsRegistry, httpRequestsTotal, httpRequestDuration } from "./telemetry/metrics";
-import { VIA_HEADER, mcpLoopRefusal, parseVia, runWithVia } from "./custom-apps/loop-guard";
 
 async function main() {
   const app = Fastify({
@@ -83,61 +79,7 @@ async function main() {
   // Live-view CDP bridge: REST + SSE, no WebSocket upgrade anywhere in the
   // browser-facing path. See auth/cdp-bridge.ts.
   registerCdpBridgeRoutes(app);
-
-  app.post("/mcp", async (request, reply) => {
-    // A custom app (here, or on another workbench) that leads back to this
-    // instance would loop without end. See custom-apps/loop-guard.ts.
-    const via = request.headers[VIA_HEADER];
-    const loop = mcpLoopRefusal(via, request.body);
-    if (loop) return reply.status(loop.status).send(loop.body);
-
-    // /mcp accepts: x-workbench-api-key (headless), OAuth Bearer (browser flow),
-    // or portal session JWT.
-    const userId = await resolveMcpUser(request.headers as Record<string, string>);
-    if (!userId) {
-      const reqBody = request.body as { id?: string | number | null } | undefined;
-      const prm = `${config.SERVER_PUBLIC_URL}/.well-known/oauth-protected-resource`;
-      reply.header(
-        "WWW-Authenticate",
-        `Bearer realm="a-workbench", resource_metadata="${prm}"`
-      );
-      return reply.status(401).send({
-        jsonrpc: "2.0",
-        id: reqBody?.id ?? null,
-        error: { code: -32001, message: "Unauthorized", data: { resource_metadata: prm } },
-      });
-    }
-    const body = request.body as Record<string, unknown>;
-
-    // Under CLUSTER_ENABLED a browser_* call must reach the replica that owns
-    // this user's chromium. The routing key is derived from the bearer, not
-    // read from the agent's arguments. See auth/affinity-forward.ts.
-    const params = body.params as { name?: unknown; arguments?: { executions?: unknown } } | undefined;
-    if (
-      config.INTERNAL_MCP_URL &&
-      body.method === "tools/call" &&
-      needsBrowserAffinity(params?.arguments?.executions, params?.name)
-    ) {
-      const sent = await forwardForBrowserAffinity({
-        userId, request, reply, target: config.INTERNAL_MCP_URL, body,
-      });
-      if (sent) return reply;
-    }
-
-    // Outbound custom-app calls made while handling this request extend its chain.
-    // A verified routing key means this replica owns the user's chromium, so a
-    // cookie reconnect recipe may drive it.
-    const inboundKey = request.headers[SESSION_HEADER];
-    const isOwner = verifySessionKey(Array.isArray(inboundKey) ? inboundKey[0] : inboundKey, userId);
-    const run = () => runWithVia(parseVia(via), () => handleMcpRequest(body, userId));
-    const result = await (isOwner ? runWithBrowserAffinity(run) : run());
-    // JSON-RPC notifications return null — no body, just 202 Accepted.
-    if (result === null) {
-      reply.status(202).send();
-      return;
-    }
-    reply.send(result);
-  });
+  registerMcpRoute(app);
 
   // Plain-REST twin of /mcp — same credentials and same execution engine,
   // without JSON-RPC framing or the MCP result cap.

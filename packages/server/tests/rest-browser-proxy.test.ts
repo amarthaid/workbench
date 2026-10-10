@@ -36,6 +36,7 @@ vi.mock("../src/auth/oauth-server/resolve", () => ({
 import { registerRestRoutes } from "../src/api/rest-routes";
 import { registry } from "../src/plugins/registry";
 import { hasValidCookies } from "../src/auth/cookie";
+import { mayOwnBrowser } from "../src/auth/reconnect/affinity";
 import { SESSION_HEADER, mintSessionKey } from "../src/auth/cdp-bridge";
 
 const browserInteg = {
@@ -66,6 +67,8 @@ const listRepos = {
   handler: vi.fn(async () => ({ local: true })),
 };
 
+// What mayOwnBrowser() said while the acme handler ran.
+const owned: boolean[] = [];
 const acmeInteg = {
   name: "acme",
   version: "1.0.0",
@@ -77,7 +80,10 @@ const acmeList = {
   description: "list",
   integration: "acme",
   inputSchema: z.object({}),
-  handler: vi.fn(async () => ({ local: true })),
+  handler: vi.fn(async () => {
+    owned.push(mayOwnBrowser());
+    return { local: true };
+  }),
 };
 
 function stubRegistry() {
@@ -100,6 +106,7 @@ let app: ReturnType<typeof Fastify>;
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  owned.length = 0;
   fetchMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
   stubRegistry();
@@ -176,5 +183,40 @@ describe("POST /rest/<recipe integration> affinity", () => {
     expect(res.statusCode).toBe(200);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(acmeList.handler).toHaveBeenCalled();
+    expect(owned).toEqual([true]);
+  });
+
+  // The owner gate: only a verified key for this bearer's user lets the
+  // handler drive chromium. When the hop fails the request falls through to
+  // local handling, which is exactly where the gate must say no.
+  it("grants chromium ownership only for this user's verified key", async () => {
+    vi.mocked(hasValidCookies).mockResolvedValue(true as never);
+    fetchMock.mockRejectedValue(new Error("ECONNREFUSED"));
+    for (const [key, expected] of [
+      [mintSessionKey("user-1"), true],
+      [undefined, false],
+      [mintSessionKey("user-2"), false],
+    ] as const) {
+      owned.length = 0;
+      const res = await app.inject({
+        method: "POST", url: "/rest/acme",
+        headers: key ? { ...headers, [SESSION_HEADER]: key } : headers,
+        payload: { tool: "list" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(owned).toEqual([expected]);
+    }
+  });
+
+  it("forwards, rather than runs, another user's key", async () => {
+    fetchMock.mockResolvedValue({ status: 200, text: async () => JSON.stringify({ integration: "acme", result: {} }) });
+    await app.inject({
+      method: "POST", url: "/rest/acme",
+      headers: { ...headers, [SESSION_HEADER]: mintSessionKey("user-2") },
+      payload: { tool: "list" },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][1].headers[SESSION_HEADER]).toBe(mintSessionKey("user-1"));
+    expect(acmeList.handler).not.toHaveBeenCalled();
   });
 });
