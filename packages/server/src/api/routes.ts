@@ -23,6 +23,7 @@ import {
   CookieData,
 } from "../auth/cookie";
 import { verifyConnectToken } from "../auth/connect-token";
+import { markConnectStarted, markConnectEnded } from "../auth/reconnect/connect-lock";
 import { signConnectToken } from "../auth/connect-token";
 import {
   createCustomApp,
@@ -446,8 +447,16 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     }
 
     if (integ.auth.type === "cookie") {
-      const session = await defaultTab(user.userId);
-      await navigate(session, integ.auth.loginUrl);
+      // A human is now driving this chromium: auto-reconnect stands down until
+      // capture, cancel or the lock's TTL (auth/reconnect/connect-lock.ts).
+      markConnectStarted(user.userId);
+      try {
+        const session = await defaultTab(user.userId);
+        await navigate(session, integ.auth.loginUrl);
+      } catch (err) {
+        markConnectEnded(user.userId);
+        throw err;
+      }
       return {
         type: "cookie",
         status: "login_required",
@@ -591,6 +600,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       }
       await storeCookies(user.userId, integration, data);
       markConnected(user.userId, integration);
+      markConnectEnded(user.userId);
       return { success: true, cookieCount: data.cookies.length };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -649,6 +659,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       };
       await storeCookies(user.userId, integration, data);
       markConnected(user.userId, integration);
+      markConnectEnded(user.userId);
       return { success: true, cookieCount: data.cookies.length };
     }
   );
@@ -715,6 +726,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     if (!user) return reply.status(401).send({ error: "Unauthorized" });
     // Capture shares the per-user browser session, which browser-use may also be
     // driving — do not kill it here. The idle reaper reclaims it on its own.
+    markConnectEnded(user.userId);
     return { success: true };
   });
 
@@ -771,6 +783,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     if (!integ) return reply.status(404).send({ error: "Integration not found" });
 
     if (integ.auth.type === "cookie") {
+      markConnectStarted(user.userId);
       try {
         const session = await defaultTab(user.userId);
         await navigate(session, integ.auth.loginUrl);
@@ -781,6 +794,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
           cdpProxyUrl: `/api/auth/cookie/${payload.integration}/cdp`,
         };
       } catch (err) {
+        markConnectEnded(user.userId);
         return reply.status(400).send({ error: err instanceof Error ? err.message : String(err) });
       }
     }
@@ -828,6 +842,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       }
       await storeCookies(user.userId, payload.integration, data);
       markConnected(user.userId, payload.integration);
+      markConnectEnded(user.userId);
       return { success: true, cookieCount: data.cookies.length };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

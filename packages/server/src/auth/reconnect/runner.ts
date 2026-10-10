@@ -2,17 +2,16 @@ import type { CookieConfig, ReconnectStep } from "@a-workbench/shared";
 import { registry } from "../../plugins/registry";
 import { auditLogger } from "../../audit/logger";
 import { readSecretValue, touchUsed } from "../../vault/store";
-import { activeProfiles } from "../profile-chromium";
 import { openTab, closeTab, getWarmSession, captureLiveCookies, pressKey, type PageHandle } from "../browser-session";
 import { storeCookies, type CookieData } from "../cookie";
 import { getReconnectState, updateReconnectState, type ReconnectState } from "./state";
 import { clickSelector, fillSelector, waitForSelector, waitForUrl, currentUrl, StepError, type ReconnectReason } from "./dom";
 import { mayOwnBrowser } from "./affinity";
+import { isConnectInProgress } from "./connect-lock";
 
 export const RECONNECT_COOLDOWN_MS = 600_000;
 const DEFAULT_RUN_MS = 30_000;
 const DEFAULT_STEP_MS = 10_000;
-const GOTO_SETTLE_MS = 500;
 const CRED_RE = /\{\{cred:([a-z0-9_]+)\}\}/g;
 
 export type ReconnectOutcome =
@@ -21,12 +20,14 @@ export type ReconnectOutcome =
 
 type RecipeAuth = CookieConfig & Required<Pick<CookieConfig, "session" | "reconnect">>;
 
-// Test seam: the liveness probe is the only network call the runner makes itself.
+// Test seams: the liveness probe (the only network call the runner makes
+// itself) and the settle time after a goto.
 export const __deps = {
   async probe(url: string, cookieHeader: string): Promise<number> {
     const res = await fetch(url, { headers: { Cookie: cookieHeader }, redirect: "manual", signal: AbortSignal.timeout(10_000) });
     return res.status;
   },
+  GOTO_SETTLE_MS: 500,
 };
 
 /** False inside the cooldown that follows a failed attempt. */
@@ -61,13 +62,37 @@ function allowedHosts(auth: RecipeAuth): string[] {
     .map((d) => d.replace(/^\./, "").toLowerCase());
 }
 
-function hostOk(href: string, allowed: string[]): boolean {
-  if (href === "about:blank" || href === "") return true;
+/**
+ * `""`/`about:blank` pass only before the first goto: the fresh tab's blank
+ * page. Afterwards an empty href means the evaluate failed, so fail closed.
+ */
+function hostOk(href: string, allowed: string[], navigated: boolean): boolean {
+  if (!navigated && (href === "about:blank" || href === "")) return true;
   try {
     const h = new URL(href).hostname.toLowerCase();
     return allowed.some((d) => h === d || h.endsWith("." + d));
   } catch {
     return false;
+  }
+}
+
+/** Race `p` against the run deadline; expiry is StepError("TIMEOUT"). */
+async function withDeadline<T>(p: Promise<T>, deadline: number): Promise<T> {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) {
+    p.catch(() => {});
+    throw new StepError("TIMEOUT");
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expiry = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new StepError("TIMEOUT")), remaining);
+  });
+  try {
+    return await Promise.race([p, expiry]);
+  } finally {
+    clearTimeout(timer);
+    // The loser keeps running until the tab closes; never let it reject unhandled.
+    p.catch(() => {});
   }
 }
 
@@ -81,39 +106,47 @@ async function probeAlive(auth: RecipeAuth, cookies: { name: string; value: stri
   return probe.alive.includes(status);
 }
 
+// Swallowed side-effect failures are logged by code only: an error message
+// from a destination or the DB could echo a value.
+function warn(what: string, code: string): void {
+  console.warn(`[reconnect] ${what} failed (${code})`);
+}
+
 async function attempt(userId: string, integration: string, auth: RecipeAuth): Promise<ReconnectOutcome> {
   const state = await getReconnectState(userId, integration);
   if (!canAttemptReconnect(state)) return { ok: false, reason: "COOLDOWN" };
-  if (activeProfiles.has(userId)) return { ok: false, reason: "BUSY" };
+  // A human mid-connect owns the browser. `activeProfiles` is not this signal:
+  // a warm chromium holds it for its whole life.
+  if (isConnectInProgress(userId)) return { ok: false, reason: "BUSY" };
 
   const started = Date.now();
+  const deadline = started + (auth.reconnect.timeoutMs ?? DEFAULT_RUN_MS);
   const capture = () => captureLiveCookies(userId, auth.targetDomain, auth.cookieDomains);
 
-  // Fast path: the profile may already hold a live app session.
-  if (auth.session.probe && getWarmSession(userId)) {
-    try {
-      const data = await capture();
-      if (data.cookies.length && (await probeAlive(auth, data.cookies))) {
-        return await commit(userId, integration, data, started);
-      }
-    } catch { /* fall through to the recipe */ }
-  }
-
   let tabId: string | null = null;
+  let phase = "verify"; // label for the failure record: "open", "step i", or "verify"
   let stepIndex = -1;
   try {
-    const opened = await openTab(userId);
+    // Fast path: the profile may already hold a live app session. Only capture
+    // and probe fall through to the recipe; a commit failure is a failure.
+    if (auth.session.probe && getWarmSession(userId)) {
+      let live: CookieData | null = null;
+      try {
+        const data = await withDeadline(capture(), deadline);
+        if (data.cookies.length && (await withDeadline(probeAlive(auth, data.cookies), deadline))) live = data;
+      } catch { /* fall through to the recipe */ }
+      if (live) return await commit(userId, integration, live, started);
+    }
+
+    phase = "open";
+    const opened = await withDeadline(openTab(userId), deadline);
     if (!opened.ok) throw new StepError("BROWSER_ERROR");
     tabId = opened.tab.id;
     const page: PageHandle = opened.tab;
-    const deadline = started + (auth.reconnect.timeoutMs ?? DEFAULT_RUN_MS);
     const allowed = allowedHosts(auth);
     const bindings = state.bindings ?? {};
     const usedNames: string[] = [];
-
-    const guardHost = async () => {
-      if (!hostOk(await currentUrl(page), allowed)) throw new StepError("HOST_NOT_ALLOWED");
-    };
+    let navigated = false;
 
     // Plaintext lives only in the returned string, which goes straight to
     // fillSelector's CallArgument. Errors carry the reason code alone.
@@ -131,30 +164,34 @@ async function attempt(userId: string, integration: string, auth: RecipeAuth): P
 
     for (const [i, step] of auth.reconnect.steps.entries()) {
       stepIndex = i;
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) throw new StepError("TIMEOUT");
-      await guardHost();
-      await runStep(page, step, auth, Math.min(stepTimeout(step), remaining), allowed, resolveValue);
+      phase = `step ${i}`;
+      const href = await withDeadline(currentUrl(page), deadline);
+      if (!hostOk(href, allowed, navigated)) throw new StepError("HOST_NOT_ALLOWED");
+      const timeoutMs = Math.min(stepTimeout(step), deadline - Date.now());
+      if (timeoutMs <= 0) throw new StepError("TIMEOUT");
+      await withDeadline(runStep(page, step, auth, timeoutMs, allowed, resolveValue), deadline);
+      if ("goto" in step) navigated = true;
     }
 
     stepIndex = -1;
-    const data = await capture();
+    phase = "verify";
+    const data = await withDeadline(capture(), deadline);
     if (!data.cookies.length) throw new StepError("NO_COOKIES");
     if (auth.session.probe) {
-      if (!(await probeAlive(auth, data.cookies))) throw new StepError("PROBE_FAILED");
-    } else if ((await currentUrl(page)).startsWith(auth.loginUrl)) {
-      throw new StepError("PROBE_FAILED");
+      if (!(await withDeadline(probeAlive(auth, data.cookies), deadline))) throw new StepError("PROBE_FAILED");
+    } else {
+      const href = await withDeadline(currentUrl(page), deadline);
+      if (!href || href.startsWith(auth.loginUrl)) throw new StepError("PROBE_FAILED");
     }
-    if (usedNames.length) await touchUsed(userId, usedNames).catch(() => {});
+    if (usedNames.length) await touchUsed(userId, usedNames).catch(() => warn("vault touchUsed", "TOUCH_FAILED"));
     return await commit(userId, integration, data, started);
   } catch (e) {
     const reason: ReconnectReason = e instanceof StepError ? e.reason : "BROWSER_ERROR";
     const now = Date.now();
-    const where = stepIndex >= 0 ? `step ${stepIndex}` : "verify";
-    await updateReconnectState(userId, integration, { deadAt: now, last: { at: now, ok: false, error: `${where}: ${reason}` } });
+    await updateReconnectState(userId, integration, { deadAt: now, last: { at: now, ok: false, error: `${phase}: ${reason}` } });
     await auditLogger
       .log({ user_id: userId, integration, action: "REFRESH", success: false, error: reason, duration_ms: now - started })
-      .catch(() => {});
+      .catch(() => warn("audit log REFRESH", reason));
     return { ok: false, reason, ...(stepIndex >= 0 ? { step: stepIndex } : {}) };
   } finally {
     if (tabId) await closeTab(userId, tabId).catch(() => false);
@@ -170,7 +207,7 @@ async function commit(userId: string, integration: string, data: CookieData, sta
   await updateReconnectState(userId, integration, { last: { at: Date.now(), ok: true } });
   await auditLogger
     .log({ user_id: userId, integration, action: "REFRESH", success: true, duration_ms: Date.now() - started })
-    .catch(() => {});
+    .catch(() => warn("audit log REFRESH", "OK"));
   return { ok: true };
 }
 
@@ -187,7 +224,7 @@ async function runStep(
       : /^https?:\/\//i.test(step.goto) ? step.goto
       : `https://${auth.targetDomain}${step.goto}`;
     await page.cdp.send("Page.navigate", { url });
-    await new Promise((r) => setTimeout(r, GOTO_SETTLE_MS));
+    if (__deps.GOTO_SETTLE_MS > 0) await new Promise((r) => setTimeout(r, __deps.GOTO_SETTLE_MS));
     return;
   }
   if ("click" in step) {

@@ -9,7 +9,10 @@ const h = vi.hoisted(() => {
     redirect: undefined as string | undefined,
     elements: new Set<string>(),
     afterLogin: () => {},
+    hangNavigate: false, // Page.navigate never resolves
+    throwOnKey: false, // Input.dispatchKeyEvent throws a plain (non-Step) Error
   };
+  const flags = { storeFail: false };
   const sent: [string, any][] = [];
   const hostOf = (u: string) => { try { return new URL(u).hostname.toLowerCase(); } catch { return ""; } };
   const fakeTab = {
@@ -17,6 +20,8 @@ const h = vi.hoisted(() => {
     cdp: {
       send: async (m: string, p?: any) => {
         sent.push([m, p]);
+        if (m === "Page.navigate" && pageState.hangNavigate) return new Promise(() => {});
+        if (m === "Input.dispatchKeyEvent" && pageState.throwOnKey) throw new Error("socket closed");
         if (m === "Page.navigate") { pageState.url = pageState.redirect ?? p.url; return {}; }
         if (m === "Runtime.evaluate") {
           const expr: string = p.expression;
@@ -43,7 +48,18 @@ const h = vi.hoisted(() => {
   };
   const live = { cookies: [] as any[] };
   const vault: Record<string, string> = {};
-  return { pageState, sent, fakeTab, live, vault };
+  return { pageState, sent, fakeTab, live, vault, flags };
+});
+
+vi.mock("../src/auth/cookie", async (orig) => {
+  const real = await orig<typeof import("../src/auth/cookie")>();
+  return {
+    ...real,
+    storeCookies: vi.fn(async (...a: Parameters<typeof real.storeCookies>) => {
+      if (h.flags.storeFail) throw new Error("db down");
+      return real.storeCookies(...a);
+    }),
+  };
 });
 
 vi.mock("../src/auth/browser-session", async (orig) => ({
@@ -66,8 +82,10 @@ import { config } from "../src/config";
 import { registry } from "../src/plugins/registry";
 import { activeProfiles } from "../src/auth/profile-chromium";
 import { storeCookies } from "../src/auth/cookie";
-import { closeTab } from "../src/auth/browser-session";
+import { closeTab, openTab } from "../src/auth/browser-session";
+import { touchUsed } from "../src/vault/store";
 import { getReconnectState, updateReconnectState } from "../src/auth/reconnect/state";
+import { markConnectStarted, markConnectEnded } from "../src/auth/reconnect/connect-lock";
 import { reconnectSession, canAttemptReconnect, __deps, RECONNECT_COOLDOWN_MS } from "../src/auth/reconnect/runner";
 import { runWithBrowserAffinity, mayOwnBrowser } from "../src/auth/reconnect/affinity";
 
@@ -88,7 +106,7 @@ const auth = {
       { fill: "#pass", value: "{{cred:password}}" },
       { press: "Enter" },
     ] as any[],
-    timeoutMs: 3000,
+    timeoutMs: 10000,
   },
 };
 const goodCookie = { name: "sid", value: "tok-new", domain: "app.example.com", path: "/", expires: 9999999999 };
@@ -104,6 +122,11 @@ beforeEach(async () => {
   auditLog.mockClear();
   pageState.url = "about:blank";
   pageState.redirect = undefined;
+  pageState.hangNavigate = false;
+  pageState.throwOnKey = false;
+  h.flags.storeFail = false;
+  __deps.GOTO_SETTLE_MS = 0;
+  markConnectEnded(U);
   pageState.elements = new Set(["#user", "#pass"]);
   probeStatus = 401;
   pageState.afterLogin = () => { live.cookies = [goodCookie]; probeStatus = 200; };
@@ -178,17 +201,119 @@ describe("reconnectSession", () => {
     expect(await reconnectSession(U, I)).toEqual({ ok: true });
   });
 
-  it("busy profile: no run, nothing recorded", async () => {
-    activeProfiles.add(U);
+  it("busy (a human is mid-connect): no run, nothing recorded", async () => {
+    markConnectStarted(U);
     try {
       expect(await reconnectSession(U, I)).toMatchObject({ ok: false, reason: "BUSY" });
       const st = await getReconnectState(U, I);
       expect(st.last).toBeUndefined();
       expect(st.deadAt).toBeUndefined();
       expect(sent).toHaveLength(0);
+      expect(openTab).not.toHaveBeenCalled();
       expect(auditLog).not.toHaveBeenCalled();
     } finally {
+      markConnectEnded(U);
+    }
+  });
+
+  it("a warm chromium (activeProfiles held) does not block: the fast path runs", async () => {
+    activeProfiles.add(U); // a warm browser holds this for its whole life
+    try {
+      live.cookies = [goodCookie];
+      probeStatus = 200;
+      expect(await reconnectSession(U, I)).toEqual({ ok: true });
+      expect(__deps.probe).toHaveBeenCalled();
+      expect(openTab).not.toHaveBeenCalled();
+    } finally {
       activeProfiles.delete(U);
+    }
+  });
+
+  it("a fast-path commit failure is recorded, not retried through the recipe", async () => {
+    live.cookies = [goodCookie];
+    probeStatus = 200;
+    h.flags.storeFail = true;
+    expect(await reconnectSession(U, I)).toMatchObject({ ok: false, reason: "BROWSER_ERROR" });
+    expect(openTab).not.toHaveBeenCalled();
+    expect(sent.find(([m]) => m === "Page.navigate")).toBeUndefined();
+    expect((await getReconnectState(U, I)).last).toMatchObject({ ok: false });
+  });
+
+  it("openTab returning !ok is BROWSER_ERROR, recorded under 'open'", async () => {
+    vi.mocked(openTab).mockResolvedValueOnce({ ok: false, error: "BROWSER_TAB_LIMIT", limit: 1 });
+    const out = await reconnectSession(U, I);
+    expect(out).toEqual({ ok: false, reason: "BROWSER_ERROR" });
+    expect((await getReconnectState(U, I)).last?.error).toBe("open: BROWSER_ERROR");
+    expect(closeTab).not.toHaveBeenCalled();
+  });
+
+  it("openTab throwing is BROWSER_ERROR", async () => {
+    vi.mocked(openTab).mockRejectedValueOnce(new Error("spawn failed"));
+    expect(await reconnectSession(U, I)).toEqual({ ok: false, reason: "BROWSER_ERROR" });
+    expect((await getReconnectState(U, I)).deadAt).toBeTypeOf("number");
+  });
+
+  it("a step that never resolves hits the run deadline: TIMEOUT, tab closed", async () => {
+    pageState.hangNavigate = true;
+    vi.spyOn(registry, "getIntegration").mockReturnValue({
+      name: I, version: "1", auth: { ...auth, reconnect: { ...auth.reconnect, timeoutMs: 300 } },
+    } as any);
+    const t0 = Date.now();
+    const out = await reconnectSession(U, I);
+    expect(out).toEqual({ ok: false, reason: "TIMEOUT", step: 0 });
+    expect(Date.now() - t0).toBeLessThan(3000);
+    expect(closeTab).toHaveBeenCalledWith(U, "tab-1");
+    expect((await getReconnectState(U, I)).last?.error).toBe("step 0: TIMEOUT");
+  });
+
+  it("a non-StepError exception maps to BROWSER_ERROR and the tab is closed", async () => {
+    pageState.throwOnKey = true;
+    const out = await reconnectSession(U, I);
+    expect(out).toEqual({ ok: false, reason: "BROWSER_ERROR", step: 3 });
+    expect(closeTab).toHaveBeenCalledWith(U, "tab-1");
+    expect(JSON.stringify(auditLog.mock.calls)).not.toContain("socket closed");
+  });
+
+  it("after a goto, an empty href (failed evaluate) fails closed with HOST_NOT_ALLOWED", async () => {
+    pageState.redirect = ""; // location.href now reads ""
+    const out = await reconnectSession(U, I);
+    expect(out).toMatchObject({ ok: false, reason: "HOST_NOT_ALLOWED", step: 1 });
+    expect(deliveries()).toHaveLength(0);
+  });
+
+  describe("without a probe", () => {
+    const noProbe = { ...auth, session: { dead: { status: [401] } } };
+    beforeEach(() => {
+      vi.spyOn(registry, "getIntegration").mockReturnValue({ name: I, version: "1", auth: noProbe } as any);
+    });
+
+    it("succeeds when the page left the login URL", async () => {
+      pageState.afterLogin = () => { live.cookies = [goodCookie]; pageState.url = "https://app.example.com/home"; };
+      expect(await reconnectSession(U, I)).toEqual({ ok: true });
+    });
+
+    it("an empty current URL is PROBE_FAILED", async () => {
+      pageState.afterLogin = () => { live.cookies = [goodCookie]; pageState.url = ""; };
+      expect(await reconnectSession(U, I)).toMatchObject({ ok: false, reason: "PROBE_FAILED" });
+    });
+
+    it("still on the login URL is PROBE_FAILED", async () => {
+      pageState.afterLogin = () => { live.cookies = [goodCookie]; };
+      expect(await reconnectSession(U, I)).toMatchObject({ ok: false, reason: "PROBE_FAILED" });
+    });
+  });
+
+  it("swallowed audit / touchUsed errors warn by code only and do not change the outcome", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    auditLog.mockRejectedValueOnce(new Error("audit down: pw-abc"));
+    vi.mocked(touchUsed).mockRejectedValueOnce(new Error("db down: pw-abc"));
+    try {
+      expect(await reconnectSession(U, I)).toEqual({ ok: true });
+      expect(warn).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("pw-abc");
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("down");
+    } finally {
+      warn.mockRestore();
     }
   });
 

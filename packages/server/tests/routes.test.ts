@@ -1057,6 +1057,104 @@ describe("API routes", () => {
     });
   });
 
+  // Auto-reconnect stands down while a human is mid-connect (connect-lock.ts).
+  describe("cookie connect lock", () => {
+    const lockInteg = {
+      name: "legacy",
+      version: "1.0.0",
+      auth: { type: "cookie" as const, loginUrl: "https://legacy.example.com/login", targetDomain: "legacy.example.com", cookieDomains: [] },
+    };
+    const headers = { authorization: "Bearer valid-jwt" };
+
+    beforeEach(async () => {
+      const { markConnectEnded } = await import("../src/auth/reconnect/connect-lock");
+      markConnectEnded("user-1");
+      _clearAll();
+      vi.spyOn(registry, "getIntegration").mockReturnValue(lockInteg as never);
+    });
+
+    it("GET /api/auth/:integration sets the lock and portal capture clears it", async () => {
+      const { isConnectInProgress } = await import("../src/auth/reconnect/connect-lock");
+      const { captureLiveCookies } = await import("../src/auth/browser-session");
+      const app = await buildApp();
+      expect((await app.inject({ method: "GET", url: "/api/auth/legacy", headers })).statusCode).toBe(200);
+      expect(isConnectInProgress("user-1")).toBe(true);
+
+      // Zero cookies: the human has not finished logging in, so the lock stays.
+      vi.mocked(captureLiveCookies).mockResolvedValue({ domain: "legacy.example.com", cookies: [], capturedAt: 1 });
+      expect((await app.inject({ method: "POST", url: "/api/auth/cookie/legacy/capture", headers })).statusCode).toBe(400);
+      expect(isConnectInProgress("user-1")).toBe(true);
+
+      vi.mocked(captureLiveCookies).mockResolvedValue({ domain: "legacy.example.com", cookies: [{ name: "s", value: "v" }], capturedAt: 1 });
+      expect((await app.inject({ method: "POST", url: "/api/auth/cookie/legacy/capture", headers })).statusCode).toBe(200);
+      expect(isConnectInProgress("user-1")).toBe(false);
+    });
+
+    it("GET /api/auth/:integration releases the lock when the browser fails to start", async () => {
+      const { isConnectInProgress } = await import("../src/auth/reconnect/connect-lock");
+      const { defaultTab } = await import("../src/auth/browser-session");
+      vi.mocked(defaultTab).mockRejectedValueOnce(new Error("spawn failed"));
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/auth/legacy", headers });
+      expect(res.statusCode).toBe(500);
+      expect(isConnectInProgress("user-1")).toBe(false);
+    });
+
+    it("cancel clears the lock", async () => {
+      const { isConnectInProgress } = await import("../src/auth/reconnect/connect-lock");
+      const app = await buildApp();
+      await app.inject({ method: "GET", url: "/api/auth/legacy", headers });
+      expect(isConnectInProgress("user-1")).toBe(true);
+      await app.inject({ method: "POST", url: "/api/auth/cookie/legacy/cancel", headers });
+      expect(isConnectInProgress("user-1")).toBe(false);
+    });
+
+    it("session import clears the lock", async () => {
+      const { markConnectStarted, isConnectInProgress } = await import("../src/auth/reconnect/connect-lock");
+      markConnectStarted("user-1");
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/integrations/legacy/session/import",
+        headers,
+        payload: [{ name: "s", value: "v", domain: "legacy.example.com", path: "/" }],
+      });
+      expect(res.statusCode).toBe(200);
+      expect(isConnectInProgress("user-1")).toBe(false);
+    });
+
+    it("link redeem sets the lock and link capture clears it", async () => {
+      const { isConnectInProgress } = await import("../src/auth/reconnect/connect-lock");
+      const { captureLiveCookies } = await import("../src/auth/browser-session");
+      const rec = createPending({ userId: "user-1", integration: "legacy", type: "cookie", ttlSeconds: 600 });
+      const token = await signConnectToken(
+        { connectionId: rec.connectionId, userId: "user-1", integration: "legacy", sessionId: "user-1" },
+        600
+      );
+      const app = await buildApp();
+      expect((await app.inject({ method: "POST", url: "/api/connect/redeem", headers, payload: { token } })).statusCode).toBe(200);
+      expect(isConnectInProgress("user-1")).toBe(true);
+
+      vi.mocked(captureLiveCookies).mockResolvedValue({ domain: "legacy.example.com", cookies: [{ name: "s", value: "v" }], capturedAt: 1 });
+      expect((await app.inject({ method: "POST", url: "/api/connect/capture", headers, payload: { token } })).statusCode).toBe(200);
+      expect(isConnectInProgress("user-1")).toBe(false);
+    });
+
+    it("link redeem releases the lock when the browser fails to start", async () => {
+      const { isConnectInProgress } = await import("../src/auth/reconnect/connect-lock");
+      const { defaultTab } = await import("../src/auth/browser-session");
+      vi.mocked(defaultTab).mockRejectedValueOnce(new Error("spawn failed"));
+      const rec = createPending({ userId: "user-1", integration: "legacy", type: "cookie", ttlSeconds: 600 });
+      const token = await signConnectToken(
+        { connectionId: rec.connectionId, userId: "user-1", integration: "legacy", sessionId: "user-1" },
+        600
+      );
+      const app = await buildApp();
+      expect((await app.inject({ method: "POST", url: "/api/connect/redeem", headers, payload: { token } })).statusCode).toBe(400);
+      expect(isConnectInProgress("user-1")).toBe(false);
+    });
+  });
+
   describe("connect endpoints", () => {
     const mockCookieIntegForConnect = {
       name: "legacy",
