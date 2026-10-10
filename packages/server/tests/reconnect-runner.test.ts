@@ -41,7 +41,7 @@ const h = vi.hoisted(() => {
           const ok = hosts.includes(host);
           return { result: { value: ok ? "OK" : "HOST" } };
         }
-        if (m === "Input.dispatchKeyEvent" && p.type === "rawKeyDown") pageState.afterLogin();
+        if (m === "Input.dispatchKeyEvent" && (p.type === "rawKeyDown" || p.type === "keyDown")) pageState.afterLogin();
         return {};
       },
     },

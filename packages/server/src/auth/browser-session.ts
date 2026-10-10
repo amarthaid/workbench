@@ -619,8 +619,10 @@ export async function typeText(s: PageHandle, text: string): Promise<void> {
 // Minimal key map for the common driving keys. Chords like "ctrl+a" parse the
 // trailing token as the key and the leading tokens as modifiers.
 const MODIFIERS: Record<string, number> = { alt: 1, ctrl: 2, control: 2, meta: 4, cmd: 4, shift: 8 };
-const KEYS: Record<string, { keyCode: number; key: string }> = {
-  enter: { keyCode: 13, key: "Enter" },
+const KEYS: Record<string, { keyCode: number; key: string; text?: string }> = {
+  // Enter carries text "\r": a rawKeyDown has no keypress, and form implicit
+  // submission runs on keypress, so a text-less Enter never submits a form.
+  enter: { keyCode: 13, key: "Enter", text: "\r" },
   tab: { keyCode: 9, key: "Tab" },
   escape: { keyCode: 27, key: "Escape" },
   esc: { keyCode: 27, key: "Escape" },
@@ -650,7 +652,10 @@ export async function pressKey(s: PageHandle, keys: string): Promise<void> {
   const base: Record<string, unknown> = mapped
     ? { windowsVirtualKeyCode: mapped.keyCode, key: mapped.key, modifiers }
     : { key: last, modifiers };
-  await s.cdp.send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base });
+  const typed = mapped?.text !== undefined && modifiers === 0;
+  await s.cdp.send("Input.dispatchKeyEvent", typed
+    ? { type: "keyDown", ...base, text: mapped!.text, unmodifiedText: mapped!.text }
+    : { type: "rawKeyDown", ...base });
   await s.cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
 }
 
