@@ -23,7 +23,8 @@ vi.mock("../src/auth/browser-session", async () => {
   };
 });
 
-import { startAudio, stopAudio, getAudio, initBrowserAudio, KEEPALIVE_MS } from "../src/audio/manager";
+import { startAudio, stopAudio, getAudio, initBrowserAudio, KEEPALIVE_MS, IDLE_MS, IDLE_CHECK_MS } from "../src/audio/manager";
+import { capabilityFor, sessionForCapability } from "../src/audio/capability";
 import * as bsModule from "../src/auth/browser-session";
 
 const bs = bsModule as any;
@@ -274,6 +275,39 @@ describe("lifecycle", () => {
     r.session.openUplink();
     vi.advanceTimersByTime(KEEPALIVE_MS);
     expect(bs.touchTab).toHaveBeenCalledTimes(1);
+  });
+
+  it("ends idle after IDLE_MS with nobody attached, revoking the capability", async () => {
+    const r = (await startAudio("user-1", "T1", 24000)) as any;
+    const cap = capabilityFor(r.session);
+    vi.advanceTimersByTime(IDLE_MS - IDLE_CHECK_MS);
+    expect(r.session.ended).toBeUndefined();
+    vi.advanceTimersByTime(IDLE_CHECK_MS);
+    expect(r.session.ended).toBe("idle");
+    expect(getAudio("user-1")).toBeUndefined();
+    expect(sessionForCapability(cap)).toBeUndefined();
+  });
+
+  it("the idle clock restarts when a reader detaches", async () => {
+    const r = (await startAudio("user-1", "T1", 24000)) as any;
+    const off = r.session.subscribe(() => undefined);
+    vi.advanceTimersByTime(IDLE_MS * 3);
+    expect(r.session.ended).toBeUndefined();
+    off();
+    vi.advanceTimersByTime(IDLE_MS - IDLE_CHECK_MS * 2);
+    expect(r.session.ended).toBeUndefined();
+    vi.advanceTimersByTime(IDLE_CHECK_MS * 2);
+    expect(r.session.ended).toBe("idle");
+  });
+
+  it("stop revokes the capability, and the next start mints a new one", async () => {
+    const r = (await startAudio("user-1", "T1", 24000)) as any;
+    const cap = capabilityFor(r.session);
+    stopAudio("user-1", "T1");
+    expect(sessionForCapability(cap)).toBeUndefined();
+    const r2 = (await startAudio("user-1", "T1", 24000)) as any;
+    expect(capabilityFor(r2.session)).not.toBe(cap);
+    expect(sessionForCapability(capabilityFor(r2.session))).toBe(r2.session);
   });
 
   it("stopAudio ends and reports; stop on an unbound tab returns zeros", async () => {

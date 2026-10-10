@@ -19,12 +19,13 @@ export type EndReason =
   | "max_duration"
   | "capture_failed"
   | "playback_failed"
-  | "audio_daemon_exit";
+  | "audio_daemon_exit"
+  | "idle";
 
 export type AudioEvent =
   | { event: "audio"; data: { seq: number; pcm: string } }
   | { event: "playback"; data: { played_ms: number; buffered_ms: number } }
-  | { event: "ended"; data: { reason: EndReason | "replaced" } };
+  | { event: "ended"; data: { reason: EndReason } };
 
 export type Subscriber = (e: AudioEvent) => void;
 
@@ -145,17 +146,18 @@ export class AudioSession {
   }
 
   /**
-   * Attach the one SSE reader. Last reader wins: an agent reconnecting after a
-   * network blip must not be refused by a stream nobody is reading any more.
+   * Attach the one SSE reader. A second concurrent reader is refused ("busy"):
+   * the stream URL is a bearer capability, and a second consumer must not be
+   * able to take a call away from the first. A reader that has gone away has
+   * unsubscribed, so a reconnect after a network blip is accepted.
    */
-  subscribe(sub: Subscriber): () => void {
+  subscribe(sub: Subscriber): (() => void) | "busy" {
     if (this.ended) {
       sub({ event: "ended", data: { reason: this.ended } });
       return () => undefined;
     }
-    const previous = this.subscriber;
+    if (this.subscriber) return "busy";
     this.subscriber = sub;
-    previous?.({ event: "ended", data: { reason: "replaced" } });
     return () => { if (this.subscriber === sub) this.subscriber = undefined; };
   }
 

@@ -70,24 +70,23 @@ describe("AudioSession capture", () => {
     expect(got.filter((e) => e.event === "audio")[0].data.seq).toBe(1);
   });
 
-  it("a new subscriber replaces the old one, which gets ended{replaced}", () => {
+  it("refuses a second concurrent subscriber; the first keeps the stream", () => {
     const s = makeSession();
     const a: AudioEvent[] = [];
     const b: AudioEvent[] = [];
     s.subscribe((e) => a.push(e));
-    s.subscribe((e) => b.push(e));
-    expect(a).toEqual([{ event: "ended", data: { reason: "replaced" } }]);
+    expect(s.subscribe((e) => b.push(e))).toBe("busy");
     cap.stdout.emit("data", Buffer.alloc(1920));
-    expect(a).toHaveLength(1);
-    expect(b.filter((e) => e.event === "audio")).toHaveLength(1);
+    expect(a.filter((e) => e.event === "audio")).toHaveLength(1);
+    expect(b).toHaveLength(0);
   });
 
-  it("unsubscribe of a replaced subscriber does not detach the current one", () => {
+  it("accepts a new subscriber once the previous one has unsubscribed (reconnect)", () => {
     const s = makeSession();
     const b: AudioEvent[] = [];
     const unsubA = s.subscribe(() => undefined);
-    s.subscribe((e) => b.push(e));
-    unsubA();
+    (unsubA as () => void)();
+    expect(s.subscribe((e) => b.push(e))).not.toBe("busy");
     cap.stdout.emit("data", Buffer.alloc(1920));
     expect(b.filter((e) => e.event === "audio")).toHaveLength(1);
   });
@@ -408,7 +407,7 @@ describe("attached", () => {
   it("is true only while an SSE reader or an uplink is present", () => {
     const s = makeSession();
     expect(s.attached).toBe(false);
-    const off = s.subscribe(() => undefined);
+    const off = s.subscribe(() => undefined) as () => void;
     expect(s.attached).toBe(true);
     off();
     expect(s.attached).toBe(false);

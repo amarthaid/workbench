@@ -17,6 +17,9 @@ import {
 } from "../auth/browser-session";
 
 export const KEEPALIVE_MS = 10_000;
+/** A session with neither an SSE reader nor an uplink for this long ends ("idle"), and its capability with it. */
+export const IDLE_MS = 60_000;
+export const IDLE_CHECK_MS = 5_000;
 
 export type StartAudioResult =
   | { ok: true; session: AudioSession; session_id: string; restarted: boolean }
@@ -192,6 +195,7 @@ async function doStart(
     onEnd: () => {
       if (sessions.get(userId) === session) sessions.delete(userId);
       clearInterval(keepAlive);
+      clearInterval(idleCheck);
       offNav();
       audio.pm.off("daemon-exit", onDaemonExit);
       const last = current;
@@ -209,6 +213,14 @@ async function doStart(
     if (session.attached) touchTab(userId, tabId);
   }, KEEPALIVE_MS);
   keepAlive.unref?.();
+  // The capability URL is the only credential on the audio routes, so it must
+  // not outlive the call: nobody attached for IDLE_MS ends the session.
+  let lastAttached = Date.now();
+  const idleCheck = setInterval(() => {
+    if (session.attached) lastAttached = Date.now();
+    else if (Date.now() - lastAttached >= IDLE_MS) session.end("idle");
+  }, IDLE_CHECK_MS);
+  idleCheck.unref?.();
   audio.pm.on("daemon-exit", onDaemonExit);
 
   sessions.set(userId, session);

@@ -32,9 +32,10 @@ try {
   const provider = new NodeTracerProvider({ resource });
   provider.register();
 
-  // Both of these paths carry a single-use credential in the URL itself — the
-  // vault one-time link and the jot upload token. HTTP instrumentation records
-  // the path as `http.target`, so a span for either would put the credential
+  // These paths carry a credential in the URL itself — the vault one-time
+  // link, the jot upload token and the browser audio capability. HTTP
+  // instrumentation records the path as `http.target`, so a span for any of
+  // them would put the credential
   // wherever spans go. No exporter is configured today (`traceExporter:
   // undefined`), but that is a default someone will change; the span must
   // never exist in the first place.
@@ -42,7 +43,7 @@ try {
     instrumentations: [
       new HttpInstrumentation({
         ignoreIncomingRequestHook: (req: { url?: string }) =>
-          /^\/(api\/vault\/otl|j\/upload)\//.test(req.url ?? ""),
+          /^\/(api\/vault\/otl|j\/upload|api\/browser\/audio)\//.test(req.url ?? ""),
       }),
     ],
   });

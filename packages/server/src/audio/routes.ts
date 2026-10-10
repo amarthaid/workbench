@@ -1,58 +1,60 @@
-// HTTP face of the audio pipeline, keyed by tab:
-//   GET  /api/browser/tabs/:session_id/audio/stream  → SSE, call audio out
-//   POST /api/browser/tabs/:session_id/audio/stream  → chunked audio/pcm in, held open for the call
-//   POST /api/browser/tabs/:session_id/audio/clear   → drop unplayed agent audio
+// HTTP face of the audio pipeline, keyed by a capability:
+//   GET  /api/browser/audio/:cap/stream  → SSE, call audio out
+//   POST /api/browser/audio/:cap/stream  → chunked audio/pcm in, held open for the call
+//   POST /api/browser/audio/:cap/clear   → drop unplayed agent audio
+// The capability is the only credential (audio/capability.ts): the voice
+// client holding the call carries no workbench token, and any Authorization
+// header is ignored. Unknown, revoked and ended all answer the same 404 and
+// never redirect.
 // Spec: docs/superpowers/specs/2026-10-07-browser-audio-pipeline-design.md
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { config } from "../config";
-import { resolveMcpUser } from "../auth/oauth-server/resolve";
-import { getAudio as defaultGetAudio } from "./manager";
+import { CAPABILITY_RE, sessionForCapability } from "./capability";
 import { forwardAudioStream } from "./stream-forward";
 import type { AudioSession } from "./session";
 
 export const PING_MS = 15_000;
+/**
+ * A reader whose socket has not drained for this long is dropped. A peer that
+ * vanished without a FIN (half-open TCP) would otherwise hold the one reader
+ * slot until the kernel gave up retransmitting, minutes later, and every
+ * reconnect in between would get 409.
+ */
+export const READER_STALL_MS = 10_000;
 
 export interface AudioRouteDeps {
-  getAudio(userId: string): AudioSession | undefined;
-  forward(opts: { userId: string; request: FastifyRequest; reply: FastifyReply }): Promise<boolean>;
+  lookup(cap: string): AudioSession | undefined;
+  forward(opts: { request: FastifyRequest; reply: FastifyReply; path: string }): Promise<boolean>;
+  readerStallMs: number;
 }
 
-type Params = { Params: { session_id: string } };
-
-async function authenticate(request: FastifyRequest, reply: FastifyReply): Promise<string | null> {
-  const userId = await resolveMcpUser(request.headers as Record<string, string>);
-  if (userId) return userId;
-  const prm = `${config.SERVER_PUBLIC_URL}/.well-known/oauth-protected-resource`;
-  reply.header("WWW-Authenticate", `Bearer realm="a-workbench", resource_metadata="${prm}"`);
-  reply.status(401).send({ error: "Unauthorized", resource_metadata: prm });
-  return null;
-}
+type Params = { Params: { cap: string } };
 
 export async function registerAudioRoutes(app: FastifyInstance, overrides: Partial<AudioRouteDeps> = {}): Promise<void> {
   const deps: AudioRouteDeps = {
-    getAudio: overrides.getAudio ?? defaultGetAudio,
+    lookup: overrides.lookup ?? sessionForCapability,
     forward: overrides.forward ?? forwardAudioStream,
+    readerStallMs: overrides.readerStallMs ?? READER_STALL_MS,
   };
 
   /**
-   * The session for this tab, "handled" when the request was piped to the
-   * owning pod, or null after a 404 has been sent. A session on *another* tab
-   * means this process owns the user's chromium: answer here, never forward.
+   * The session this capability opens, "handled" when the request was piped
+   * to the process that owns it, or null after a 404 has been sent. The 404
+   * body is the same for every miss and never echoes the capability.
    */
   async function resolve(
-    userId: string,
     request: FastifyRequest<Params>,
-    reply: FastifyReply
+    reply: FastifyReply,
+    leaf: "stream" | "clear"
   ): Promise<AudioSession | "handled" | null> {
-    const s = deps.getAudio(userId);
-    if (s && s.tabId === request.params.session_id) return s;
-    if (!s && (await deps.forward({ userId, request, reply }))) return "handled";
-    reply.code(404).send({
-      error: "audio_not_started",
-      detail: s
-        ? `audio is running on session_id ${s.tabId}, not this one`
-        : "call browser_audio_start for this session_id first",
-    });
+    const { cap } = request.params;
+    // Anything that is not the shape we mint is a miss without a lookup or a
+    // forward, so the forward's path below can only ever name an audio route.
+    if (CAPABILITY_RE.test(cap)) {
+      const s = deps.lookup(cap);
+      if (s) return s;
+      if (await deps.forward({ request, reply, path: `/api/browser/audio/${cap}/${leaf}` })) return "handled";
+    }
+    reply.code(404).send({ error: "audio_not_found" });
     return null;
   }
 
@@ -64,16 +66,47 @@ export async function registerAudioRoutes(app: FastifyInstance, overrides: Parti
     scope.removeAllContentTypeParsers();
     scope.addContentTypeParser("*", (_req, payload, done) => done(null, payload));
 
-    const base = "/api/browser/tabs/:session_id/audio";
+    const base = "/api/browser/audio/:cap";
+
+    // Every other path under the prefix is the same 404, answered here rather
+    // than by the app's not-found handler, which logs the raw URL (and with it
+    // a capability) and has no route pattern for the metrics label.
+    scope.all("/api/browser/audio/*", async (_request, reply) => reply.code(404).send({ error: "audio_not_found" }));
 
     scope.get<Params>(`${base}/stream`, { exposeHeadRoute: false }, async (request, reply) => {
-      const userId = await authenticate(request, reply);
-      if (!userId) return reply;
-      const s = await resolve(userId, request, reply);
+      const s = await resolve(request, reply, "stream");
       if (!s || s === "handled") return reply;
 
+      // Subscribe before the headers go out, so a second concurrent reader
+      // gets a plain 409 rather than a 200 that ends at once.
+      const queued: string[] = [];
+      let res: typeof reply.raw | undefined;
+      let ping: ReturnType<typeof setInterval> | undefined;
+      let congestedSince = 0;
+      const send = (chunk: string): boolean => {
+        if (!res) { queued.push(chunk); return true; }
+        try { return res.write(chunk); } catch { return true; /* gone */ }
+      };
+      const unsubscribe = s.subscribe((e) => {
+        if (e.event === "audio" && congestedSince) {
+          if (Date.now() - congestedSince >= deps.readerStallMs) res?.destroy();
+          return;
+        }
+        // A reader that cannot keep up loses audio frames (the seq gap tells
+        // it), never control events, and never makes this process buffer
+        // without bound.
+        if (!send(`event: ${e.event}\ndata: ${JSON.stringify(e.data)}\n\n`) && !congestedSince) congestedSince = Date.now();
+        if (e.event === "ended" && res) {
+          if (ping) clearInterval(ping);
+          try { res.end(); } catch { /* noop */ }
+        }
+      });
+      if (unsubscribe === "busy") {
+        return reply.code(409).send({ error: "stream_busy", detail: "another reader is connected to this call's audio" });
+      }
+
       reply.hijack();
-      const res = reply.raw;
+      res = reply.raw;
       res.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache, no-transform",
@@ -83,24 +116,16 @@ export async function registerAudioRoutes(app: FastifyInstance, overrides: Parti
       // Headers sit in Node's buffer until the first body byte; with no audio
       // yet a client (fetch included) would wait on the response line.
       res.write(": open\n\n");
+      for (const chunk of queued.splice(0)) send(chunk);
+      if (s.ended) {
+        try { res.end(); } catch { /* noop */ }
+        unsubscribe();
+        return reply;
+      }
 
-      // A reader that cannot keep up loses audio frames (the seq gap tells it),
-      // never control events, and never makes this process buffer without bound.
-      let congested = false;
-      res.on("drain", () => { congested = false; });
-      const ping = setInterval(() => { try { res.write(": ping\n\n"); } catch { /* noop */ } }, PING_MS);
+      res.on("drain", () => { congestedSince = 0; });
+      ping = setInterval(() => { try { res?.write(": ping\n\n"); } catch { /* noop */ } }, PING_MS);
       ping.unref?.();
-
-      const unsubscribe = s.subscribe((e) => {
-        if (e.event === "audio" && congested) return;
-        let ok = true;
-        try { ok = res.write(`event: ${e.event}\ndata: ${JSON.stringify(e.data)}\n\n`); } catch { /* gone */ }
-        if (!ok) congested = true;
-        if (e.event === "ended") {
-          clearInterval(ping);
-          try { res.end(); } catch { /* noop */ }
-        }
-      });
       res.on("close", () => {
         clearInterval(ping);
         unsubscribe();
@@ -109,17 +134,15 @@ export async function registerAudioRoutes(app: FastifyInstance, overrides: Parti
     });
 
     scope.post<Params>(`${base}/stream`, async (request, reply) => {
-      const userId = await authenticate(request, reply);
-      if (!userId) return reply;
       const mediaType = String(request.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase();
       if (mediaType !== "audio/pcm") {
         return reply.code(415).send({ error: "unsupported_media_type", detail: "send Content-Type: audio/pcm (raw s16le mono)" });
       }
-      const s = await resolve(userId, request, reply);
+      const s = await resolve(request, reply, "stream");
       if (!s || s === "handled") return reply;
       const up = s.openUplink();
       if (up === "busy") return reply.code(409).send({ error: "uplink_busy", detail: "another audio POST is open for this call" });
-      if (up === "ended") return reply.code(404).send({ error: "audio_not_started" });
+      if (up === "ended") return reply.code(404).send({ error: "audio_not_found" });
 
       // The response's 'close', not the request's: IncomingMessage closes once
       // the body is consumed, long before the queued audio has played out.
@@ -150,9 +173,7 @@ export async function registerAudioRoutes(app: FastifyInstance, overrides: Parti
     });
 
     scope.post<Params>(`${base}/clear`, async (request, reply) => {
-      const userId = await authenticate(request, reply);
-      if (!userId) return reply;
-      const s = await resolve(userId, request, reply);
+      const s = await resolve(request, reply, "clear");
       if (!s || s === "handled") return reply;
       return reply.send(s.clear());
     });
