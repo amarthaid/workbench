@@ -24,7 +24,9 @@ Two login shapes drive the design:
 - A recipe that cannot complete (MFA, captcha, IdP session also gone, wrong
   password, selector drift) fails fast, marks the connection *needs reconnect*,
   and stops retrying for a cooldown — it never hammers a login form.
-- Credential plaintext reaches only a `fill` step on an allowlisted host. It
+- Credential plaintext reaches only a `fill` step on an allowlisted host (amended
+  during implementation: precisely, a CallArgument of `Runtime.callFunctionOn`
+  bound to the verified element, in an isolated world, on an exact-match host). It
   never appears in a tool result, error, log line or audit row.
 - Plugins without the new manifest blocks behave exactly as today.
 
@@ -73,6 +75,13 @@ type ReconnectStep =
   | { waitFor: string; timeoutMs?: number }              // selector appears
   | { waitUrl: string; timeoutMs?: number };             // URL starts with (absolute or path)
 ```
+
+(Amended during implementation: `goto` and `waitUrl` accept only `"loginUrl"`
+(goto), a single-slash path, or an http(s) URL on `targetDomain`/`cookieDomains`/
+`allowHosts`; no whitespace or control characters; resolved with the URL parser,
+so protocol-relative `//host` is rejected. A runtime validator in the loader
+(`stripInvalidRecipe`) drops an invalid recipe with a warning, because manifests
+are not schema-validated at load. `text=` selectors cannot be used for `fill`.)
 
 Selectors are CSS, or `text=<label>` (case-insensitive substring match against
 the visible text of `button`, `a`, `[role=button]`, `input[type=submit]`).
@@ -175,8 +184,15 @@ gets a working first call, not a "not connected" error.
   under typical lockout thresholds.
 - **Ownership guard** (section 5): if this process may not own the user's
   chromium, set `deadAt` and return false.
-- **Busy guard**: if a human is mid-connect in the profile (`activeProfiles`),
-  return false *without* recording a failure.
+- **Busy guard** (amended during implementation): busy means a portal cookie
+  connect is in progress (`connect-lock.ts`, process-local, 10-minute TTL, set by
+  the connect start paths, cleared on capture/cancel/import). Return false
+  *without* recording a failure. `activeProfiles` is not consulted: a warm browser
+  holds it for its whole life, so gating on it made every reconnect busy.
+- **Per-run deadline** (amended during implementation): `timeoutMs` is enforced
+  per step, not only around the whole run. On timeout an abort flag stops the
+  orphaned step from delivering a credential or submitting, and the tab is closed
+  before the failure is written.
 
 Run:
 
@@ -188,7 +204,9 @@ Run:
    navigated. Run steps in order under the overall `timeoutMs`. Per-step
    default timeout 10 s.
    - Before every step and again right before every `fill`, the current page
-     host must be on `targetDomain`/`cookieDomains`/`allowHosts`. Otherwise
+     host must be on `targetDomain`/`cookieDomains`/`allowHosts` (navigation:
+     suffix match, subdomains accepted; credential delivery: exact hostname match
+     against `targetDomain` + `allowHosts` only, amended during implementation). Otherwise
      abort with `HOST_NOT_ALLOWED`. A recipe typo or a phishing redirect never
      receives a password.
    - `{{cred:key}}` resolves at fill time via `readSecretValue(userId,
@@ -217,8 +235,18 @@ coordinate-based. It adds:
   see real input events.
 - `waitForUrl` → polls `location.href`.
 
-The credential value is passed to `Input.insertText` only, never interpolated
-into an evaluated script.
+(Amended during implementation.) `fillSelector` does one page-side locate,
+editability check, focus and value-free clear, then verifies `activeElement`;
+otherwise it fails without delivering. The credential is delivered through
+`Runtime.callFunctionOn` on the prepared element's `objectId`, in an isolated
+world (`Page.createIsolatedWorld` + `DOM.resolveNode`), as a `CallArgument` and
+never in expression text. The function re-checks `location.hostname` against an
+exact-match array and sets the value with the native setter plus `input`/`change`
+events. An isolated world is used because page scripts can patch main-world
+prototypes (`String`, `Array`, the input value setter) to defeat the host check.
+A navigation destroys the objectId's context, so the call fails closed. Not
+`Input.insertText`. `pressKey` Enter now carries `text: "\r"` so forms submit.
+The chromium launch adds `--use-mock-keychain --password-store=basic`.
 
 ### 5. Routing (cluster)
 
@@ -239,13 +267,15 @@ forwarding the reconnect, **route the call**:
 
 ### 6. Portal
 
-- **Cookie connect modal and AppDetail.** When the manifest declares
+- **AppDetail only** (amended during implementation): bindings need an existing
+  connection row (409 otherwise), so there is no panel in the connect modal. When the manifest declares
   `reconnect.credentials`, an *Auto-reconnect* section shows one vault-entry
   picker per slot (fed from `GET /api/vault`, metadata only), plus a link to add
   a vault entry. Saved via
   `PUT /api/connections/:integration/reconnect {bindings}`. The endpoint
   validates that keys are declared and entries exist, and is portal-session
-  only.
+  only (amended during implementation: 403 `PORTAL_SESSION_REQUIRED` for a
+  non-portal bearer; an API-key-only request gets 401; nothing is written).
 - **SSO recipes.** No credentials, so no setup UI. It just works.
 - **AppDetail status line.** "Auto-reconnected 2h ago", "Auto-reconnect failed
   (step 3: SELECTOR_NOT_FOUND) — reconnect manually", or "Session expired —
@@ -262,6 +292,9 @@ first emitter of that action.
 
 - New server-side caller of `readSecretValue`; update the caller list in the
   `vault/store.ts` header comment.
+- Cluster routing (amended during implementation): the `/mcp` handler moved to
+  `src/mcp/route.ts` (`registerMcpRoute`) so the owner gate is tested on the real
+  route.
 - Recipes are plugin code — trusted at the same level as plugin handlers.
   The host allowlist protects against recipe mistakes and hostile redirects,
   not hostile plugins.

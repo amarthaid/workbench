@@ -217,6 +217,124 @@ allowed hosts. Your handler sees any 3xx directly.
 > The login runs in Chromium on the workbench host, not on the user's machine. If
 > the service is only reachable over a VPN, the workbench host needs that VPN.
 
+### Auto-reconnect
+
+A cookie session eventually dies. Declare `session` and `reconnect` on the
+manifest and the server logs back in by itself, in the user's own Chromium,
+captures the fresh cookies, and retries the call once. Plugins without these
+blocks behave exactly as before.
+
+```ts
+export interface CookieConfig {
+  type: "cookie";
+  loginUrl: string;
+  targetDomain: string;
+  cookieDomains?: string[];
+  session?: {
+    probe?: { path: string; alive: number[] };        // GET, relative to targetDomain
+    dead: { status: number[]; redirectTo?: string };  // redirectTo: Location path prefix
+  };
+  reconnect?: {
+    credentials?: { key: string; label: string; secret?: boolean }[];
+    allowHosts?: string[];                            // hosts outside cookieDomains (the IdP)
+    steps: ReconnectStep[];
+    timeoutMs?: number;                               // whole run; default 30000, max 120000
+  };
+}
+```
+
+`session.dead` says what a dead session looks like in a `ctx.http()` response: a
+status in `status`, and, when `redirectTo` is set, a 3xx whose `Location` path
+starts with it. `reconnect` is rejected without `session.dead`. `session.probe`
+is optional; with it, a reconnect only counts once the probe returns a status in
+`alive`. Without it, success is "at least one cookie captured".
+
+**SSO.** The identity provider's session in the persistent profile usually
+outlives the app session, so the recipe just clicks through:
+
+```ts
+session: { probe: { path: "/api/v1/me", alive: [200] }, dead: { status: [401, 302] } },
+reconnect: {
+  allowHosts: ["idp.example.net"],
+  steps: [
+    { goto: "loginUrl" },
+    { click: "text=Sign in with SSO" },
+    { click: "[data-email]", optional: true, timeoutMs: 3000 },  // account picker, sometimes
+    { waitUrl: "/dashboard" },
+  ],
+},
+```
+
+**Username and password.** The user keeps the credentials in the workbench vault:
+
+```ts
+session: { dead: { status: [401] } },
+reconnect: {
+  credentials: [
+    { key: "username", label: "Username" },
+    { key: "password", label: "Password", secret: true },
+  ],
+  steps: [
+    { goto: "loginUrl" },
+    { fill: "#username", value: "{{cred:username}}" },
+    { fill: "#password", value: "{{cred:password}}" },
+    { press: "Enter" },
+    { waitUrl: "/" },
+  ],
+},
+```
+
+**Steps.** They run in order in a dedicated tab, under the overall `timeoutMs`
+(each step defaults to 10 s; the run deadline is enforced per step).
+
+| Step | Meaning |
+|---|---|
+| `{ goto }` | Navigate. `"loginUrl"`, a single-slash path on `targetDomain`, or an `http(s)` URL on an allowed host. |
+| `{ click, optional?, timeoutMs? }` | Click the element. With `optional: true`, not found within the timeout means skip. |
+| `{ fill, value, timeoutMs? }` | Type `value` into the field. `{{cred:key}}` is valid only here. |
+| `{ press }` | Press a key, for example `"Enter"`. |
+| `{ waitFor, timeoutMs? }` | Wait for a selector to appear. |
+| `{ waitUrl, timeoutMs? }` | Wait until the URL starts with a path or absolute URL. |
+
+**Selectors** are CSS, or `text=<label>`: a case-insensitive substring match on
+the visible text of `button`, `a`, `[role=button]` and `input[type=submit]`.
+`text=` works for `click` and `waitFor` but not for `fill`; a fill target must be
+a real, editable input. `goto` and `waitUrl` URLs may not contain whitespace or
+control characters.
+
+> [!WARNING] The host allowlist has two meanings
+> Navigation may visit `targetDomain`, `cookieDomains` and `allowHosts`, and a
+> subdomain of any of them. A credential is stricter: `fill` delivers it only
+> when the page's hostname is an **exact** match for `targetDomain` or an
+> `allowHosts` entry. If the login form lives on `login.idp.example.net`, list
+> that exact host in `allowHosts` (or as `targetDomain`); `idp.example.net` alone
+> will navigate there but refuse to type the password.
+
+**Cooldown.** After a failed reconnect the connection is marked as needing a
+manual reconnect and no further attempt runs for 10 minutes, at most six per
+hour, so a wrong password or an MFA wall never hammers a login form. A
+reconnect also stands down while the user is in the middle of a portal connect
+(the connect link or live view).
+
+**Binding credentials.** For recipes with `credentials`, the user opens the
+integration's detail page in the portal, picks a vault entry for each slot
+under *Auto-reconnect*, and saves. Only the entry name is stored. The binding
+endpoint accepts a portal session only, never an API key or an OAuth bearer, so
+an agent cannot choose which secret is typed into a login form. SSO recipes have
+no slots, so there is nothing to set up. The same section shows the last
+attempt: reconnected, failed with a step number and reason code, or session
+expired.
+
+**Dead-session handling moves to core.** Once `session.dead` is declared, delete
+any hand-rolled "session expired" throw in the plugin: core detects the dead
+response, sets the connection to not connected, and either reconnects and
+retries or returns the original response unchanged.
+
+A bad recipe is dropped at load with a warning naming the step. The integration
+still loads and manual connect keeps working. See the
+[browser sessions guide](../guides/browser-sessions.md) for how the underlying
+Chromium profile behaves.
+
 ## `none`
 
 No credential. The integration is treated as always connected, so
