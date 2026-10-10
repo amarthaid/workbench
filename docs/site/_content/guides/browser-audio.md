@@ -88,6 +88,9 @@ them in the path (`/api/browser/audio/<capability>/stream` and `/clear`). Any
   logs and records no trace spans for these paths; mask it in your proxy's
   access logs too (see [Reverse proxy settings](#reverse-proxy-settings)).
 - `headers` carries only `X-Browser-Session`, a routing key, not a credential.
+- The URLs are built from `SERVER_PUBLIC_URL`. A client that pins the
+  workbench origin (refusing redirects and other hosts) needs that origin to
+  match its own configured workbench URL exactly: scheme, host and port.
 
 ## Errors from the tools
 
