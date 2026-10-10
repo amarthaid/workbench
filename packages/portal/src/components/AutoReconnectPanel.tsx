@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchVaultSecrets, saveReconnectBindings, type ReconnectStatus, type ReconnectCredential } from "../api";
@@ -33,6 +33,8 @@ export function AutoReconnectPanel({
   // status, so a status that loads late can never be overwritten by a stale seed.
   const [edits, setEdits] = useState<Record<string, string>>({});
   const ready = status !== undefined;
+  const initialRef = useRef(initial);
+  initialRef.current = initial;
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const qc = useQueryClient();
@@ -54,9 +56,17 @@ export function AutoReconnectPanel({
     setMsg(null);
     try {
       await saveReconnectBindings(integration, changed);
-      setEdits({});
       setMsg({ ok: true, text: "Bindings saved." });
-      qc.invalidateQueries({ queryKey: ["connections"] });
+      try {
+        await qc.invalidateQueries({ queryKey: ["connections"] });
+      } catch {
+        // The save succeeded; a failed refetch just leaves the edits showing.
+      }
+      // Drop only edits the refreshed status now reflects, so a slow or failed
+      // refetch never flips a picker back to the old binding.
+      setEdits((prev) =>
+        Object.fromEntries(Object.entries(prev).filter(([k, v]) => v !== (initialRef.current[k] ?? "")))
+      );
     } catch (e) {
       setMsg({ ok: false, text: (e as Error).message });
     } finally {

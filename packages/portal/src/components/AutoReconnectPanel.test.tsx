@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen, waitFor, fireEvent } from "@testing-library/react";
+import { screen, waitFor, fireEvent, render } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { render } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderWithClient } from "../test-utils";
 import { AutoReconnectPanel } from "./AutoReconnectPanel";
@@ -94,6 +93,15 @@ describe("AutoReconnectPanel", () => {
     renderPanel({ status: { bindings: { password: "gone_pw" }, missing: [], dead: false } });
     expect(await screen.findByRole("option", { name: "gone_pw (missing)" })).toBeInTheDocument();
     expect(screen.getByLabelText("Password")).toHaveValue("gone_pw");
+  });
+
+  it("keeps showing the saved value while the refetched status is still stale", async () => {
+    renderPanel();
+    await screen.findAllByRole("option", { name: "acme_pw" });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "acme_pw" } });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+    await screen.findByText("Bindings saved.");
+    expect(screen.getByLabelText("Password")).toHaveValue("acme_pw");
   });
 
   it("sends an empty string for a cleared slot", async () => {
