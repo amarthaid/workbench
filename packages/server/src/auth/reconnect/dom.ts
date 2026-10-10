@@ -65,9 +65,18 @@ export async function clickSelector(page: PageHandle, selector: string, timeoutM
 // It runs in an ISOLATED world (pristine built-ins; page scripts cannot patch
 // String/Array/Object prototypes or the value setter), and the host check is
 // an EXACT hostname match in the same call that writes the value.
+// A hostname match alone is not enough:
+// - isSecureContext: an http:// page on the right host (a recipe goto may be
+//   http, and anyone on the path can answer it) would receive the value in
+//   cleartext. Loopback http stays a secure context, for local fixtures.
+// - ownerDocument === document: the element was picked by main-world script,
+//   which can hand over a node from another (document.domain-relaxed) frame
+//   whose host was never checked; and it must still be in that document.
 const DELIVER_FN = `function (v, hosts) {
+  if (!isSecureContext) return "HOST";
   const h = location.hostname.toLowerCase();
   if (!hosts.includes(h)) return "HOST";
+  if (this.ownerDocument !== document || !this.isConnected) return "HOST";
   if (document.activeElement !== this) this.focus();
   if (this.isContentEditable) { this.textContent = v; }
   else {

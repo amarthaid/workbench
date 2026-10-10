@@ -111,9 +111,11 @@ describe("reconnect dom", () => {
     const fn = calls(p).find(([m]) => m === "Runtime.callFunctionOn")![1].functionDeclaration as string;
     expect(fn).not.toContain("endsWith");
     const run = (host: string) => {
-      const el: any = { isContentEditable: false, tagName: "INPUT", focus() {}, dispatchEvent() {} };
-      const f = new Function("location", "document", "HTMLInputElement", "HTMLTextAreaElement", "Event", `return (${fn});`)(
-        { hostname: host }, { activeElement: el }, { prototype: { set value(_: string) {} } }, { prototype: {} }, class {}
+      const doc: any = {};
+      const el: any = { isContentEditable: false, tagName: "INPUT", ownerDocument: doc, isConnected: true, focus() {}, dispatchEvent() {} };
+      doc.activeElement = el;
+      const f = new Function("location", "document", "isSecureContext", "HTMLInputElement", "HTMLTextAreaElement", "Event", `return (${fn});`)(
+        { hostname: host }, doc, true, { prototype: { set value(_: string) {} } }, { prototype: {} }, class {}
       );
       return f.call(el, "pw-abc", hosts);
     };
@@ -121,6 +123,37 @@ describe("reconnect dom", () => {
     expect(run("APP.example.com")).toBe("OK");
     expect(run("evil.app.example.com")).toBe("HOST");
     expect(run("example.com")).toBe("HOST");
+  });
+
+  // Evaluate DELIVER_FN against fake globals. `el` defaults to a connected
+  // input in `doc`, the document whose location was checked.
+  const deliverWith = async (opts: { host?: string; secure?: boolean; el?: (doc: any) => any } = {}) => {
+    const p = fillPage();
+    await fillSelector(p, "#pass", "pw-abc", 300, hosts);
+    const fn = calls(p).find(([m]) => m === "Runtime.callFunctionOn")![1].functionDeclaration as string;
+    let written: string | undefined;
+    const doc: any = {};
+    const el = opts.el
+      ? opts.el(doc)
+      : { isContentEditable: false, tagName: "INPUT", ownerDocument: doc, isConnected: true, focus() {}, dispatchEvent() {} };
+    doc.activeElement = el;
+    const f = new Function("location", "document", "isSecureContext", "HTMLInputElement", "HTMLTextAreaElement", "Event", `return (${fn});`)(
+      { hostname: opts.host ?? "app.example.com" }, doc, opts.secure ?? true,
+      { prototype: { set value(v: string) { written = v; } } }, { prototype: {} }, class {}
+    );
+    return { out: f.call(el, "pw-abc", hosts), written };
+  };
+
+  it("DELIVER_FN refuses a non-secure context (cleartext http on the right host)", async () => {
+    expect(await deliverWith({ secure: true })).toEqual({ out: "OK", written: "pw-abc" });
+    expect(await deliverWith({ secure: false })).toEqual({ out: "HOST", written: undefined });
+  });
+
+  it("DELIVER_FN refuses an element outside the document whose host it checked", async () => {
+    const foreign = () => ({ isContentEditable: false, tagName: "INPUT", ownerDocument: {}, isConnected: true, focus() {}, dispatchEvent() {} });
+    expect(await deliverWith({ el: foreign })).toEqual({ out: "HOST", written: undefined });
+    const detached = (doc: any) => ({ isContentEditable: false, tagName: "INPUT", ownerDocument: doc, isConnected: false, focus() {}, dispatchEvent() {} });
+    expect(await deliverWith({ el: detached })).toEqual({ out: "HOST", written: undefined });
   });
 
   it("fillSelector rejects a non-editable/unfocused target (prepare null) without delivering", async () => {
