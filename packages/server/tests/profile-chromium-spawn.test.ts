@@ -27,6 +27,8 @@ describe("spawnProfileChromium spawn options", () => {
     ).rejects.toThrow(/exited/);
     const [, args, options] = spawnMock.mock.calls[0];
     expect(args).toContain("--autoplay-policy=no-user-gesture-required");
+    expect(args).toContain("--use-mock-keychain");
+    expect(args).toContain("--password-store=basic");
     expect(options.env).toBe(env);
   });
 

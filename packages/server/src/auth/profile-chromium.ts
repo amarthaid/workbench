@@ -195,6 +195,9 @@ export async function spawnProfileChromium(
     ...(process.env.CAPTURE_PROXY ? [`--proxy-server=${process.env.CAPTURE_PROXY}`] : []),
     "--no-sandbox",
     "--disable-dev-shm-usage",
+    // No OS keychain for cookie encryption (macOS "Chromium Safe Storage" prompt); no-op on Linux. Playwright passes the same.
+    "--use-mock-keychain",
+    "--password-store=basic",
   ];
   if (opts.extraArgs) args.push(...opts.extraArgs);
   if (opts.startUrl) args.push(opts.startUrl);
