@@ -5,6 +5,7 @@ import WebSocket from "ws";
 import { config } from "../config";
 import { verifySession } from "./session";
 import { defaultTab, getWarmSession } from "./browser-session";
+import { CDP_ORIGIN } from "./cdp-origin";
 
 // Browser-facing CDP transport: plain HTTP instead of a WebSocket, and
 // routable across replicas.
@@ -88,7 +89,7 @@ const wsDialer: Dialer = (target, handlers) => {
   // Chromium's CDP WebSocket gates Origin against --remote-allow-origins.
   // Send a known origin from our side and match it on the chromium args
   // (`http://127.0.0.1`).
-  const ws = new WebSocket(target, { perMessageDeflate: false, origin: "http://127.0.0.1" });
+  const ws = new WebSocket(target, { perMessageDeflate: false, origin: CDP_ORIGIN });
   const queue: string[] = [];
   let open = false;
   ws.on("open", () => {

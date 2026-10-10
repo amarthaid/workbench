@@ -4,8 +4,10 @@ import { createHash } from "node:crypto";
 import WebSocket from "ws";
 import { config } from "../config";
 import { activeProfiles, spawnProfileChromium, cdpCall, userProfileDir } from "./profile-chromium";
+import { CDP_ORIGIN } from "./cdp-origin";
 import { trimProfileCaches } from "./profile-disk";
 import { installBrowserNetGuard, type BrowserNetGuard } from "./agent-net-guard";
+import { registerDebugPort, unregisterDebugPort } from "./browser-url";
 import { startProxyAuth, filterCookies } from "./cookie";
 import { configureDownloads, cancelDownloads } from "./browser-downloads";
 import { deviceKey, pulseFor, releasePulse, type PulseDevices, type PulseManager } from "../audio/pulse";
@@ -40,7 +42,7 @@ export class CdpClient {
 
   constructor(wsUrl: string, onGone?: () => void) {
     this.onGone = onGone;
-    this.ws = new WebSocket(wsUrl, { perMessageDeflate: false, origin: "http://127.0.0.1" });
+    this.ws = new WebSocket(wsUrl, { perMessageDeflate: false, origin: CDP_ORIGIN });
     this.ready = new Promise((resolve, reject) => {
       this.ws.on("open", () => {
         // Fire-and-forget enables; we don't await their replies.
@@ -338,6 +340,9 @@ async function startSession(userId: string): Promise<WarmSession> {
       authWs,
       audio,
     };
+    // Refused to agent tabs even if BROWSER_LOOPBACK_ALLOW_PORTS lists it.
+    registerDebugPort(spawned.remotePort);
+    spawned.proc.on("exit", () => unregisterDebugPort(spawned.remotePort));
     try {
       const browser = await browserClient(session);
       session.netGuard = await installBrowserNetGuard(browser, {

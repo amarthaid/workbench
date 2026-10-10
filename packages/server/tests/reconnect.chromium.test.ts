@@ -14,7 +14,8 @@
  */
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
-import WebSocket from "ws";
+import WebSocket, { WebSocketServer } from "ws";
+import { createServer, type Server } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,6 +32,7 @@ import { openTab, closeTab, closeBrowserSession, getWarmSession, ensureSession }
 import { getReconnectState, updateReconnectState } from "../src/auth/reconnect/state";
 import { fillSelector, StepError } from "../src/auth/reconnect/dom";
 import { reconnectSession, __deps } from "../src/auth/reconnect/runner";
+import { CDP_ORIGIN } from "../src/auth/cdp-origin";
 
 const ENABLED = process.env.TEST_CHROMIUM === "1";
 
@@ -160,6 +162,18 @@ async function startFixture(): Promise<{ app: FastifyInstance; port: number }> {
   );
   app.get("/api/me", (req, reply) => reply.code(hasSid(req.headers.cookie) ? 200 : 401).send({}));
   app.get("/mfa", (_req, reply) => html(reply, page('<input id="code" placeholder="Enter the code we sent you">')));
+  // Worker scripts for the agent-tab network guard: each fetches `t` and
+  // reports "sent" or "blocked".
+  const js = (reply: FastifyReply, body: string) => reply.type("application/javascript").send(body);
+  const tOf = (req: { query: unknown }) => JSON.stringify(String((req.query as { t?: string }).t));
+  const probe = (t: string) => `fetch(${t}, { mode: "no-cors" }).then(() => "sent", () => "blocked")`;
+  app.get("/w/worker.js", (req, reply) => js(reply, `${probe(tOf(req))}.then((r) => postMessage(r));`));
+  app.get("/w/shared.js", (req, reply) =>
+    js(reply, `onconnect = (e) => { const port = e.ports[0]; ${probe(tOf(req))}.then((r) => port.postMessage(r)); };`));
+  app.get("/w/sw.js", (req, reply) =>
+    js(reply, `self.addEventListener("install", () => self.skipWaiting());
+self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));
+self.addEventListener("message", (e) => { ${probe(tOf(req))}.then((r) => e.source.postMessage(r)); });`));
   // A redirect hop, for the agent-tab network guard.
   app.get("/bounce", (req, reply) => reply.redirect(String((req.query as { to?: string }).to), 302));
 
@@ -429,7 +443,7 @@ describe.skipIf(!ENABLED)("cookie auto-reconnect against a real chromium", () =>
       const created = (await (
         await fetch(`http://127.0.0.1:${s.remotePort}/json/new?${encodeURIComponent(`${origin}/login`)}`, { method: "PUT" })
       ).json()) as { id: string; webSocketDebuggerUrl: string };
-      const ws = new WebSocket(created.webSocketDebuggerUrl, { perMessageDeflate: false, origin: "http://127.0.0.1" });
+      const ws = new WebSocket(created.webSocketDebuggerUrl, { perMessageDeflate: false, origin: CDP_ORIGIN });
       await new Promise<void>((res, rej) => { ws.once("open", () => res()); ws.once("error", rej); });
       let id = 0;
       const pending = new Map<number, { res: (v: any) => void; rej: (e: Error) => void }>();
@@ -484,21 +498,38 @@ describe.skipIf(!ENABLED)("cookie auto-reconnect against a real chromium", () =>
 
   // An agent tab that could load any chromium's /json endpoints would read
   // its targets (another user's private recipe tab included) and could GET
-  // /json/close/<id> to kill one. Every agent tab runs behind a network guard
-  // that fails each request to loopback, on any port, however it is started:
-  // a script navigation, a fetch, a redirect hop or a popup.
+  // /json/close/<id> to kill one. Every agent target runs behind a network
+  // guard that fails each request to loopback (any port not allow-listed),
+  // however it is started: a script navigation, a fetch, a redirect hop, a
+  // popup, a worker of any kind, or a WebSocket handshake.
   describe("agent tabs cannot reach loopback (chromium debug endpoints, any port)", () => {
     let u = "";
     let other = ""; // a second user: a second chromium on its own port
+    let side: Server; // another loopback service: plain http + WebSocket on one port
+    let sidePort = 0;
     const savedAllow = config.BROWSER_ALLOW_LOOPBACK;
+    const savedPorts = config.BROWSER_LOOPBACK_ALLOW_PORTS;
     const savedInternalUrl = config.INTERNAL_MCP_URL;
     beforeAll(async () => {
       u = freshUser();
       other = freshUser();
       await ensureSession(other);
+      side = createServer((_req, res) => { res.setHeader("content-type", "text/html"); res.end("<p id=side>side</p>"); });
+      new WebSocketServer({ server: side });
+      await new Promise<void>((r) => side.listen(0, "127.0.0.1", r));
+      sidePort = (side.address() as { port: number }).port;
+    });
+    afterAll(async () => {
+      await new Promise((r) => side.close(r));
+    });
+    beforeEach(() => {
+      // The fixture port is opened the way a developer opens a dev server.
+      config.BROWSER_ALLOW_LOOPBACK = false;
+      config.BROWSER_LOOPBACK_ALLOW_PORTS = [port];
     });
     afterEach(() => {
       config.BROWSER_ALLOW_LOOPBACK = savedAllow;
+      config.BROWSER_LOOPBACK_ALLOW_PORTS = savedPorts;
       config.INTERNAL_MCP_URL = savedInternalUrl;
     });
     const settle = () => new Promise((r) => setTimeout(r, 800));
@@ -506,17 +537,14 @@ describe.skipIf(!ENABLED)("cookie auto-reconnect against a real chromium", () =>
     const evalIn = async (tab: T, expression: string) =>
       (await tab.cdp.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true, userGesture: true })).result?.value;
 
-    /** An agent tab on the fixture page; loopback is closed again before `fn` runs. */
-    async function onFixture(fn: (tab: T & { id: string }) => Promise<void>): Promise<void> {
-      config.BROWSER_ALLOW_LOOPBACK = true;
+    /** An agent tab on `url` (default: the fixture's login page). */
+    async function onPage(fn: (tab: T & { id: string }) => Promise<void>, url = `${origin}/login`): Promise<void> {
       const opened = await openTab(u);
       if (!opened.ok) throw new Error("no tab");
       const { tab } = opened;
       try {
-        await tab.cdp.send("Page.navigate", { url: `${origin}/login` });
+        await tab.cdp.send("Page.navigate", { url });
         await settle();
-        expect(await evalIn(tab, "!!document.getElementById('pass')")).toBe(true);
-        config.BROWSER_ALLOW_LOOPBACK = false;
         await fn(tab);
       } finally {
         await closeTab(u, tab.id);
@@ -524,65 +552,54 @@ describe.skipIf(!ENABLED)("cookie auto-reconnect against a real chromium", () =>
     }
     const otherPort = () => getWarmSession(other)!.remotePort;
     const ownPort = () => getWarmSession(u)!.remotePort;
+    const bodyText = (tab: T) => evalIn(tab, "document.body ? document.body.innerText : ''").then(String);
 
     it("a script navigation to its own chromium's /json/list is failed", async () => {
-      await onFixture(async (tab) => {
+      await onPage(async (tab) => {
+        expect(await evalIn(tab, "!!document.getElementById('pass')")).toBe(true);
         await evalIn(tab, `location.href = ${JSON.stringify(`http://127.0.0.1:${ownPort()}/json/list`)}`);
         await settle();
-        expect(String(await evalIn(tab, "document.body ? document.body.innerText : ''"))).not.toContain("webSocketDebuggerUrl");
+        expect(await bodyText(tab)).not.toContain("webSocketDebuggerUrl");
       });
     }, 60_000);
 
-    it("another user's chromium: navigation and a no-cors fetch are both failed", async () => {
+    it("another user's chromium: navigation and a no-cors fetch are both failed, even when its port is allow-listed", async () => {
       expect(otherPort()).not.toBe(ownPort());
-      await onFixture(async (tab) => {
+      config.BROWSER_LOOPBACK_ALLOW_PORTS = [port, otherPort()];
+      await onPage(async (tab) => {
         const target = `http://127.0.0.1:${otherPort()}/json/version`;
         expect(await evalIn(tab, `fetch(${JSON.stringify(target)}, { mode: "no-cors" }).then(() => "sent", () => "blocked")`)).toBe("blocked");
         await evalIn(tab, `location.href = ${JSON.stringify(`http://127.0.0.1:${otherPort()}/json/list`)}`);
         await settle();
-        expect(String(await evalIn(tab, "document.body ? document.body.innerText : ''"))).not.toContain("webSocketDebuggerUrl");
+        expect(await bodyText(tab)).not.toContain("webSocketDebuggerUrl");
       });
     }, 60_000);
 
-    it("any other loopback port is failed too (here: the fixture itself)", async () => {
-      await onFixture(async (tab) => {
-        await evalIn(tab, `location.href = ${JSON.stringify(`http://localhost:${port}/login?again=1`)}`);
+    it("another loopback port is failed; allow-listing it opens it", async () => {
+      await onPage(async (tab) => {
+        await evalIn(tab, `location.href = ${JSON.stringify(`http://localhost:${sidePort}/`)}`);
         await settle();
-        expect(await evalIn(tab, "!!document.getElementById('pass')")).toBe(false);
+        expect(await bodyText(tab)).not.toContain("side");
       });
+      config.BROWSER_LOOPBACK_ALLOW_PORTS = [port, sidePort];
+      await onPage(async (tab) => {
+        expect(await bodyText(tab)).toContain("side");
+      }, `http://localhost:${sidePort}/`);
     }, 60_000);
 
-    it("a redirect hop to a blocked host is failed, though the first hop was allowed", async () => {
-      // The opt-out admits the 127.0.0.1 hop; the internal-host rule (which
-      // the opt-out never lifts) refuses the localhost hop it 302s to.
-      config.INTERNAL_MCP_URL = `http://localhost:${port}/mcp`;
-      config.BROWSER_ALLOW_LOOPBACK = true;
-      const opened = await openTab(u);
-      if (!opened.ok) throw new Error("no tab");
-      const { tab } = opened;
-      try {
-        await tab.cdp.send("Page.navigate", { url: `${origin}/bounce?to=${encodeURIComponent(`http://localhost:${port}/login`)}` });
-        await settle();
+    it("a redirect hop to a blocked port is failed, though the first hop was allowed", async () => {
+      await onPage(async (tab) => {
         expect(await evalIn(tab, "!!document.getElementById('pass')")).toBe(false);
-        // Control: the same page without the redirect loads.
-        await tab.cdp.send("Page.navigate", { url: `${origin}/login` });
-        await settle();
+        expect(await bodyText(tab)).not.toContain("side");
+      }, `${origin}/bounce?to=${encodeURIComponent(`http://127.0.0.1:${sidePort}/`)}`);
+      // Control: the same page without the redirect loads.
+      await onPage(async (tab) => {
         expect(await evalIn(tab, "!!document.getElementById('pass')")).toBe(true);
-      } finally {
-        config.INTERNAL_MCP_URL = savedInternalUrl;
-        await closeTab(u, tab.id);
-      }
+      });
     }, 60_000);
 
     it("a popup opened by the agent tab is guarded before it loads anything", async () => {
-      config.BROWSER_ALLOW_LOOPBACK = true;
-      const opened = await openTab(u);
-      if (!opened.ok) throw new Error("no tab");
-      const { tab } = opened;
-      try {
-        await tab.cdp.send("Page.navigate", { url: `${origin}/login` });
-        await settle();
-        config.BROWSER_ALLOW_LOOPBACK = false;
+      await onPage(async (tab) => {
         const list = `http://127.0.0.1:${otherPort()}/json/list`;
         await evalIn(tab, `void window.open(${JSON.stringify(list)}, "_blank")`);
         await settle();
@@ -590,7 +607,7 @@ describe.skipIf(!ENABLED)("cookie auto-reconnect against a real chromium", () =>
         const targets = (await (await fetch(`http://127.0.0.1:${ownPort()}/json/list`)).json()) as Array<{ id: string; url: string; type: string; webSocketDebuggerUrl: string }>;
         const popup = targets.find((t) => t.type === "page" && t.url.includes(`:${otherPort()}/`));
         expect(popup).toBeDefined();
-        const ws = new WebSocket(popup!.webSocketDebuggerUrl, { perMessageDeflate: false, origin: "http://127.0.0.1" });
+        const ws = new WebSocket(popup!.webSocketDebuggerUrl, { perMessageDeflate: false, origin: CDP_ORIGIN });
         await new Promise<void>((res, rej) => { ws.once("open", () => res()); ws.once("error", rej); });
         try {
           const text = await new Promise<string>((res) => {
@@ -605,9 +622,57 @@ describe.skipIf(!ENABLED)("cookie auto-reconnect against a real chromium", () =>
           ws.close();
           await fetch(`http://127.0.0.1:${ownPort()}/json/close/${popup!.id}`).catch(() => {});
         }
-      } finally {
-        await closeTab(u, tab.id);
-      }
+      });
+    }, 60_000);
+
+    // Each worker fetches another loopback port and reports "sent" or
+    // "blocked". A worker the guard closed would report "timeout", which fails
+    // these assertions too: the point is a worker that runs AND is guarded.
+    const target = () => `http://127.0.0.1:${sidePort}/`;
+    const q = () => `t=${encodeURIComponent(target())}&n=${Math.random()}`;
+
+    it("a dedicated worker's fetch to another loopback port is failed", async () => {
+      await onPage(async (tab) => {
+        expect(await evalIn(tab, `new Promise((r) => { const w = new Worker("/w/worker.js?${q()}"); w.onmessage = (e) => r(e.data); setTimeout(() => r("timeout"), 5000); })`)).toBe("blocked");
+      });
+    }, 60_000);
+
+    it("a SharedWorker's fetch to another loopback port is failed", async () => {
+      await onPage(async (tab) => {
+        expect(await evalIn(tab, `new Promise((r) => { const w = new SharedWorker("/w/shared.js?${q()}"); w.port.onmessage = (e) => r(e.data); w.port.start(); setTimeout(() => r("timeout"), 5000); })`)).toBe("blocked");
+      });
+    }, 60_000);
+
+    it("a ServiceWorker's fetch to another loopback port is failed", async () => {
+      await onPage(async (tab) => {
+        const out = await evalIn(tab, `(async () => {
+          const reg = await navigator.serviceWorker.register("/w/sw.js?${q()}", { scope: "/w/" });
+          const sw = reg.installing || reg.waiting || reg.active;
+          await new Promise((r) => { if (sw.state === "activated") r(); sw.addEventListener("statechange", () => sw.state === "activated" && r()); setTimeout(r, 4000); });
+          return await new Promise((r) => { navigator.serviceWorker.onmessage = (e) => r(e.data); sw.postMessage("go"); setTimeout(() => r("timeout"), 5000); });
+        })()`);
+        expect(out).toBe("blocked");
+      });
+    }, 60_000);
+
+    const wsTry = (url: string) =>
+      `new Promise((r) => { const w = new WebSocket(${JSON.stringify(url)}); w.onopen = () => { w.close(); r("open"); }; w.onerror = () => r("error"); setTimeout(() => r("timeout"), 5000); })`;
+
+    it("a DevTools WebSocket from an agent tab is refused: no page can carry the CDP origin", async () => {
+      const v = (await (await fetch(`http://127.0.0.1:${otherPort()}/json/version`)).json()) as { webSocketDebuggerUrl: string };
+      await onPage(async (tab) => {
+        expect(await evalIn(tab, wsTry(v.webSocketDebuggerUrl))).toBe("error");
+      });
+    }, 60_000);
+
+    // RESIDUAL, pinned so the docs stay honest: Fetch never pauses a
+    // WebSocket handshake, and Network.setBlockedURLs did not block one in
+    // chromium either, so a plain WebSocket to another loopback service is
+    // NOT refused. DevTools sockets are (above), by origin.
+    it("residual: a plain WebSocket to another loopback port is not intercepted", async () => {
+      await onPage(async (tab) => {
+        expect(await evalIn(tab, wsTry(`ws://127.0.0.1:${sidePort}/`))).toBe("open");
+      });
     }, 60_000);
   });
 });

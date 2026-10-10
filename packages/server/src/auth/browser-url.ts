@@ -9,6 +9,46 @@
 // script navigations, redirects, popups and subresources, which no input
 // check sees. Hostnames that merely resolve to loopback are not caught by
 // this literal check; the network guard resolves them.
+//
+// BROWSER_LOOPBACK_ALLOW_PORTS opens listed loopback ports (a local dev
+// server). A live chromium debug port and this server's own port are refused
+// even when listed.
+
+import { config } from "../config";
+
+const debugPorts = new Set<number>();
+
+/** A chromium remote-debugging port in use by this process (browser-session.ts). */
+export function registerDebugPort(port: number): void {
+  debugPorts.add(port);
+}
+
+export function unregisterDebugPort(port: number): void {
+  debugPorts.delete(port);
+}
+
+/** The port a URL connects to, defaults filled in. */
+export function effectivePort(u: URL): number {
+  if (u.port) return Number(u.port);
+  return u.protocol === "https:" || u.protocol === "wss:" ? 443 : 80;
+}
+
+/** A loopback port the operator opened, and that is neither a chromium debug port nor ours. */
+export function isAllowedLoopbackPort(port: number): boolean {
+  if (debugPorts.has(port)) return false;
+  if (port === Number(config.PORT)) return false;
+  return (config.BROWSER_LOOPBACK_ALLOW_PORTS ?? []).includes(port);
+}
+
+/** The workbench server's own internal hostname (INTERNAL_MCP_URL), refused on any port. */
+export function isInternalHost(hostname: string): boolean {
+  if (!config.INTERNAL_MCP_URL) return false;
+  try {
+    return new URL(config.INTERNAL_MCP_URL).hostname.toLowerCase() === hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+}
 
 /**
  * A resolved or literal address (no brackets) in loopback or "this host":
@@ -38,7 +78,7 @@ export function isLoopbackHost(hostname: string): boolean {
   return isLoopbackAddress(h);
 }
 
-/** http(s) and not loopback. */
+/** http(s), not the server's internal host, and not loopback unless the port is allow-listed. */
 export function isAgentNavigableUrl(raw: string): boolean {
   let u: URL;
   try {
@@ -47,5 +87,6 @@ export function isAgentNavigableUrl(raw: string): boolean {
     return false;
   }
   if (u.protocol !== "http:" && u.protocol !== "https:") return false;
-  return !isLoopbackHost(u.hostname);
+  if (isInternalHost(u.hostname)) return false;
+  return !isLoopbackHost(u.hostname) || isAllowedLoopbackPort(effectivePort(u));
 }

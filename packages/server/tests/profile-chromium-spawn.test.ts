@@ -31,6 +31,9 @@ describe("spawnProfileChromium spawn options", () => {
     expect(args).toContain("--autoplay-policy=no-user-gesture-required");
     expect(args).toContain("--use-mock-keychain");
     expect(args).toContain("--password-store=basic");
+    // DevTools sockets only from an origin no page can have (src/auth/cdp-origin.ts).
+    expect(args).toContain("--remote-allow-origins=http://workbench-cdp.invalid");
+    expect(args.join(" ")).not.toContain("remote-allow-origins=http://127.0.0.1");
     expect(options.env).toBe(env);
   });
 

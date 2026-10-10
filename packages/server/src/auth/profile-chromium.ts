@@ -5,11 +5,13 @@ import { join, dirname } from "node:path";
 import { createServer } from "node:net";
 import WebSocket from "ws";
 import { config } from "../config";
+import { CDP_ORIGIN } from "./cdp-origin";
 
 // Userdata dirs can't be shared by two Chromium processes — one active session
 // (capture OR warm browser) per user at a time. Shared by cookie.ts and
 // browser-session.ts so the two are mutually exclusive.
 export const activeProfiles = new Set<string>();
+
 
 export function profilesBaseDir(): string {
   return config.BROWSER_PROFILES_DIR || join(dirname(config.DATABASE_URL), "browser-profiles");
@@ -109,7 +111,7 @@ export async function cdpCall(
   params: Record<string, unknown> = {}
 ): Promise<Record<string, unknown>> {
   return await new Promise((resolve, reject) => {
-    const ws = new WebSocket(wsUrl, { perMessageDeflate: false, origin: "http://127.0.0.1" });
+    const ws = new WebSocket(wsUrl, { perMessageDeflate: false, origin: CDP_ORIGIN });
     const timeout = setTimeout(() => {
       try { ws.close(); } catch { /* noop */ }
       reject(new Error(`cdpCall ${method} timed out`));
@@ -204,7 +206,7 @@ export async function spawnProfileChromium(
     "--headless=new",
     `--remote-debugging-port=${remotePort}`,
     `--user-data-dir=${userDataDir}`,
-    "--remote-allow-origins=http://127.0.0.1",
+    `--remote-allow-origins=${CDP_ORIGIN}`,
     "--no-first-run",
     "--no-default-browser-check",
     "--disable-features=TranslateUI",

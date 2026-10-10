@@ -3,6 +3,7 @@ import WebSocket from "ws";
 import { db } from "../db";
 import { encrypt, decrypt } from "./encryption";
 import { activeProfiles, userProfileDir } from "./profile-chromium";
+import { CDP_ORIGIN } from "./cdp-origin";
 import { getReconnectState, updateReconnectState } from "./reconnect/state";
 
 export interface CookieData {
@@ -47,7 +48,7 @@ export function createProxyAuthHandler(creds: { username: string; password: stri
 
 export function startProxyAuth(browserWsUrl: string, username: string, password: string): WebSocket {
   const handler = createProxyAuthHandler({ username, password });
-  const ws = new WebSocket(browserWsUrl, { perMessageDeflate: false, origin: "http://127.0.0.1" });
+  const ws = new WebSocket(browserWsUrl, { perMessageDeflate: false, origin: CDP_ORIGIN });
   ws.on("open", () => {
     ws.send(JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true, flatten: true, waitForDebuggerOnStart: false } }));
   });
