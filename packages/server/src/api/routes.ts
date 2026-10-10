@@ -16,6 +16,7 @@ import { config } from "../config";
 import { getToken, deleteToken, storeToken } from "../auth/tokens";
 import {
   storeCookies,
+  clearReconnectFailure,
   getCookies,
   hasValidCookies,
   deleteCookies,
@@ -126,6 +127,31 @@ async function authenticate(request: {
     }
   }
   return null;
+}
+
+/**
+ * True only when the request carries a portal-session JWT for `userId`.
+ * authenticate() also takes an API key (and prefers it), so a route that
+ * accepts both uses this to decide what only a human may do. A valid session
+ * for a different user than the authenticated one does not count.
+ */
+async function isPortalSessionFor(request: { headers: { authorization?: string } }, userId: string): Promise<boolean> {
+  const auth = request.headers.authorization;
+  if (!auth?.startsWith("Bearer ")) return false;
+  try {
+    return (await verifySession(auth.slice(7))).userId === userId;
+  } catch {
+    return false;
+  }
+}
+
+/** After a cookie write: a manual reconnect by a human ends the cooldown; an agent's never does. */
+async function clearFailureIfPortal(
+  request: { headers: { authorization?: string } },
+  userId: string,
+  integration: string
+): Promise<void> {
+  if (await isPortalSessionFor(request, userId)) await clearReconnectFailure(userId, integration);
 }
 
 function recipeOf(name: string) {
@@ -628,6 +654,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
         return reply.status(400).send({ error: "No cookies captured. Complete login before capturing." });
       }
       await storeCookies(user.userId, integration, data);
+      await clearFailureIfPortal(request, user.userId, integration);
       markConnected(user.userId, integration);
       markConnectEnded(user.userId);
       return { success: true, cookieCount: data.cookies.length };
@@ -687,6 +714,8 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
         capturedAt: session.capturedAt ?? Math.floor(Date.now() / 1000),
       };
       await storeCookies(user.userId, integration, data);
+      // Import accepts an API key: only a portal session ends the cooldown.
+      await clearFailureIfPortal(request, user.userId, integration);
       markConnected(user.userId, integration);
       markConnectEnded(user.userId);
       return { success: true, cookieCount: data.cookies.length };
@@ -870,6 +899,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
         return reply.status(400).send({ error: "No cookies captured. Complete login before capturing." });
       }
       await storeCookies(user.userId, payload.integration, data);
+      await clearFailureIfPortal(request, user.userId, payload.integration);
       markConnected(user.userId, payload.integration);
       markConnectEnded(user.userId);
       return { success: true, cookieCount: data.cookies.length };

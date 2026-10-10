@@ -115,14 +115,22 @@ export async function storeCookies(userId: string, integration: string, data: Co
        updated_at = ?`,
     [userId, integration, encrypt("cookie-auth"), encrypt(JSON.stringify(data)), now, now, now]
   );
-  // Fresh cookies (manual connect, import, or auto-reconnect) end a dead spell,
-  // and a failed attempt from before them is stale: drop it so the panel stops
-  // showing "Auto-reconnect failed" and the cooldown no longer applies.
+  // Fresh cookies (manual connect, import, or auto-reconnect) end a dead spell.
+  // A recorded failure stays: it holds the cooldown, and import accepts an API
+  // key, so clearing it here would let an agent loop import -> dead call ->
+  // recipe run and replay the vault password without a cap. Only a portal
+  // session clears it (clearReconnectFailure).
+  await updateReconnectState(userId, integration, { deadAt: undefined });
+}
+
+/**
+ * Drop a failed attempt (and so its cooldown), keeping a success. Call only
+ * on a path a signed-in human drove (portal session): a manual reconnect
+ * there means the stale "Auto-reconnect failed" no longer applies.
+ */
+export async function clearReconnectFailure(userId: string, integration: string): Promise<void> {
   const { last } = await getReconnectState(userId, integration);
-  await updateReconnectState(userId, integration, {
-    deadAt: undefined,
-    ...(last && !last.ok ? { last: undefined } : {}),
-  });
+  if (last && !last.ok) await updateReconnectState(userId, integration, { last: undefined });
 }
 
 export async function getCookies(userId: string, integration: string): Promise<CookieData | null> {

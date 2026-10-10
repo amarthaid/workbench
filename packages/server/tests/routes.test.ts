@@ -92,6 +92,7 @@ vi.mock("../src/auth/cookie", async () => {
   return {
     closeCookieSession: vi.fn(() => Promise.resolve()),
     storeCookies: vi.fn(),
+    clearReconnectFailure: vi.fn(() => Promise.resolve()),
     getCookies: vi.fn(() => null),
     hasValidCookies: vi.fn(() => false),
     deleteCookies: vi.fn(),

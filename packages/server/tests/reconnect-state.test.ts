@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { db } from "../src/db";
-import { storeCookies, hasValidCookies } from "../src/auth/cookie";
+import { storeCookies, hasValidCookies, clearReconnectFailure } from "../src/auth/cookie";
 import { getReconnectState, updateReconnectState } from "../src/auth/reconnect/state";
 import { getConnectionConfig } from "../src/auth/tokens";
 
@@ -51,13 +51,23 @@ describe("reconnect state", () => {
     expect(await getReconnectState(U, I)).toEqual({ bindings: { password: "acme_pw" } });
   });
 
-  it("storeCookies (manual connect/capture/import) clears a stale failure, keeps a success", async () => {
+  it("storeCookies clears deadAt but never a recorded failure: the cooldown survives any cookie write", async () => {
+    // Import accepts an API key. If storing cookies reset the cooldown, an
+    // agent could loop import -> dead call -> failed recipe without a cap.
     await storeCookies(U, I, cookies);
-    await updateReconnectState(U, I, { deadAt: 5, last: { at: 5, ok: false, error: "verify: NO_COOKIES" } });
+    const failed = { at: 5, ok: false, error: "verify: NO_COOKIES" };
+    await updateReconnectState(U, I, { deadAt: 5, last: failed });
     await storeCookies(U, I, cookies);
+    expect(await getReconnectState(U, I)).toEqual({ last: failed });
+  });
+
+  it("clearReconnectFailure drops a failed attempt and keeps a success", async () => {
+    await storeCookies(U, I, cookies);
+    await updateReconnectState(U, I, { last: { at: 5, ok: false, error: "verify: NO_COOKIES" } });
+    await clearReconnectFailure(U, I);
     expect(await getReconnectState(U, I)).toEqual({});
     await updateReconnectState(U, I, { last: { at: 6, ok: true } });
-    await storeCookies(U, I, cookies);
+    await clearReconnectFailure(U, I);
     expect(await getReconnectState(U, I)).toEqual({ last: { at: 6, ok: true } });
   });
 

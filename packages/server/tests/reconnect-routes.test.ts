@@ -13,7 +13,16 @@ vi.mock("../src/auth/users", async (orig) => ({
   verifyApiKey: vi.fn(async (key: string) => (key === "valid-api-key" ? "user-rc" : null)),
 }));
 
+vi.mock("../src/auth/browser-session", async (orig) => ({
+  ...(await orig<typeof import("../src/auth/browser-session")>()),
+  captureLiveCookies: vi.fn(),
+}));
+
 import { registerApiRoutes } from "../src/api/routes";
+import { captureLiveCookies } from "../src/auth/browser-session";
+import { verifySession } from "../src/auth/session";
+import { verifyApiKey } from "../src/auth/users";
+import { reconnectSession } from "../src/auth/reconnect/runner";
 import { stopReaper } from "../src/auth/connections";
 import { registry } from "../src/plugins/registry";
 import { storeCookies } from "../src/auth/cookie";
@@ -158,6 +167,60 @@ describe("auto-reconnect bindings API", () => {
     // Same as the vault: an API-key header alone is not a session (401), never accepted.
     expect(viaKey.statusCode).toBe(401);
     expect((await getReconnectState(USER, "acme")).bindings).toBeUndefined();
+  });
+
+  describe("a recorded failure's cooldown: only a portal session may clear it", () => {
+    const failed = { at: Date.now(), ok: false, error: "verify: PROBE_FAILED" };
+    const importBody = { session: cookieData };
+    const withSession = { ...acme, auth: { ...acme.auth, session: { dead: { status: [401] } } } };
+    beforeEach(async () => {
+      await storeCookies(USER, "acme", cookieData);
+      await updateReconnectState(USER, "acme", { deadAt: 5, last: failed });
+      vi.mocked(captureLiveCookies).mockResolvedValue(cookieData as any);
+    });
+
+    it("import via API key stores cookies but keeps the failure, so the next call is COOLDOWN", async () => {
+      const r = await app.inject({
+        method: "POST", url: "/api/integrations/acme/session/import",
+        headers: { "x-workbench-api-key": "valid-api-key" }, payload: importBody,
+      });
+      expect(r.statusCode).toBe(200);
+      const st = await getReconnectState(USER, "acme");
+      expect(st.last).toEqual(failed);
+      expect(st.deadAt).toBeUndefined(); // the fresh cookies still end the dead spell
+      vi.mocked(registry.getIntegration).mockImplementation((n: string) => (n === "acme" ? withSession : undefined));
+      expect(await reconnectSession(USER, "acme")).toEqual({ ok: false, reason: "COOLDOWN" });
+    });
+
+    it("import via API key with a valid portal bearer for another user still keeps the failure", async () => {
+      vi.mocked(verifyApiKey).mockResolvedValueOnce(USER);
+      vi.mocked(verifySession).mockResolvedValueOnce({ userId: "someone-else" } as any);
+      await app.inject({
+        method: "POST", url: "/api/integrations/acme/session/import",
+        headers: { "x-workbench-api-key": "valid-api-key", authorization: "Bearer other-jwt" }, payload: importBody,
+      });
+      expect((await getReconnectState(USER, "acme")).last).toEqual(failed);
+    });
+
+    it("import via portal session clears the failure", async () => {
+      const r = await app.inject({ method: "POST", url: "/api/integrations/acme/session/import", headers: auth, payload: importBody });
+      expect(r.statusCode).toBe(200);
+      expect((await getReconnectState(USER, "acme")).last).toBeUndefined();
+    });
+
+    it("capture via portal session clears the failure", async () => {
+      const r = await app.inject({ method: "POST", url: "/api/auth/cookie/acme/capture", headers: auth });
+      expect(r.statusCode).toBe(200);
+      expect((await getReconnectState(USER, "acme")).last).toBeUndefined();
+    });
+
+    it("capture via API key keeps the failure", async () => {
+      const r = await app.inject({
+        method: "POST", url: "/api/auth/cookie/acme/capture", headers: { "x-workbench-api-key": "valid-api-key" },
+      });
+      expect(r.statusCode).toBe(200);
+      expect((await getReconnectState(USER, "acme")).last).toEqual(failed);
+    });
   });
 
   it("integration detail exposes credential slots", async () => {

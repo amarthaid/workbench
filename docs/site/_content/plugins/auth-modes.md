@@ -319,7 +319,9 @@ control characters.
 manual reconnect and no further attempt runs for 10 minutes, at most six per
 hour, so a wrong password or an MFA wall never hammers a login form. A
 reconnect whose retried request is still refused counts as a failed attempt.
-Saving new bindings, or reconnecting by hand, clears the cooldown. A reconnect
+Saving new bindings, or reconnecting by hand from the portal, clears the
+cooldown. A session import made with an API key or OAuth token stores the
+cookies but leaves the cooldown in force, so an agent cannot loop the recipe. A reconnect
 stands down without recording anything while the user is in the middle of a
 portal connect (the connect link or live view), or when the browser is already
 at its tab limit.
