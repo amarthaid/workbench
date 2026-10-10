@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { screen, waitFor, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+import { render } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderWithClient } from "../test-utils";
 import { AutoReconnectPanel } from "./AutoReconnectPanel";
 
@@ -46,6 +48,52 @@ describe("AutoReconnectPanel", () => {
     fireEvent.change(screen.getByLabelText("Password"), { target: { value: "acme_pw" } });
     fireEvent.click(screen.getByRole("button", { name: /save/i }));
     await waitFor(() => expect(saveReconnectBindings).toHaveBeenCalledWith("acme", { password: "acme_pw" }));
+  });
+
+  it("does not wipe a binding when the status loads after mount", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const panel = (status?: React.ComponentProps<typeof AutoReconnectPanel>["status"]) => (
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>
+          <AutoReconnectPanel integration="acme" credentials={CREDS} status={status} connected />
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+    const { rerender } = render(panel(undefined));
+    await screen.findAllByRole("option", { name: "acme_pw" });
+    expect(screen.getByLabelText("Password")).toBeDisabled();
+    rerender(panel({ bindings: { password: "acme_pw" }, missing: ["username"], dead: false }));
+    expect(screen.getByLabelText("Password")).toHaveValue("acme_pw");
+    expect(screen.getByRole("button", { name: /save/i })).toBeDisabled();
+  });
+
+  it("drops edits when remounted for another integration", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const tree = (key: string) => (
+      <QueryClientProvider client={qc}>
+      <MemoryRouter>
+        <AutoReconnectPanel
+          key={key}
+          integration={key}
+          credentials={CREDS}
+          status={{ bindings: {}, missing: ["username", "password"], dead: false }}
+          connected
+        />
+      </MemoryRouter>
+      </QueryClientProvider>
+    );
+    const { rerender } = render(tree("a"));
+    await screen.findAllByRole("option", { name: "acme_pw" });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "acme_pw" } });
+    expect(screen.getByLabelText("Password")).toHaveValue("acme_pw");
+    rerender(tree("b"));
+    expect(screen.getByLabelText("Password")).toHaveValue("");
+  });
+
+  it("labels a bound entry that no longer exists in the vault", async () => {
+    renderPanel({ status: { bindings: { password: "gone_pw" }, missing: [], dead: false } });
+    expect(await screen.findByRole("option", { name: "gone_pw (missing)" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Password")).toHaveValue("gone_pw");
   });
 
   it("sends an empty string for a cleared slot", async () => {

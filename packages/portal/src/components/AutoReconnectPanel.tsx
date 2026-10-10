@@ -29,7 +29,10 @@ export function AutoReconnectPanel({
   connected: boolean;
 }) {
   const initial = status?.bindings ?? {};
-  const [values, setValues] = useState<Record<string, string>>(initial);
+  // Only the user's edits are state; everything else derives from the server
+  // status, so a status that loads late can never be overwritten by a stale seed.
+  const [edits, setEdits] = useState<Record<string, string>>({});
+  const ready = status !== undefined;
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const qc = useQueryClient();
@@ -41,8 +44,8 @@ export function AutoReconnectPanel({
 
   const changed: Record<string, string> = {};
   for (const c of credentials) {
-    const next = values[c.key] ?? "";
-    if (next !== (initial[c.key] ?? "")) changed[c.key] = next;
+    const next = edits[c.key];
+    if (next !== undefined && next !== (initial[c.key] ?? "")) changed[c.key] = next;
   }
   const dirty = Object.keys(changed).length > 0;
 
@@ -51,6 +54,7 @@ export function AutoReconnectPanel({
     setMsg(null);
     try {
       await saveReconnectBindings(integration, changed);
+      setEdits({});
       setMsg({ ok: true, text: "Bindings saved." });
       qc.invalidateQueries({ queryKey: ["connections"] });
     } catch (e) {
@@ -72,23 +76,29 @@ export function AutoReconnectPanel({
               Bind vault entries to the credentials this app signs in with. <Link to="/vault">Add a vault entry</Link>
             </p>
             {!connected && <p className="wb-detail-desc">Connect first</p>}
-            {credentials.map((c) => (
+            {credentials.map((c) => {
+              const value = edits[c.key] ?? initial[c.key] ?? "";
+              const names = (secrets ?? []).map((s) => s.name);
+              const missing = value !== "" && secrets !== undefined && !names.includes(value);
+              return (
               <div key={c.key} className="wb-inline-row">
                 <label htmlFor={`reconnect-${c.key}`}>{c.label}</label>
                 <Select
                   id={`reconnect-${c.key}`}
-                  value={values[c.key] ?? ""}
-                  disabled={!connected || busy}
-                  onChange={(e) => setValues((v) => ({ ...v, [c.key]: e.target.value }))}
+                  value={value}
+                  disabled={!connected || !ready || busy}
+                  onChange={(e) => setEdits((v) => ({ ...v, [c.key]: e.target.value }))}
                 >
                   <option value="">— none —</option>
-                  {(secrets ?? []).map((s) => (
-                    <option key={s.name} value={s.name}>{s.name}</option>
+                  {missing && <option value={value}>{value} (missing)</option>}
+                  {names.map((n) => (
+                    <option key={n} value={n}>{n}</option>
                   ))}
                 </Select>
               </div>
-            ))}
-            <Button onClick={onSave} disabled={!connected || busy || !dirty}>Save</Button>
+              );
+            })}
+            <Button onClick={onSave} disabled={!connected || !ready || busy || !dirty}>Save</Button>
           </>
         )}
         {msg && <div className={msg.ok ? "wb-ok" : "ui-form-error"}>{msg.text}</div>}

@@ -11,6 +11,7 @@ import {
   removeCustomApp,
   updateCustomAppHeaders,
   type HeaderRow,
+  type ReconnectStatus,
 } from "../api";
 import { PageHeader } from "../components/ui/PageHeader";
 import { Box, BoxRow } from "../components/ui/Box";
@@ -54,10 +55,11 @@ export default function AppDetail() {
     }
   }
 
-  const connected = useMemo(() => {
-    const rows: { name: string; connected: boolean }[] = connectionsData?.connections ?? [];
-    return rows.some((c) => c.name === name && c.connected);
+  const connectionRow = useMemo(() => {
+    const rows: { name: string; connected: boolean; autoReconnect?: ReconnectStatus }[] = connectionsData?.connections ?? [];
+    return rows.find((c) => c.name === name);
   }, [connectionsData, name]);
+  const connected = connectionRow?.connected === true;
 
   if (isLoading) {
     return (
@@ -169,9 +171,10 @@ export default function AppDetail() {
         {data.authType === "cookie" && <SessionTransfer name={data.name} />}
         {data.authType === "cookie" && data.autoReconnect && (
           <AutoReconnectPanel
+            key={data.name}
             integration={data.name}
             credentials={data.autoReconnect.credentials}
-            status={connectionsData?.connections?.find((c: { name: string }) => c.name === name)?.autoReconnect}
+            status={connectionRow?.autoReconnect}
             connected={connected}
           />
         )}
