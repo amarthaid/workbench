@@ -187,8 +187,12 @@ export function createDnsResolver(): DnsResolver {
     });
   };
 
-  const lookupOnce = async (host: string, deadline: number): Promise<Resolved> => {
-    if (!(await acquire(deadline))) return "fail";
+  /**
+   * "busy" is the guard's own limit (queue overflow, deadline), not something
+   * DNS said: it fails the request but is never cached.
+   */
+  const lookupOnce = async (host: string, deadline: number): Promise<Resolved | "busy"> => {
+    if (!(await acquire(deadline))) return "busy";
     try {
       // Every name chromium might use for `host`. The name itself must resolve
       // cleanly; an expansion that does not exist is skipped (NXDOMAIN /
@@ -209,7 +213,7 @@ export function createDnsResolver(): DnsResolver {
         ]),
         deadline
       );
-      if (!results) return "fail";
+      if (!results) return "busy";
       if (results.some((r) => !r.ok)) return "fail";
       const all = results.flatMap((r) => r.a);
       if (!all.length) return "fail";
@@ -236,7 +240,8 @@ export function createDnsResolver(): DnsResolver {
       let p = inFlight.get(key);
       if (!p) {
         p = lookupOnce(host, now + __netGuard.timeoutMs)
-          .then((result) => {
+          .then((result): Resolved => {
+            if (result === "busy") return "fail"; // our own limit: fail, remember nothing
             if (result === "fail") {
               if (negative.size >= DNS_CACHE_MAX) negative.clear();
               negative.set(key, Date.now() + DNS_NEGATIVE_CACHE_MS);

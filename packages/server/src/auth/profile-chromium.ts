@@ -63,6 +63,20 @@ async function getFreePort(): Promise<number> {
   });
 }
 
+/**
+ * The chromium debug port. Never one of BROWSER_LOOPBACK_ALLOW_PORTS: those
+ * are reachable from agent tabs, and every worker reads the same list, so no
+ * process's chromium can sit on one.
+ */
+export async function pickDebugPort(probe: () => Promise<number> = getFreePort): Promise<number> {
+  const allowed = config.BROWSER_LOOPBACK_ALLOW_PORTS ?? [];
+  for (let i = 0; i < 20; i++) {
+    const port = await probe();
+    if (!allowed.includes(port)) return port;
+  }
+  throw new Error("pickDebugPort: every free port offered was allow-listed");
+}
+
 export interface PollOpts {
   /** Give up this long after the first attempt. Budget in time, not attempts:
    *  an attempt count silently shrinks the budget when each fetch is slow. */
@@ -195,7 +209,7 @@ export async function spawnProfileChromium(
   opts: { startUrl?: string; env?: NodeJS.ProcessEnv; extraArgs?: string[] } = {}
 ): Promise<SpawnedChromium> {
   const t0 = Date.now();
-  const remotePort = await getFreePort();
+  const remotePort = await pickDebugPort();
   const userDataDir = userProfileDir(userId);
   mkdirSync(userDataDir, { recursive: true, mode: 0o700 });
   chmodSync(userDataDir, 0o700);

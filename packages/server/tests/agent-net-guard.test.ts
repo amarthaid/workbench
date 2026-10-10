@@ -494,3 +494,27 @@ describe("the guard is at least as strict as chromium's own resolver", () => {
     expect(await blocked("http://app.dev/")).toBe(false);
   });
 });
+
+describe("only real resolver failures are negative-cached", () => {
+  afterEach(() => { __netGuard.timeoutMs = 2_000; });
+
+  it("a host that overflowed the queue resolves as soon as the flood clears", async () => {
+    __netGuard.timeoutMs = 200;
+    __netGuard.resolve = (host: string) =>
+      host.startsWith("slow") ? new Promise<string[]>(() => {}) : Promise.resolve(["93.184.216.34"]);
+    const r = createDnsResolver();
+    const flood = Array.from({ length: 60 }, (_, i) => isBlockedAgentRequest(`https://slow${i}.example.com/`, r));
+    expect(await isBlockedAgentRequest("https://ok.example.com/", r)).toBe(true); // overflow: failed closed
+    await Promise.all(flood);
+    expect(await isBlockedAgentRequest("https://ok.example.com/", r)).toBe(false); // not remembered as a failure
+  });
+
+  it("a real resolver failure is still cached briefly", async () => {
+    let calls = 0;
+    __netGuard.resolve = async () => { calls += 1; throw Object.assign(new Error("nx"), { code: "ENOTFOUND" }); };
+    const r = createDnsResolver();
+    expect(await isBlockedAgentRequest("https://gone.example.com/", r)).toBe(true);
+    expect(await isBlockedAgentRequest("https://gone.example.com/", r)).toBe(true);
+    expect(calls).toBe(1);
+  });
+});
