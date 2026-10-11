@@ -1,6 +1,7 @@
 // HTTP face of the audio pipeline, keyed by a capability:
 //   GET  /api/browser/audio/:cap/stream  → SSE, call audio out
-//   POST /api/browser/audio/:cap/stream  → chunked audio/pcm in, held open for the call
+//   POST /api/browser/audio/:cap/stream  → chunked audio/pcm in, held open for the call;
+//                                          answers 200 at once, newline heartbeats, then {played_ms}
 //   POST /api/browser/audio/:cap/clear   → drop unplayed agent audio
 // The capability is the only credential (audio/capability.ts): the voice
 // client holding the call carries no workbench token, and any Authorization
@@ -20,11 +21,20 @@ export const PING_MS = 15_000;
  * reconnect in between would get 409.
  */
 export const READER_STALL_MS = 10_000;
+/**
+ * The uplink answers 200 as soon as it is accepted and then writes a newline
+ * this often until the call's result. A proxy that waits for response headers
+ * (Cloudflare gives up after 100 s with a 524) or drops an idle response would
+ * otherwise kill every call that outlives its timer. Leading whitespace keeps
+ * the body one valid JSON document.
+ */
+export const UPLINK_HEARTBEAT_MS = 20_000;
 
 export interface AudioRouteDeps {
   lookup(cap: string): AudioSession | undefined;
   forward(opts: { request: FastifyRequest; reply: FastifyReply; path: string }): Promise<boolean>;
   readerStallMs: number;
+  uplinkHeartbeatMs: number;
 }
 
 type Params = { Params: { cap: string } };
@@ -34,6 +44,7 @@ export async function registerAudioRoutes(app: FastifyInstance, overrides: Parti
     lookup: overrides.lookup ?? sessionForCapability,
     forward: overrides.forward ?? forwardAudioStream,
     readerStallMs: overrides.readerStallMs ?? READER_STALL_MS,
+    uplinkHeartbeatMs: overrides.uplinkHeartbeatMs ?? UPLINK_HEARTBEAT_MS,
   };
 
   /**
@@ -144,9 +155,26 @@ export async function registerAudioRoutes(app: FastifyInstance, overrides: Parti
       if (up === "busy") return reply.code(409).send({ error: "uplink_busy", detail: "another audio POST is open for this call" });
       if (up === "ended") return reply.code(404).send({ error: "audio_not_found" });
 
+      // Headers go out now, not when the call ends: the result is only known
+      // once the body ends, and a proxy waiting for the response line would
+      // time the call out first.
+      reply.hijack();
+      const res = reply.raw;
+      res.writeHead(200, {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-cache, no-transform",
+        "X-Accel-Buffering": "no",
+      });
+      res.write("\n");
+      const heartbeat = setInterval(() => { try { res.write("\n"); } catch { /* gone */ } }, deps.uplinkHeartbeatMs);
+      heartbeat.unref?.();
+
       // The response's 'close', not the request's: IncomingMessage closes once
       // the body is consumed, long before the queued audio has played out.
-      reply.raw.on("close", () => { if (!reply.raw.writableFinished) up.abort(); });
+      res.on("close", () => {
+        clearInterval(heartbeat);
+        if (!res.writableFinished) up.abort();
+      });
 
       const pump = (async () => {
         for await (const chunk of request.raw) {
@@ -159,17 +187,24 @@ export async function registerAudioRoutes(app: FastifyInstance, overrides: Parti
       ]);
       if (outcome === "aborted") {
         up.abort();
-        reply.hijack();
+        clearInterval(heartbeat);
+        res.destroy();
         return reply;
       }
       const result = await up.end();
+      clearInterval(heartbeat);
+      const body = JSON.stringify(result);
       if (outcome === "ended") {
-        // The agent is still writing into a call that is over: answer now and
-        // let the connection close rather than read audio nobody will play.
+        // The agent is still writing into a call that is over: answer and close
+        // the socket rather than read audio nobody will play (keep-alive would
+        // otherwise drain the rest of an endless body).
         pump.catch(() => undefined);
-        return reply.header("connection", "close").send(result);
+        const socket = request.raw.socket;
+        res.end(body, () => socket.destroy());
+        return reply;
       }
-      return reply.send(result);
+      res.end(body);
+      return reply;
     });
 
     scope.post<Params>(`${base}/clear`, async (request, reply) => {

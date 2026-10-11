@@ -74,9 +74,14 @@ One reader and one uplink at a time: a second concurrent `GET` gets
 reader has disconnected, a new `GET` is accepted, so reconnecting after a
 network blip is safe. The uplink accepts
 audio faster than real time and queues up to 120 s; past that it stops reading
-your body until audio plays. Closing the body plays out the queue, then the
-response is `200 { "played_ms" }`. Cancelling the request, even after the body
-is fully sent, drops the queued audio and frees the slot.
+your body until audio plays. The response starts as soon as the uplink is
+accepted: `200` with `Content-Type: application/json`, then a newline every
+20 s while the call runs, so a proxy waiting for a response (Cloudflare's 524
+after 100 s) or dropping an idle one keeps the call. Closing the body plays out
+the queue, then the response ends with `{ "played_ms" }`. Leading whitespace is
+valid JSON, so the whole body still parses as one document. Treat the response
+*ending* as the uplink being over, not its arrival. Cancelling the request, even
+after the body is fully sent, drops the queued audio and frees the slot.
 
 Other HTTP responses: `404 audio_not_found` for an unknown, revoked or ended
 capability (never a redirect), `415` unless `Content-Type` is `audio/pcm`.
@@ -147,6 +152,11 @@ ingress-nginx equivalents: `nginx.ingress.kubernetes.io/proxy-body-size: "0"`,
 `proxy-request-buffering: "off"`, `proxy-buffering: "off"`,
 `proxy-read-timeout: "7200"`, `proxy-send-timeout: "7200"`. Also see
 [Docker: reverse proxy](../deploy/docker.md#behind-a-reverse-proxy).
+
+Behind Cloudflare's proxy, the uplink is one request body for the whole call,
+and Cloudflare caps request bodies by plan (100 MB on Free and Pro). At 24 kHz
+that is about 35 minutes of agent audio. For longer calls, serve the audio
+routes from a DNS-only hostname, and set `SERVER_PUBLIC_URL` to it.
 
 ## Isolation
 
