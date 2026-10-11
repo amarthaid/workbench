@@ -156,6 +156,7 @@ describe("forwardAudioStream", () => {
       method: "POST", headers: { ...H, "content-type": "audio/pcm", accept: "application/json" }, body: Buffer.alloc(48 * 10),
     });
     expect(res.status).toBe(200);
+    await res.text();
     const seen = ownerHits.mock.calls[0][0];
     expect(seen["content-type"]).toBe("audio/pcm");
     expect(seen.accept).toBe("application/json");

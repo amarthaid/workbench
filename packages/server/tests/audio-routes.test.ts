@@ -361,6 +361,48 @@ describe("stalled reader", () => {
   });
 });
 
+describe("uplink response timing", () => {
+  it("answers 200 before the body ends, heartbeats, then ends with played_ms as valid JSON", { timeout: 10_000 }, async () => {
+    const hbApp = Fastify();
+    await registerAudioRoutes(hbApp, { lookup, forward, uplinkHeartbeatMs: 50 });
+    await hbApp.listen({ port: 0, host: "127.0.0.1" });
+    const port = (hbApp.server.address() as { port: number }).port;
+    try {
+      let text = "";
+      let ended!: () => void;
+      const done = new Promise<void>((r) => { ended = r; });
+      const req = httpRequest({
+        host: "127.0.0.1", port, path: `/api/browser/audio/${CAP}/stream`, method: "POST",
+        headers: { "content-type": "audio/pcm", "transfer-encoding": "chunked" },
+      });
+      const res = await new Promise<import("node:http").IncomingMessage>((resolve, reject) => {
+        req.on("response", resolve);
+        req.on("error", reject);
+        req.write(Buffer.alloc(48 * 100));
+      });
+      // Headers arrived while the body is still open: no proxy waits on a response line.
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["content-type"]).toBe("application/json");
+      res.setEncoding("utf8");
+      res.on("data", (c) => { text += c; });
+      res.on("end", ended);
+      await vi.waitFor(() => expect(text.length).toBeGreaterThanOrEqual(3), { timeout: 2000 });
+      expect(text.trim()).toBe("");
+      req.end();
+      await done;
+      expect(JSON.parse(text)).toEqual({ played_ms: 100 });
+    } finally {
+      await hbApp.close();
+    }
+  });
+
+  it("still refuses a busy uplink with a 409 before any headers", async () => {
+    session.openUplink();
+    const r = await fetch(STREAM(), { method: "POST", headers: { "content-type": "audio/pcm" }, body: Buffer.alloc(10) });
+    expect(r.status).toBe(409);
+  });
+});
+
 describe("malformed and unmatched paths", () => {
   it("a capability that is not the minted shape is a 404 without lookup or forward", async () => {
     for (const c of ["short", "%2e%2e", "A".repeat(23), "A".repeat(21) + "="]) {
