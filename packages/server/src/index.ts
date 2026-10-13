@@ -6,6 +6,7 @@ import { registerAdminRoutes } from "./api/admin-routes";
 import { registerOAuthRoutes } from "./api/oauth-routes";
 import { registerOAuthRedirectRoute } from "./api/oauth-redirect";
 import { registerPortal } from "./portal";
+import { registerRobots } from "./robots";
 import { registerJotRoutes } from "./jots/routes";
 import { registerCurlProxy } from "./api/curl-proxy";
 import { registerRestRoutes } from "./api/rest-routes";
@@ -94,6 +95,8 @@ async function main() {
   startUploadReaper();
   startVaultReaper();
   startRecentReaper();
+
+  registerRobots(app);
 
   // Serve the built portal (static + SPA fallback). Registered last so API,
   // MCP, and the CDP bridge routes take precedence and the SPA fallback only
