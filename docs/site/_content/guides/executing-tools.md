@@ -4,7 +4,7 @@ description: How execute_tools runs plugin tools, what happens to each one, and 
 ---
 
 `execute_tools` is the only way to run a plugin tool **over MCP**. Everything the
-catalog offers — all 194 tools across 16 plugins, plus the built-in `browser` and
+catalog offers — all 215 tools across 18 plugins, plus the built-in `browser` and
 `jots` tools — is reached through this single meta-tool.
 
 A non-MCP caller — `curl`, a cron job, anything without an MCP SDK — can run the same

@@ -4,9 +4,9 @@ description: Complete reference for the nine tools workbench exposes over MCP, t
 ---
 
 `tools/list` on `/mcp` returns exactly nine tools, no matter how many plugin tools
-are loaded. Everything else — all 194 plugin tools and the 12 built-in tools — is
+are loaded. Everything else — all 215 plugin tools and the 12 built-in tools — is
 reached through these nine. That is the whole point of the design: your agent's
-context holds nine schemas instead of 206.
+context holds nine schemas instead of 227.
 
 There is no `execute_tool` (singular). Single execution is `execute_tools` with a
 one-element `executions` array.

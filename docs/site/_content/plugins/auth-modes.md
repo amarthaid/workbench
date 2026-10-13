@@ -16,7 +16,7 @@ service supports. It determines the whole connection experience and how
 
 ## `oauth2`
 
-The default choice, and what 14 of the 16 shipped plugins use.
+The default choice, and what 14 of the 18 shipped plugins use.
 
 ```ts
 export interface OAuthConfig {

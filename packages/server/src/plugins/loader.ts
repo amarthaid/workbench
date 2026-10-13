@@ -28,6 +28,7 @@ const builtinPlugins = [
   "newrelic",
   "httpbin-cookie",
   "clevertap",
+  "storybooks",
 ];
 
 function findPluginsBasePath(): string | undefined {
