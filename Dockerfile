@@ -2,7 +2,7 @@
 # Playwright's chromium (used by the cookie-auth WebCDP capture flow) targets
 # glibc/Debian, not Alpine/musl. Keeping both stages on the same libc avoids
 # native-ABI mismatches when node_modules is copied across.
-FROM node:26-bookworm-slim AS builder
+FROM node:26.12.1-bookworm-slim AS builder
 WORKDIR /app
 # Browsers are installed in the runtime stage, not here.
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
@@ -25,7 +25,7 @@ COPY . .
 ENV BRAND_SKIP_PNG=1
 RUN npm run build
 
-FROM node:26-bookworm-slim
+FROM node:26.12.1-bookworm-slim
 WORKDIR /app
 ENV NODE_ENV=production \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
