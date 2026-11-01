@@ -59,6 +59,22 @@ export async function verifyAuthState(
   };
 }
 
+/** A fresh random value for binding a flow to the browser that started it. */
+export function makeBinding(): string {
+  return crypto.randomBytes(16).toString("hex");
+}
+
+/**
+ * Timing-safe comparison for a browser-binding value. Both sides must be
+ * non-empty: an authState with no stored binding never matches an absent
+ * cookie, and an absent cookie never matches a stored binding.
+ */
+export function bindingMatches(expected: string | undefined, provided: string | undefined): boolean {
+  const a = Buffer.from(expected ?? "");
+  const b = Buffer.from(provided ?? "");
+  return a.length > 0 && a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 export interface TokenResponse {
   access_token: string;
   refresh_token?: string;

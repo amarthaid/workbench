@@ -3,18 +3,19 @@
 // integration whose whole point is that the model never sees a value.
 import { z } from "zod";
 import { Plugin, PluginTool } from "../registry";
-import { listSecrets, VaultError } from "../../vault/store";
-import { mintOtl, OTL_DEFAULT_TTL_SECONDS, OTL_MAX_TTL_SECONDS } from "../../vault/otl";
+import { listSecrets } from "../../vault/store";
 
 export const VAULT_INTEGRATION_NAME = "vault";
 
 const HOW_TO_REFERENCE =
   "To use a secret, write {{vault:NAME}} anywhere inside another tool's arguments (whole value or embedded, e.g. \"Bearer {{vault:api_token}}\"). The server swaps in the real value after your arguments leave the model and before the tool runs, and swaps it back out of the result. You never see the value, and you must never ask for it.";
 
-function fail(e: unknown): { error: string } {
-  if (e instanceof VaultError) return { error: e.code };
-  throw e;
-}
+// NOTE: there is deliberately no `vault_presign` tool here. Minting a
+// one-time link is a read of the plaintext value one HTTP hop removed — an
+// agent credential that can mint one can read every secret in the vault
+// (list the names via vault_list, presign each, fetch each URL), which
+// defeats the vault's one purpose. The only mint path is the portal-session-
+// gated POST /api/vault/otl route (../../vault/routes.ts); keep it that way.
 
 const tools: PluginTool[] = [
   {
@@ -36,23 +37,6 @@ const tools: PluginTool[] = [
           reference: `{{vault:${s.name}}}`,
         })),
       };
-    },
-  },
-  {
-    name: "vault_presign",
-    description: `Mint a one-time URL for a secret's value, for when the value is needed OUTSIDE workbench — a local script, an .env file, a CI job. Fetch it from where the value is needed and write it straight to a file or a variable, never to your output: curl -fsS -X POST "$URL" -o ./secret.txt   or   TOKEN=$(curl -fsS -X POST "$URL"). Redeem with POST — a GET never returns the value (it is a 405 for scripts, a download page for browsers), so link previews in chat apps cannot spend it. The URL works exactly once and expires after ttl_seconds (default ${OTL_DEFAULT_TTL_SECONDS}, max ${OTL_MAX_TTL_SECONDS}); if the fetch fails, mint another. Do not fetch it yourself and do not print what it returns. For use inside another workbench tool, do not presign — write {{vault:NAME}} in that tool's arguments instead.`,
-    integration: VAULT_INTEGRATION_NAME,
-    inputSchema: z.object({
-      name: z.string(),
-      ttl_seconds: z.number().int().positive().max(OTL_MAX_TTL_SECONDS).optional(),
-    }),
-    handler: async (ctx: any, args: any) => {
-      try {
-        const m = await mintOtl(ctx.userId, args.name, args.ttl_seconds);
-        return { url: m.url, expires_at: new Date(m.expiresAt).toISOString() };
-      } catch (e) {
-        return fail(e);
-      }
     },
   },
 ];

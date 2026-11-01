@@ -40,7 +40,7 @@ async function getJwksUri(): Promise<string> {
   return jwksUri;
 }
 
-export async function buildAuthUrl(returnTicket?: string): Promise<string> {
+export async function buildAuthUrl(returnTicket?: string, loginNonce?: string): Promise<string> {
   if (!config.GOOGLE_CLIENT_ID) {
     throw new Error("GOOGLE_CLIENT_ID not configured");
   }
@@ -49,8 +49,13 @@ export async function buildAuthUrl(returnTicket?: string): Promise<string> {
   const nonce = crypto.randomBytes(16).toString("hex");
 
   // Encode an optional return ticket (e.g. a pending OAuth /authorize request)
-  // into the state so the callback can resume the right flow.
-  const baseState = await createAuthState(crypto.randomUUID(), "google-sso", undefined, undefined, nonce);
+  // into the state so the callback can resume the right flow. `loginNonce`
+  // (into the otherwise-unused `config` column) is a different thing: a
+  // value the portal generated client-side and stashed in sessionStorage
+  // before this redirect, echoed back on the final #token= fragment so the
+  // portal can refuse to adopt a token it never asked for — see
+  // AuthContext.tsx and the session-fixation finding this closes.
+  const baseState = await createAuthState(crypto.randomUUID(), "google-sso", undefined, loginNonce, nonce);
   const state = returnTicket ? `${baseState}.${returnTicket}` : baseState;
 
   const redirectUri = getGoogleCallbackUrl();
@@ -111,7 +116,10 @@ export async function verifyGoogleIdToken(idToken: string, expectedNonce?: strin
   };
 }
 
-export async function handleCallback(code: string, state: string): Promise<{ userId: string; email: string }> {
+export async function handleCallback(
+  code: string,
+  state: string
+): Promise<{ userId: string; email: string; loginNonce?: string }> {
   // state may be "<baseState>.<ticket>" when SSO was started by /authorize.
   // verifyAuthState was stored under the base and also carries the nonce, and
   // it deletes the row on lookup so both the state and the nonce are single-use.
@@ -164,5 +172,5 @@ export async function handleCallback(code: string, state: string): Promise<{ use
 
   // After account linking, so a disabled account cannot be re-entered by email.
   if (await isUserDisabled(user.id)) throw new Error("Account disabled");
-  return { userId: user.id, email: user.email };
+  return { userId: user.id, email: user.email, loginNonce: authState.config };
 }

@@ -124,6 +124,14 @@ export const configSchema = z.object({
     .enum(["true", "false", "1", "0"])
     .default("false")
     .transform((v) => v === "true" || v === "1"),
+  // Dedicated scrape credential for GET /metrics (Prometheus process/app
+  // metrics, including the full internal route table and tool-execution
+  // counters). Unset = the endpoint is closed: metrics were previously
+  // served to anyone with no authentication at all, which handed an
+  // unauthenticated caller the route table and connected-integration names
+  // for free. Set this and point the scraper's Authorization: Bearer header
+  // at it to re-enable scraping.
+  METRICS_TOKEN: z.string().optional(),
   // Internal URL for /mcp — used to route browser tools/call requests through
   // the mesh so that Istio's consistent-hash DestinationRule (keyed on
   // X-Browser-Session) places Chromium on the same replica for every call.

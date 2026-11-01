@@ -149,19 +149,37 @@ export async function fetchProviders(): Promise<{ providers: string[] }> {
   return res.json();
 }
 
+function ssoQuery(ticket?: string, nonce?: string): string {
+  const params = new URLSearchParams();
+  if (ticket) params.set("ticket", ticket);
+  if (nonce) params.set("nonce", nonce);
+  const qs = params.toString();
+  return qs ? `?${qs}` : "";
+}
+
 // `ticket` carries an in-flight agent /authorize request through SSO so its
-// callback knows which pending flow to resume, instead of a normal portal login.
-export async function fetchAuthUrl(ticket?: string): Promise<{ url: string }> {
-  const qs = ticket ? `?ticket=${encodeURIComponent(ticket)}` : "";
-  const res = await fetch(`${API_URL}/api/auth/google${qs}`);
+// callback knows which pending flow to resume, instead of a normal portal
+// login. `nonce` is this tab's login-ceremony value (see login-nonce.ts) —
+// the server echoes it back on the #token= redirect so the portal can tell
+// a login it actually started apart from a token someone else's link supplies.
+export async function fetchAuthUrl(ticket?: string, nonce?: string): Promise<{ url: string }> {
+  const res = await fetch(`${API_URL}/api/auth/google${ssoQuery(ticket, nonce)}`);
   if (!res.ok) throw new Error("SSO not configured");
   return res.json();
 }
 
-export async function fetchKeycloakAuthUrl(ticket?: string): Promise<{ url: string }> {
-  const qs = ticket ? `?ticket=${encodeURIComponent(ticket)}` : "";
-  const res = await fetch(`${API_URL}/api/auth/keycloak${qs}`);
+export async function fetchKeycloakAuthUrl(ticket?: string, nonce?: string): Promise<{ url: string }> {
+  const res = await fetch(`${API_URL}/api/auth/keycloak${ssoQuery(ticket, nonce)}`);
   if (!res.ok) throw new Error("Keycloak SSO not configured");
+  return res.json();
+}
+
+// Read-only: names the client and destination for the consent screen.
+// Never consumes the ticket (resume does that).
+export interface AuthorizeInfo { clientName: string | null; redirectOrigin: string; scope: string }
+export async function fetchAuthorizeInfo(ticket: string): Promise<AuthorizeInfo> {
+  const res = await fetch(`${API_URL}/authorize/info?ticket=${encodeURIComponent(ticket)}`);
+  if (!res.ok) throw new Error("Invalid or expired link");
   return res.json();
 }
 

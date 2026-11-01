@@ -128,6 +128,76 @@ describe("google_drive_upload_from_url", () => {
     const { ctx } = recordingCtx();
     await expect(uploadFromUrl.handler(ctx, { url, name: "file.txt" })).rejects.toThrow();
   });
+
+  // Regression for the redirect-following SSRF: a public https URL that
+  // 302s to an internal address must not be followed — Node's default
+  // fetch behaviour (and the pre-fix code) followed it blindly and handed
+  // the internal response straight into the caller's Drive file.
+  it("does not follow a redirect to a private address", async () => {
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      if (String(url) === "https://storage.example.com/redirect") {
+        return {
+          ok: false,
+          status: 302,
+          statusText: "Found",
+          headers: new Headers({ location: "http://169.254.169.254/latest/meta-data/" }),
+        };
+      }
+      throw new Error("should never fetch the redirect target");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { ctx } = recordingCtx();
+    await expect(
+      uploadFromUrl.handler(ctx, { url: "https://storage.example.com/redirect", name: "file.txt" })
+    ).rejects.toThrow();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("follows a redirect that stays on a public https host", async () => {
+    const fileBytes = new TextEncoder().encode("hi");
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      if (String(url) === "https://storage.example.com/redirect") {
+        return {
+          ok: false,
+          status: 302,
+          statusText: "Found",
+          headers: new Headers({ location: "https://cdn.example.com/final.txt" }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "text/plain" }),
+        arrayBuffer: async () => fileBytes.buffer,
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { ctx } = recordingCtx({ id: "f" });
+    const result = await uploadFromUrl.handler(ctx, { url: "https://storage.example.com/redirect", name: "file.txt" });
+    expect(result.id).toBe("f");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("caps the number of redirect hops it will follow", async () => {
+    let calls = 0;
+    const fetchMock = vi.fn(async () => {
+      calls++;
+      return {
+        ok: false,
+        status: 302,
+        statusText: "Found",
+        headers: new Headers({ location: "https://storage.example.com/next" }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { ctx } = recordingCtx();
+    // Each hop redirects to itself — would loop forever without a cap.
+    await uploadFromUrl.handler(ctx, { url: "https://storage.example.com/next", name: "file.txt" }).catch(() => {});
+    expect(calls).toBeLessThanOrEqual(6); // MAX_REDIRECT_HOPS + 1
+  });
 });
 
 describe("createFromMarkdown inserts content (#9)", () => {

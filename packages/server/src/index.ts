@@ -28,7 +28,8 @@ import cluster from "node:cluster";
 import { availableParallelism } from "node:os";
 import { db } from "./db.js";
 import "./telemetry/tracing";
-import { metricsRegistry, httpRequestsTotal, httpRequestDuration } from "./telemetry/metrics";
+import { httpRequestsTotal, httpRequestDuration } from "./telemetry/metrics";
+import { registerMetricsRoute } from "./telemetry/metrics-route";
 
 async function main() {
   const app = Fastify({
@@ -72,10 +73,7 @@ async function main() {
     httpRequestDuration.observe(labels, (Date.now() - start) / 1000);
   });
 
-  app.get("/metrics", async (_request, reply) => {
-    reply.header("Content-Type", metricsRegistry.contentType);
-    return metricsRegistry.metrics();
-  });
+  registerMetricsRoute(app);
 
   // Live-view CDP bridge: REST + SSE, no WebSocket upgrade anywhere in the
   // browser-facing path. See auth/cdp-bridge.ts.

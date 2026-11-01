@@ -45,11 +45,14 @@ export function isKeycloakConfigured(): boolean {
   return !!(config.KEYCLOAK_ISSUER_URL && config.KEYCLOAK_CLIENT_ID && config.KEYCLOAK_CLIENT_SECRET);
 }
 
-export async function buildAuthUrl(returnTicket?: string): Promise<string> {
+export async function buildAuthUrl(returnTicket?: string, loginNonce?: string): Promise<string> {
   if (!isKeycloakConfigured()) throw new Error("Keycloak not configured");
   const d = await getDiscovery();
   const nonce = crypto.randomBytes(16).toString("hex");
-  const baseState = await createAuthState(crypto.randomUUID(), "keycloak-sso", undefined, undefined, nonce);
+  // See google.ts buildAuthUrl: `loginNonce` rides the otherwise-unused
+  // `config` column and is echoed back on the final #token= fragment so the
+  // portal can refuse to adopt a token it never asked for.
+  const baseState = await createAuthState(crypto.randomUUID(), "keycloak-sso", undefined, loginNonce, nonce);
   const state = returnTicket ? `${baseState}.${returnTicket}` : baseState;
   const url = new URL(d.authorization_endpoint);
   url.searchParams.set("client_id", config.KEYCLOAK_CLIENT_ID!);
@@ -104,7 +107,10 @@ async function verifyIdToken(idToken: string, expectedNonce?: string): Promise<K
   };
 }
 
-export async function handleCallback(code: string, state: string): Promise<{ userId: string; email: string }> {
+export async function handleCallback(
+  code: string,
+  state: string
+): Promise<{ userId: string; email: string; loginNonce?: string }> {
   const base = state.includes(".") ? state.slice(0, state.indexOf(".")) : state;
   const authState = await verifyAuthState(base);
   if (!authState || authState.integration !== "keycloak-sso") {
@@ -137,5 +143,5 @@ export async function handleCallback(code: string, state: string): Promise<{ use
   }
   // After account linking, so a disabled account cannot be re-entered by email.
   if (await isUserDisabled(user.id)) throw new Error("Account disabled");
-  return { userId: user.id, email: user.email };
+  return { userId: user.id, email: user.email, loginNonce: authState.config };
 }

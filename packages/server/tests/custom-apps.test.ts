@@ -65,6 +65,27 @@ describe("app URL guard", () => {
     expect(isBlockedHost("[::ffff:169.254.169.254]")).toBe(true);
     expect(isBlockedHost("[::ffff:7f00:1]")).toBe(true); // 127.0.0.1 mapped
   });
+
+  // Regression: the IPv6 unspecified address resolves to the local host on
+  // connect() (Linux and most stacks), but was classified as "public" — the
+  // literal set that both the base-URL guard and the resolved-address check
+  // in safeFetch share had no case for it at all.
+  it("blocks the IPv6 unspecified address in every form, in every env", () => {
+    const orig = process.env.NODE_ENV;
+    for (const env of ["development", "production", "test"]) {
+      process.env.NODE_ENV = env;
+      expect(isBlockedHost("::")).toBe(true);
+      expect(isBlockedHost("[::]")).toBe(true);
+      expect(isBlockedHost("0:0:0:0:0:0:0:0")).toBe(true);
+      expect(isBlockedHost("[0:0:0:0:0:0:0:0]")).toBe(true);
+    }
+    process.env.NODE_ENV = orig;
+  });
+
+  it("normalizeBaseUrl rejects the IPv6 unspecified address", () => {
+    expect(normalizeBaseUrl("http://[::]:8080")).toBeNull();
+    expect(normalizeBaseUrl("http://[::]")).toBeNull();
+  });
 });
 
 describe("app store", () => {

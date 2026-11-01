@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import { fetchAuthUrl, fetchKeycloakAuthUrl, fetchProviders } from "../api";
 import { safeReturnPath } from "../return-path";
+import { beginLoginCeremony } from "../login-nonce";
 import { Button } from "../components/ui/Button";
 import { BrandLockup } from "../components/BrandMark";
 import { useSwarm } from "../hooks/useSwarm";
@@ -34,7 +35,7 @@ export default function Login() {
 
   const handleGoogle = async () => {
     try {
-      const { url } = await fetchAuthUrl();
+      const { url } = await fetchAuthUrl(undefined, beginLoginCeremony());
       window.location.href = url;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start sign in");
@@ -43,7 +44,7 @@ export default function Login() {
 
   const handleKeycloak = async () => {
     try {
-      const { url } = await fetchKeycloakAuthUrl();
+      const { url } = await fetchKeycloakAuthUrl(undefined, beginLoginCeremony());
       window.location.href = url;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start sign in");

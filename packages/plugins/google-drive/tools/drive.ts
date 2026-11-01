@@ -1,5 +1,47 @@
 import { z } from "zod";
 
+// SSRF guard for google_drive_upload_from_url: the caller gives us an
+// arbitrary URL and the server fetches it. A check on only the URL the
+// model supplied is not enough — a public HTTPS endpoint can answer 302 to
+// an internal address, and Node's default fetch follows that silently,
+// handing the internal response straight into the caller's Drive. Every
+// hop (the original URL and every redirect Location) gets the same literal
+// private/loopback-range check, https is required on every hop, and the
+// number of hops is capped.
+const PRIVATE_IPV4 = /^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|0\.0\.0\.0$)/;
+const PRIVATE_IPV6 = /^(::1$|fc|fd|fe80)/i;
+
+function assertSafeFetchTarget(url: URL): void {
+  if (url.protocol !== "https:") {
+    throw new Error("Only https:// URLs are allowed");
+  }
+  const host = url.hostname.replace(/^\[|\]$/g, ""); // strip IPv6 brackets
+  if (host === "localhost" || host.endsWith(".localhost") || PRIVATE_IPV4.test(host) || PRIVATE_IPV6.test(host)) {
+    throw new Error("Requests to private or internal addresses are not allowed");
+  }
+}
+
+const MAX_REDIRECT_HOPS = 5;
+
+/** fetch() that re-validates every redirect hop instead of following blindly. */
+async function fetchFollowingSafeRedirects(startUrl: URL): Promise<Response> {
+  let url = startUrl;
+  let res: Response | undefined;
+  for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
+    assertSafeFetchTarget(url);
+    res = await fetch(url, { redirect: "manual" });
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get("location");
+      if (!loc) break;
+      url = new URL(loc, url);
+      continue;
+    }
+    break;
+  }
+  if (!res) throw new Error("Signed URL fetch failed: no response");
+  return res;
+}
+
 // Slim file row shared by list/search — drops etags, links, owner blobs etc.
 // (raw Drive file resources are ~20x this size). size is omitted for Google
 // Docs-native files, which have none.
@@ -146,18 +188,7 @@ export const uploadFromUrl = {
   }),
   handler: async (ctx: any, args: any) => {
     const parsed = new URL(args.url);
-    if (parsed.protocol !== "https:") {
-      throw new Error("Only https:// URLs are allowed");
-    }
-    const host = parsed.hostname.replace(/^\[|\]$/g, ""); // strip IPv6 brackets
-    const privateRange =
-      /^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|0\.0\.0\.0$)/;
-    const privateIPv6 = /^(::1$|fc|fd|fe80)/i;
-    if (host === "localhost" || privateRange.test(host) || privateIPv6.test(host)) {
-      throw new Error("Requests to private or internal addresses are not allowed");
-    }
-
-    const download = await fetch(args.url);
+    const download = await fetchFollowingSafeRedirects(parsed);
     if (!download.ok) {
       throw new Error(`Signed URL fetch failed: ${download.status} ${download.statusText}`);
     }

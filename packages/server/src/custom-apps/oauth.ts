@@ -7,6 +7,7 @@ import {
   verifyAuthState,
   generateCodeVerifier,
   codeChallengeS256,
+  bindingMatches,
 } from "../auth/oauth";
 import { storeToken, getToken } from "../auth/tokens";
 
@@ -176,13 +177,20 @@ export async function registerClient(
   };
 }
 
-export async function buildCustomAppAuthUrl(userId: string, app: CustomApp): Promise<string> {
+export async function buildCustomAppAuthUrl(
+  userId: string,
+  app: CustomApp,
+  binding?: string
+): Promise<string> {
   if (!app.clientId) throw new Error("CustomApp has no registered OAuth client");
   const { authorizationEndpoint, scopes, resourceUrl } = app.metadata;
   if (!authorizationEndpoint) throw new Error("CustomApp has no authorization endpoint");
 
   const codeVerifier = generateCodeVerifier();
-  const state = await createAuthState(userId, integrationKey(app.id), codeVerifier);
+  // See plugin-oauth.ts: `nonce` carries the originating-browser binding here
+  // too — without it a second workbench user can start this flow under their
+  // own account and have a victim's provider approval stored there.
+  const state = await createAuthState(userId, integrationKey(app.id), codeVerifier, undefined, binding);
 
   const url = new URL(authorizationEndpoint);
   url.searchParams.set("response_type", "code");
@@ -251,13 +259,20 @@ async function exchangeCustomAppToken(
 export async function handleCustomAppCallback(
   app: CustomApp,
   code: string,
-  state: string
+  state: string,
+  binding?: string
 ): Promise<{ userId: string }> {
   const authState = await verifyAuthState(state);
   if (!authState || authState.integration !== integrationKey(app.id)) {
     throw new Error("Invalid state");
   }
   if (!authState.codeVerifier) throw new Error("Missing code verifier");
+  // See plugin-oauth.ts: checked last, right before we'd actually spend the
+  // code — every earlier check is a configuration/request-shape error that
+  // exists independent of this.
+  if (!bindingMatches(authState.nonce, binding)) {
+    throw new Error("Connect binding mismatch");
+  }
 
   const tokens = await exchangeCustomAppToken(app, code, authState.codeVerifier);
   await storeToken(authState.userId, integrationKey(app.id), {
