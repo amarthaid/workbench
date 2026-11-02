@@ -1,9 +1,9 @@
 ---
 title: Tool catalog
-description: Every tool a stock install loads — 194 plugin tools across 16 integrations, plus 12 built-in tools.
+description: Every tool a stock install loads — 215 plugin tools across 18 integrations, plus 12 built-in tools.
 ---
 
-A stock install registers **206 tools**: 194 from the 16 built-in plugins, plus 9
+A stock install registers **227 tools**: 215 from the 18 built-in plugins, plus 9
 browser tools and 3 jots tools from the two internal plugins.
 
 None of them appear in MCP `tools/list` — that returns only the
@@ -28,6 +28,7 @@ arguments with `get_tool_schema`, and run it with `execute_tools`.
 | `httpbin-cookie` | cookie | no | 3 |
 | [`newrelic`](../integrations/newrelic.md) | apikey | yes | 13 |
 | [`slack`](../integrations/slack.md) | oauth2 | yes | 18 |
+| [`storybooks`](../integrations/storybooks.md) | apikey | no | 17 |
 | [`browser`](../integrations/browser.md) | none (internal) | no | 9 |
 | [`jots`](../integrations/jots.md) | none (internal) | no | 3 |
 
@@ -321,6 +322,32 @@ bot.
 `slack_download_file` needs the `files:read` scope. It validates the host before
 sending the credential and drops the Bearer the moment a redirect leaves Slack, so the
 token cannot be redirected out.
+
+## storybooks
+
+Reads a connected Storybook 8 static build. The credential stays on that origin.
+
+| Tool | Purpose |
+|---|---|
+| `storybooks_list_stories` | Index rows, with query, category, and tag filters |
+| `storybooks_search_stories` | Ranked search over title, name, id, tags, and import path |
+| `storybooks_get_story` | One story plus extracted docs text |
+| `storybooks_get_story_section` | One section of that text |
+| `storybooks_get_story_metadata` | Index row only |
+| `storybooks_get_story_context` | Short context for a question |
+| `storybooks_list_components` | Components grouped by story title |
+| `storybooks_get_component` | Variants for one component |
+| `storybooks_get_component_config` | argTypes and story presets |
+| `storybooks_get_component_usage` | JSX example from those presets |
+| `storybooks_find_stories_by_source` | Stories matching a source path |
+| `storybooks_preview_story` | Iframe URL on the connected origin |
+| `storybooks_get_catalog_summary` | Compact catalog |
+| `storybooks_get_design_tokens` | CSS custom properties from iframe stylesheets |
+| `storybooks_map_figma_component` | Match a Figma component name or node id to a Storybook component |
+| `storybooks_compare_versions` | Index diff against another public Storybook URL |
+| `storybooks_get_story_instructions` | CSF3 notes from the common title prefix |
+
+`storybooks_compare_versions` fetches the other URL with no credential.
 
 ## browser (internal)
 

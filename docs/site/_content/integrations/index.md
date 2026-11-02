@@ -3,7 +3,7 @@ title: Integrations
 description: Every integration workbench ships with, how connecting works, and the conventions every provider setup follows.
 ---
 
-An integration is a plugin: a manifest that declares how to authenticate, plus a set of tools your agent can call. A stock install loads **16 plugins from disk (194 tools)**. It adds **two internal plugins built into the server**: `browser` (9 tools) and `jots` (5 tools). That is 208 tools behind one MCP endpoint. An agent reaches them through `execute_tools` rather than a list: `tools/list` on `/mcp` returns only the 9 meta-tools.
+An integration is a plugin: a manifest that declares how to authenticate, plus a set of tools your agent can call. A stock install loads **18 plugins from disk (215 tools)**. It adds **two internal plugins built into the server**: `browser` (9 tools) and `jots` (5 tools). That is 229 tools behind one MCP endpoint. An agent reaches them through `execute_tools` rather than a list: `tools/list` on `/mcp` returns only the 9 meta-tools.
 
 Credentials are per user. As the operator, you register one OAuth app per integration. Each user then grants their own access. The server stores each user's tokens encrypted against their own account.
 
@@ -20,6 +20,7 @@ Credentials are per user. As the operator, you register one OAuth app per integr
 | `asana` | OAuth 2.0 | 8 | [Asana](asana.md) |
 | `newrelic` | API key | 13 | [New Relic](newrelic.md) |
 | `clevertap` | API key (multi-project) | 19 | [CleverTap](clevertap.md) |
+| `storybooks` | API key (Storybook URL) | 17 | [Storybooks](storybooks.md) |
 | `google-gmail` | OAuth 2.0 | 8 | [Google tools](google-tools.md) |
 | `google-drive` | OAuth 2.0 | 8 | [Google tools](google-tools.md) |
 | `google-docs` | OAuth 2.0 | 5 | [Google tools](google-tools.md) |
@@ -43,6 +44,7 @@ Credentials are per user. As the operator, you register one OAuth app per integr
 - [Asana](asana.md) — Projects, tasks, assignments, and comments.
 - [New Relic](newrelic.md) — NRQL, entities, dashboards, and alerting via NerdGraph.
 - [CleverTap](clevertap.md) — Profiles, events, campaigns, and reports (read-only, multi-project).
+- [Storybooks](storybooks.md) — A deployed Storybook 8: stories, component props, and design tokens.
 - [Google setup](google.md) — One Cloud project, one consent screen, seven OAuth clients.
 - [Google tools](google-tools.md) — Gmail, Drive, Docs, Sheets, Slides, Calendar, Gemini.
 - [Browser](browser.md) — The built-in headless browser your agent drives directly.
@@ -114,4 +116,4 @@ A refresh token never upgrades its own scope grant. Adding a scope to a manifest
 
 ### Raw API access
 
-Fifteen of the sixteen on-disk plugins declare a `proxy` base. That makes them eligible for `curl_session`, a short-lived token. It lets an agent make arbitrary authenticated calls against the provider through `/c/<integration>/<path>`. The server injects the credential and never hands it to the agent. This is a high-risk escape hatch, not a normal path. See [Raw API calls](../guides/curl-session.md).
+Fifteen of the eighteen on-disk plugins declare a `proxy` base. `httpbin-cookie`, `clevertap`, and `storybooks` do not. That makes them eligible for `curl_session`, a short-lived token. It lets an agent make arbitrary authenticated calls against the provider through `/c/<integration>/<path>`. The server injects the credential and never hands it to the agent. This is a high-risk escape hatch, not a normal path. See [Raw API calls](../guides/curl-session.md).

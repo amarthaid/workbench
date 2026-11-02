@@ -15,7 +15,7 @@ the single-page app only catches genuine client-route 404s.
 | `packages/shared` | Types and Zod schemas shared by server and portal — `Integration`, the four auth configs, `ToolDefinition`. |
 | `packages/server` | Fastify app: MCP endpoint, meta-tools, plugin loader and registry, auth (portal SSO, API keys, OAuth 2.1 AS, plugin OAuth), the browser-session machinery, audit log, metrics. |
 | `packages/portal` | Vite + React + TanStack Query SPA. Built to static files and served by the server in production. |
-| `packages/plugins` | The 16 shipped integrations, one directory each: `manifest.ts` plus `tools/index.ts`. |
+| `packages/plugins` | The 18 shipped integrations, one directory each: `manifest.ts` plus `tools/index.ts`. |
 
 Two more integrations — `browser` and `jots` — live inside the server source rather
 than under `packages/plugins`. Their handlers reach directly into the browser
