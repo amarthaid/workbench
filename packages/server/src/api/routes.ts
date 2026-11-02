@@ -4,8 +4,9 @@ import path from "path";
 import { FastifyInstance } from "fastify";
 import { Integration } from "@a-workbench/shared";
 import { registry } from "../plugins/registry";
-import { createAuthState } from "../auth/oauth";
+import { createAuthState, makeBinding } from "../auth/oauth";
 import { buildPluginAuthUrl, handlePluginCallback, getPluginOAuthCreds } from "../auth/plugin-oauth";
+import { setConnectBindingCookie, clearConnectBindingCookie, readConnectBindingCookie } from "../auth/connect-cookie";
 import { verifyApiKey, getUserById, setApiKey, clearApiKey, hasApiKey, getApiKey } from "../auth/users";
 import { buildAuthUrl, handleCallback } from "../auth/google";
 import { buildAuthUrl as buildKeycloakAuthUrl, handleCallback as handleKeycloakCallback, isKeycloakConfigured } from "../auth/keycloak";
@@ -201,9 +202,13 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(503).send({ error: "Google SSO not configured" });
     }
     // The choice page passes the /authorize ticket through here so the SSO
-    // callback knows which pending agent-auth flow to resume.
-    const { ticket } = request.query as { ticket?: string };
-    const url = await buildAuthUrl(ticket);
+    // callback knows which pending agent-auth flow to resume. `nonce` is the
+    // portal's own per-attempt login-ceremony value (see AuthContext.tsx) —
+    // echoed back on the final #token= redirect so the portal can tell its
+    // own completed login apart from a token someone else's browser crafted
+    // a link with.
+    const { ticket, nonce } = request.query as { ticket?: string; nonce?: string };
+    const url = await buildAuthUrl(ticket, nonce);
     return { url };
   });
 
@@ -211,8 +216,8 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     if (!isKeycloakConfigured()) {
       return reply.status(503).send({ error: "Keycloak SSO not configured" });
     }
-    const { ticket } = request.query as { ticket?: string };
-    const url = await buildKeycloakAuthUrl(ticket);
+    const { ticket, nonce } = request.query as { ticket?: string; nonce?: string };
+    const url = await buildKeycloakAuthUrl(ticket, nonce);
     return { url };
   });
 
@@ -221,7 +226,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     if (error) return reply.status(400).send({ error: `Keycloak auth error: ${error}` });
     if (!code) return reply.status(400).send({ error: "Missing code" });
     try {
-      const { userId, email } = await handleKeycloakCallback(code, state);
+      const { userId, email, loginNonce } = await handleKeycloakCallback(code, state);
 
       // If SSO was started by an OAuth /authorize, state carries ".<ticket>".
       const dot = state.indexOf(".");
@@ -239,7 +244,10 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
 
       const token = await signSession({ userId, email });
       const redirect = new URL(config.PORTAL_URL);
-      redirect.hash = `token=${token}`;
+      // Echo the login-ceremony nonce back so the portal can tell its own
+      // completed login apart from a #token= link someone else crafted —
+      // see AuthContext.tsx's consumeLoginCeremony.
+      redirect.hash = loginNonce ? `token=${token}&nonce=${encodeURIComponent(loginNonce)}` : `token=${token}`;
       return reply.redirect(redirect.toString());
     } catch (err) {
       const message = err instanceof Error ? err.message : "Auth failed";
@@ -261,7 +269,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     }
 
     try {
-      const { userId, email } = await handleCallback(code, state);
+      const { userId, email, loginNonce } = await handleCallback(code, state);
 
       // If SSO was started by an OAuth /authorize, state carries ".<ticket>".
       const dot = state.indexOf(".");
@@ -278,9 +286,12 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       }
 
       const token = await signSession({ userId, email });
-      // Redirect back to portal with token in hash fragment (safer than query)
+      // Redirect back to portal with token in hash fragment (safer than query).
+      // Echo the login-ceremony nonce back so the portal can tell its own
+      // completed login apart from a #token= link someone else crafted —
+      // see AuthContext.tsx's consumeLoginCeremony.
       const redirect = new URL(config.PORTAL_URL);
-      redirect.hash = `token=${token}`;
+      redirect.hash = loginNonce ? `token=${token}&nonce=${encodeURIComponent(loginNonce)}` : `token=${token}`;
       return reply.redirect(redirect.toString());
     } catch (err) {
       const message = err instanceof Error ? err.message : "Auth failed";
@@ -486,7 +497,9 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
         return reply.status(400).send({ error: "This app uses static headers; there is nothing to connect" });
       }
       try {
-        const url = await buildCustomAppAuthUrl(user.userId, app);
+        const binding = makeBinding();
+        const url = await buildCustomAppAuthUrl(user.userId, app, binding);
+        setConnectBindingCookie(reply, integration, binding, `/api/custom-apps/${customId}/callback`);
         return { type: "oauth2", url };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -525,7 +538,9 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     if (integ.auth.type === "oauth2") {
       try {
         const { instanceUrl } = request.query as { instanceUrl?: string };
-        const url = await buildPluginAuthUrl(user.userId, integration, instanceUrl);
+        const binding = makeBinding();
+        const url = await buildPluginAuthUrl(user.userId, integration, instanceUrl, binding);
+        setConnectBindingCookie(reply, integration, binding, `/api/auth/plugin/${integration}/callback`);
         return { type: "oauth2", url };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -604,6 +619,10 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/auth/plugin/:integration/callback", async (request, reply) => {
     const { integration } = request.params as { integration: string };
     const { code, state, error } = request.query as Record<string, string>;
+    const callbackPath = `/api/auth/plugin/${integration}/callback`;
+    const binding = readConnectBindingCookie(request, integration);
+    // One-time: clear it on every exit so it can't be replayed.
+    clearConnectBindingCookie(reply, integration, callbackPath);
 
     // Every exit is a redirect to the portal's result page carrying a status
     // code, never a message. The provider's `error` and any exception text are
@@ -626,7 +645,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     }
 
     try {
-      const { userId } = await handlePluginCallback(integration, code, state);
+      const { userId } = await handlePluginCallback(integration, code, state, binding);
       markConnected(userId, integration);
       return result("ok");
     } catch (err) {
@@ -865,7 +884,9 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
 
     if (integ.auth.type === "oauth2") {
       try {
-        const url = await buildPluginAuthUrl(user.userId, payload.integration);
+        const binding = makeBinding();
+        const url = await buildPluginAuthUrl(user.userId, payload.integration, undefined, binding);
+        setConnectBindingCookie(reply, payload.integration, binding, `/api/auth/plugin/${payload.integration}/callback`);
         return { type: "oauth2", url };
       } catch (err) {
         return reply.status(503).send({ error: err instanceof Error ? err.message : String(err) });
@@ -1150,10 +1171,14 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>("/api/custom-apps/:id/callback", async (request, reply) => {
     const { id } = request.params;
     const { code, state, error } = request.query as Record<string, string>;
+    const integration = integrationKey(id);
+    const binding = readConnectBindingCookie(request, integration);
+    // One-time: clear it on every exit so it can't be replayed.
+    clearConnectBindingCookie(reply, integration, `/api/custom-apps/${id}/callback`);
 
     const result = (status: "ok" | "denied" | "expired" | "failed") => {
       const url = new URL(config.PORTAL_URL);
-      url.pathname = `/connected/${encodeURIComponent(integrationKey(id))}`;
+      url.pathname = `/connected/${encodeURIComponent(integration)}`;
       url.searchParams.set("status", status);
       return reply.redirect(url.toString());
     };
@@ -1165,8 +1190,8 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     if (!app) return result("failed");
 
     try {
-      const { userId } = await handleCustomAppCallback(app, code, state);
-      markConnected(userId, integrationKey(id));
+      const { userId } = await handleCustomAppCallback(app, code, state, binding);
+      markConnected(userId, integration);
       invalidateIndex(userId);
       return result("ok");
     } catch (err) {

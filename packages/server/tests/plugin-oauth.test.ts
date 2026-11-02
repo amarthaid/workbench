@@ -214,6 +214,11 @@ describe("buildPluginAuthUrl", () => {
     expect(parsed.searchParams.get("state")).toBe("test-state");
   });
 
+  it("passes the originating-browser binding through to createAuthState as the nonce", async () => {
+    await buildPluginAuthUrl("user-1", "google-gmail", undefined, "binding-xyz");
+    expect(vi.mocked(oauth.createAuthState).mock.calls[0][4]).toBe("binding-xyz");
+  });
+
   it("includes an S256 PKCE challenge derived from the stored verifier", async () => {
     const url = await buildPluginAuthUrl("user-1", "google-gmail");
     const parsed = new URL(url);
@@ -346,6 +351,7 @@ describe("handlePluginCallback", () => {
     vi.spyOn(oauth, "verifyAuthState").mockResolvedValue({
       userId: "user-1",
       integration: "google-gmail",
+      nonce: "binding-1",
     });
     vi.spyOn(oauth, "exchangeCode").mockResolvedValue({
       access_token: "access-123",
@@ -356,7 +362,7 @@ describe("handlePluginCallback", () => {
   });
 
   it("exchanges code and stores token", async () => {
-    const result = await handlePluginCallback("google-gmail", "auth-code", "valid-state");
+    const result = await handlePluginCallback("google-gmail", "auth-code", "valid-state", "binding-1");
     expect(result).toEqual({ userId: "user-1" });
     expect(oauth.exchangeCode).toHaveBeenCalledWith(
       "https://oauth2.googleapis.com/token",
@@ -382,8 +388,9 @@ describe("handlePluginCallback", () => {
       userId: "user-1",
       integration: "google-gmail",
       codeVerifier: "stored-verifier",
+      nonce: "binding-1",
     });
-    await handlePluginCallback("google-gmail", "auth-code", "valid-state");
+    await handlePluginCallback("google-gmail", "auth-code", "valid-state", "binding-1");
     expect(oauth.exchangeCode).toHaveBeenCalledWith(
       "https://oauth2.googleapis.com/token",
       "gmail-id",
@@ -396,7 +403,7 @@ describe("handlePluginCallback", () => {
 
   it("calculates expiresAt from expires_in", async () => {
     const before = Math.floor(Date.now() / 1000);
-    await handlePluginCallback("google-gmail", "auth-code", "valid-state");
+    await handlePluginCallback("google-gmail", "auth-code", "valid-state", "binding-1");
     const after = Math.floor(Date.now() / 1000);
     expect(tokens.storeToken).toHaveBeenCalledWith(
       "user-1",
@@ -453,6 +460,23 @@ describe("handlePluginCallback", () => {
     );
   });
 
+  // Regression for the connect-flow CSRF finding: a second workbench user
+  // must not be able to start this flow under their own account and have a
+  // victim's provider approval stored there. The default beforeEach stashes
+  // nonce "binding-1" on the pending row — calling without a matching
+  // cookie value (or with the wrong one) must be refused.
+  it("rejects a missing originating-browser binding", async () => {
+    await expect(handlePluginCallback("google-gmail", "code", "valid-state")).rejects.toThrow(
+      "Connect binding mismatch"
+    );
+  });
+
+  it("rejects a mismatched originating-browser binding", async () => {
+    await expect(
+      handlePluginCallback("google-gmail", "code", "valid-state", "wrong-binding")
+    ).rejects.toThrow("Connect binding mismatch");
+  });
+
   describe("slack user-token extraction", () => {
     beforeEach(() => {
         process.env.SLACK_CLIENT_ID = "slack-id";
@@ -461,6 +485,7 @@ describe("handlePluginCallback", () => {
       vi.spyOn(oauth, "verifyAuthState").mockResolvedValue({
         userId: "user-1",
         integration: "slack",
+        nonce: "binding-1",
       });
     });
 
@@ -474,7 +499,7 @@ describe("handlePluginCallback", () => {
           token_type: "user",
         },
       } as any);
-      await handlePluginCallback("slack", "code", "state");
+      await handlePluginCallback("slack", "code", "state", "binding-1");
       expect(tokens.storeToken).toHaveBeenCalledWith(
         "user-1",
         "slack",
@@ -497,7 +522,7 @@ describe("handlePluginCallback", () => {
         },
       } as any);
       const before = Math.floor(Date.now() / 1000);
-      await handlePluginCallback("slack", "code", "state");
+      await handlePluginCallback("slack", "code", "state", "binding-1");
       const callArgs = (tokens.storeToken as any).mock.calls[0][2];
       expect(callArgs.accessToken).toBe("xoxe.xoxp-user-token");
       expect(callArgs.refreshToken).toBe("xoxe-refresh");
@@ -509,7 +534,7 @@ describe("handlePluginCallback", () => {
         ok: false,
         error: "invalid_code",
       } as any);
-      await expect(handlePluginCallback("slack", "code", "state")).rejects.toThrow(
+      await expect(handlePluginCallback("slack", "code", "state", "binding-1")).rejects.toThrow(
         "invalid_code"
       );
     });
@@ -519,7 +544,7 @@ describe("handlePluginCallback", () => {
         ok: true,
         access_token: "xoxb-bot-only",
       } as any);
-      await expect(handlePluginCallback("slack", "code", "state")).rejects.toThrow(
+      await expect(handlePluginCallback("slack", "code", "state", "binding-1")).rejects.toThrow(
         /user token/i
       );
     });
@@ -533,9 +558,10 @@ describe("handlePluginCallback", () => {
       userId: "user-1",
       integration: "gitlab",
       config: JSON.stringify({ instanceUrl: "https://gitlab.acme.com" }),
+      nonce: "binding-1",
     });
     vi.spyOn(oauth, "exchangeCode").mockResolvedValue({ access_token: "a", refresh_token: "r" });
-    await handlePluginCallback("gitlab", "code", "state");
+    await handlePluginCallback("gitlab", "code", "state", "binding-1");
     expect(oauth.exchangeCode).toHaveBeenCalledWith(
       "https://gitlab.acme.com/oauth/token",
       "gl-id",
@@ -558,7 +584,7 @@ describe("handlePluginCallback", () => {
     vi.spyOn(oauth, "exchangeCode").mockResolvedValue({
       access_token: "access-123",
     });
-    await handlePluginCallback("google-gmail", "code", "state");
+    await handlePluginCallback("google-gmail", "code", "state", "binding-1");
     expect(tokens.storeToken).toHaveBeenCalledWith(
       "user-1",
       "google-gmail",

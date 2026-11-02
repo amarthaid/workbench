@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { FastifyInstance } from "fastify";
 import { protectedResourceMetadata, authorizationServerMetadata } from "../auth/oauth-server/metadata";
-import { registerClient, getClient } from "../auth/oauth-server/clients";
+import { registerClient, getClient, isAllowedRedirectUri } from "../auth/oauth-server/clients";
 import { consumeCode } from "../auth/oauth-server/codes";
 import { issueRefreshToken, rotateRefreshToken } from "../auth/oauth-server/refresh";
 import { signAccessToken } from "../auth/oauth-server/tokens";
@@ -32,6 +32,12 @@ export async function registerOAuthRoutes(app: FastifyInstance): Promise<void> {
     if (!Array.isArray(body.redirect_uris) || body.redirect_uris.length === 0) {
       return reply.status(400).send({ error: "invalid_client_metadata", error_description: "redirect_uris required" });
     }
+    if (!body.redirect_uris.every(isAllowedRedirectUri)) {
+      return reply.status(400).send({
+        error: "invalid_redirect_uri",
+        error_description: "redirect_uris must be https, or http on loopback (localhost/127.0.0.1/[::1])",
+      });
+    }
     const client = await registerClient({ client_name: body.client_name, redirect_uris: body.redirect_uris });
     return reply.status(201).send({
       client_id: client.client_id,
@@ -41,6 +47,30 @@ export async function registerOAuthRoutes(app: FastifyInstance): Promise<void> {
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
     });
+  });
+
+  // Read-only lookup for the portal's consent screen: names the client and
+  // the destination origin so the human approves something specific rather
+  // than an opaque ticket. Does not consume the pending row (resume does
+  // that), so the portal can call it freely while rendering.
+  app.get("/authorize/info", async (request, reply) => {
+    const { ticket } = request.query as Record<string, string>;
+    if (!ticket) return reply.status(400).send({ error: "invalid_request" });
+    const now = Math.floor(Date.now() / 1000);
+    const row = await db.get<{ session_data: string }>(
+      "SELECT session_data FROM pending_auth WHERE state = ? AND integration = '__oauth_authorize__' AND expires_at > ?",
+      [ticket, now]
+    );
+    if (!row) return reply.status(404).send({ error: "invalid_or_expired_ticket" });
+    const r = JSON.parse(row.session_data) as { clientId: string; redirectUri: string; scope: string };
+    const client = await getClient(r.clientId);
+    let redirectOrigin = r.redirectUri;
+    try {
+      redirectOrigin = new URL(r.redirectUri).origin;
+    } catch {
+      /* keep raw value */
+    }
+    return { clientName: client?.client_name ?? null, redirectOrigin, scope: r.scope };
   });
 
   app.get("/authorize", async (request, reply) => {

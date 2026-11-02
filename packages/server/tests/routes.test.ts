@@ -104,6 +104,8 @@ vi.mock("../src/auth/cookie", async () => {
 
 vi.mock("../src/auth/oauth", () => ({
   createAuthState: vi.fn(() => "test-state"),
+  makeBinding: vi.fn(() => "test-binding"),
+  bindingMatches: vi.fn(() => true),
 }));
 
 vi.mock("../src/auth/browser-session", async () => {
@@ -185,14 +187,23 @@ describe("API routes", () => {
       const { buildAuthUrl } = await import("../src/auth/google");
       const app = await buildApp();
       await app.inject({ method: "GET", url: "/api/auth/google?ticket=tkt-abc" });
-      expect(vi.mocked(buildAuthUrl)).toHaveBeenCalledWith("tkt-abc");
+      expect(vi.mocked(buildAuthUrl)).toHaveBeenCalledWith("tkt-abc", undefined);
     });
 
     it("omits the ticket when none is given", async () => {
       const { buildAuthUrl } = await import("../src/auth/google");
       const app = await buildApp();
       await app.inject({ method: "GET", url: "/api/auth/google" });
-      expect(vi.mocked(buildAuthUrl)).toHaveBeenCalledWith(undefined);
+      expect(vi.mocked(buildAuthUrl)).toHaveBeenCalledWith(undefined, undefined);
+    });
+
+    // Session-fixation fix: the portal's login-ceremony nonce rides through
+    // to buildAuthUrl so it can be echoed back on the final #token= redirect.
+    it("threads a ?nonce= through to buildAuthUrl", async () => {
+      const { buildAuthUrl } = await import("../src/auth/google");
+      const app = await buildApp();
+      await app.inject({ method: "GET", url: "/api/auth/google?nonce=login-nonce-1" });
+      expect(vi.mocked(buildAuthUrl)).toHaveBeenCalledWith(undefined, "login-nonce-1");
     });
   });
 
@@ -274,14 +285,14 @@ describe("API routes", () => {
       const { buildAuthUrl } = await import("../src/auth/keycloak");
       const app = await buildApp();
       await app.inject({ method: "GET", url: "/api/auth/keycloak?ticket=tkt-abc" });
-      expect(vi.mocked(buildAuthUrl)).toHaveBeenCalledWith("tkt-abc");
+      expect(vi.mocked(buildAuthUrl)).toHaveBeenCalledWith("tkt-abc", undefined);
     });
 
     it("omits the ticket when none is given", async () => {
       const { buildAuthUrl } = await import("../src/auth/keycloak");
       const app = await buildApp();
       await app.inject({ method: "GET", url: "/api/auth/keycloak" });
-      expect(vi.mocked(buildAuthUrl)).toHaveBeenCalledWith(undefined);
+      expect(vi.mocked(buildAuthUrl)).toHaveBeenCalledWith(undefined, undefined);
     });
   });
 
@@ -1770,7 +1781,7 @@ describe("API routes", () => {
       expect(res.statusCode).toBe(200);
       expect(res.json().type).toBe("oauth2");
       expect(res.json().url).toBe("https://example.com/oauth?plugin=1");
-      expect(buildPluginAuthUrl).toHaveBeenCalledWith("user-1", "github");
+      expect(buildPluginAuthUrl).toHaveBeenCalledWith("user-1", "github", undefined, "test-binding");
     });
 
     it("does not build a provider URL when the redeemer is the wrong user", async () => {

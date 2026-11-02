@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { safeReturnPath } from "../return-path";
+import { consumeLoginCeremony } from "../login-nonce";
 
 interface AuthUser {
   id: string;
@@ -24,10 +25,19 @@ function readBootToken(): { token: string | null; fromHash: boolean } {
   if (typeof window === "undefined") return { token: null, fromHash: false };
   const hash = window.location.hash;
   if (hash.startsWith("#token=")) {
-    const bootToken = decodeURIComponent(hash.slice(7));
-    localStorage.setItem("awb_token", bootToken);
-    // Strip the token from URL so it doesn't linger in history.
+    const params = new URLSearchParams(hash.slice(1));
+    const bootToken = params.get("token");
+    const nonce = params.get("nonce");
+    // Strip the fragment from URL either way so it doesn't linger in history.
     history.replaceState(null, "", window.location.pathname + window.location.search);
+    // Require proof this tab actually started the login this token claims to
+    // complete (see login-nonce.ts) — otherwise this adopts ANY token a URL
+    // supplies, including one an attacker already has a valid session for,
+    // planting their account under an unsuspecting victim's browser.
+    if (!bootToken || !consumeLoginCeremony(nonce)) {
+      return { token: localStorage.getItem("awb_token"), fromHash: false };
+    }
+    localStorage.setItem("awb_token", bootToken);
     return { token: bootToken, fromHash: true };
   }
   return { token: localStorage.getItem("awb_token"), fromHash: false };

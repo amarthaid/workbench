@@ -6,6 +6,7 @@ import {
   exchangeCode,
   generateCodeVerifier,
   codeChallengeS256,
+  bindingMatches,
 } from "./oauth";
 import { storeToken } from "./tokens";
 
@@ -70,6 +71,15 @@ export function isPrivateHost(host: string): boolean {
   const h = host.toLowerCase();
   if (h === "localhost" || h.endsWith(".localhost")) return true;
   if (h === "[::1]" || h === "::1") return true;
+  // The IPv6 unspecified address (RFC 4291 §2.5.2) and its fully-expanded
+  // form. Not loopback on the wire, but Linux (and most stacks) treats a
+  // connect() to :: the same as connect() to ::1/127.0.0.1 — it resolves to
+  // the local host. Caught this check before: isBlockedIp reuses these same
+  // literals, normalizeBaseUrl's URL parser preserves "[::]" unchanged, and
+  // production deliberately blocks loopback for exactly this reason (reach
+  // the server's own CDP/admin/metrics), so this one slipped through as
+  // "public".
+  if (h === "::" || h === "[::]" || h === "0:0:0:0:0:0:0:0" || h === "[0:0:0:0:0:0:0:0]") return true;
   // IPv6 loopback / unique-local (fc00::/7) / link-local (fe80::/10).
   if (h.startsWith("[::1") || h.startsWith("[fc") || h.startsWith("[fd") || h.startsWith("[fe8") || h.startsWith("[fe9") || h.startsWith("[fea") || h.startsWith("[feb")) return true;
   const ipv4 = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
@@ -186,7 +196,8 @@ function providerExtraParams(integration: string): Record<string, string> {
 export async function buildPluginAuthUrl(
   userId: string,
   integration: string,
-  instanceUrl?: string
+  instanceUrl?: string,
+  binding?: string
 ): Promise<string> {
   const integ = registry.getIntegration(integration);
   if (!integ) throw new Error(`Integration not found: ${integration}`);
@@ -222,7 +233,13 @@ export async function buildPluginAuthUrl(
   // PKCE on every flow, confidential clients included (OAuth 2.1 baseline).
   // Providers that don't support it ignore the extra params per RFC 6749.
   const codeVerifier = generateCodeVerifier();
-  const state = await createAuthState(userId, integration, codeVerifier, configJson);
+  // `nonce` is otherwise unused on this flow (it's an OIDC-replay guard for the
+  // SSO flows only) — repurposed here to carry the originating-browser binding,
+  // mirroring awb_oauth_binding on the MCP authorization server: nothing else
+  // ties the provider's redirect back to the workbench user who started it, so
+  // without this an attacker can start the flow under their own account and
+  // have a victim's approval stored there (finding: connect-flow CSRF).
+  const state = await createAuthState(userId, integration, codeVerifier, configJson, binding);
   const url = new URL(authorizationUrl);
   url.searchParams.set("client_id", creds.clientId);
   url.searchParams.set("redirect_uri", getPluginCallbackUrl(integration));
@@ -243,7 +260,8 @@ export async function buildPluginAuthUrl(
 export async function handlePluginCallback(
   integration: string,
   code: string,
-  state: string
+  state: string,
+  binding?: string
 ): Promise<{ userId: string }> {
   const authState = await verifyAuthState(state);
   if (!authState || authState.integration !== integration) {
@@ -258,6 +276,15 @@ export async function handlePluginCallback(
   const creds = getPluginOAuthCreds(integration);
   if (!creds) {
     throw new Error(`OAuth client not configured for ${integration}`);
+  }
+
+  // Require the originating-browser binding to match (prevents a second
+  // workbench user from starting the flow and having a victim's provider
+  // approval stored under the attacker's account). Checked last, right
+  // before we'd actually spend the code — every earlier check is a
+  // configuration/request-shape error that exists independent of this.
+  if (!bindingMatches(authState.nonce, binding)) {
+    throw new Error("Connect binding mismatch");
   }
 
   const { tokenUrl } = resolveOAuthUrls(integ.auth, authState.config);
