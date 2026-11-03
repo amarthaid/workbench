@@ -57,7 +57,10 @@ describe("browser_audio_start", () => {
     expect(s?.[2]).toBe("stream");
     expect(c?.[2]).toBe("clear");
     expect(s?.[1]).toBe(c?.[1]);
-    expect(out.stream_url).not.toContain("T1");
+    // The capability token is a random id, not a function of the session id —
+    // assert that directly rather than scanning for the literal substring "T1",
+    // which the random token can coincidentally contain.
+    expect(s?.[1]).not.toBe("T1");
   });
 
   it("returns the same capability for a repeat start of the same session, a new one for a new session", async () => {
