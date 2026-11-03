@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   fetchAdminConfig,
   fetchAdminUsers,
+  setAdminBrowserBlockedDomains,
   setAdminCustomAppsPolicy,
   setAdminIntegrationEnabled,
   type AdminConfig,
@@ -102,6 +103,17 @@ export default function ConfigTab() {
       </Box>
 
       {data && <CustomAppsPolicy policy={data.custom_apps_policy} onSaved={refresh} onError={onError} />}
+
+      {data && (
+        <BrowserBlocklist
+          domains={data.browser_blocked_domains ?? []}
+          onSaved={() => {
+            setError(null);
+            refresh();
+          }}
+          onError={onError}
+        />
+      )}
 
       <Modal
         open={confirm !== null}
@@ -216,6 +228,71 @@ function CustomAppsPolicy({
         <p className="ui-stat-note">
           Excluded users keep their existing apps but agents stop seeing their tools. Other workers pick the change up
           within a few seconds.
+        </p>
+      </BoxRow>
+    </Box>
+  );
+}
+
+function parseDomains(text: string): string[] {
+  return [...new Set(text.split(/[\s,]+/).map((d) => d.trim()).filter(Boolean))];
+}
+
+function BrowserBlocklist({
+  domains,
+  onSaved,
+  onError,
+}: {
+  domains: string[];
+  onSaved: () => void;
+  onError: (e: unknown) => void;
+}) {
+  const current = domains.join("\n");
+  const [text, setText] = useState(current);
+  const [saved, setSaved] = useState(false);
+
+  // Follow the server's (normalised) copy after a save or a refetch.
+  useEffect(() => setText(current), [current]);
+
+  const save = useMutation({
+    mutationFn: (list: string[]) => setAdminBrowserBlockedDomains(list),
+    onSuccess: () => {
+      setSaved(true);
+      onSaved();
+    },
+    onError,
+  });
+
+  const next = parseDomains(text);
+  const changed = next.join("\n") !== current;
+
+  return (
+    <Box title="Browser blocked domains">
+      <BoxRow>
+        <label htmlFor="admin-browser-blocklist">Domains agent browser tabs may not load, one per line</label>
+        <textarea
+          id="admin-browser-blocklist"
+          className="ui-input"
+          rows={6}
+          style={{ fontFamily: "monospace", resize: "vertical" }}
+          autoComplete="off"
+          spellCheck={false}
+          placeholder={"example.com\nads.example.net"}
+          value={text}
+          onChange={(e) => {
+            setSaved(false);
+            setText(e.target.value);
+          }}
+        />
+      </BoxRow>
+      <BoxRow>
+        <Button disabled={!changed || save.isPending} onClick={() => save.mutate(next)}>
+          Save blocklist
+        </Button>
+        {saved && !changed && <span role="status">Saved.</span>}
+        <p className="ui-stat-note">
+          Each entry also blocks its subdomains. Every HTTP(S) request is checked, including redirects, iframes and scripts; WebSocket connections are not.
+          Pages that are already open stay open. Other workers pick the change up within a few seconds.
         </p>
       </BoxRow>
     </Box>

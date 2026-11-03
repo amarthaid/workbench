@@ -191,3 +191,51 @@ describe("PUT /api/admin/config/custom-apps", () => {
     }
   );
 });
+
+describe("PUT /api/admin/config/browser-blocked-domains", () => {
+  const URL = "/api/admin/config/browser-blocked-domains";
+
+  it("401/403 for non-admins", async () => {
+    expect((await call("PUT", URL, { domains: [] }, {})).statusCode).toBe(401);
+    expect((await call("PUT", URL, { domains: [] }, DEV)).statusCode).toBe(403);
+  });
+
+  it("normalises, de-duplicates and sorts, shows in the view, and audits", async () => {
+    const res = await call("PUT", URL, { domains: ["Zeta.example", "*.alpha.example", "https://zeta.example/x", "  "] });
+    expect(res.statusCode).toBe(200);
+    expect(getSettings().browser_blocked_domains).toEqual(["alpha.example", "zeta.example"]);
+    const view = JSON.parse((await call("GET", "/api/admin/config")).body);
+    expect(view.browser_blocked_domains).toEqual(["alpha.example", "zeta.example"]);
+    const audit = await db.all<{ action: string; tool: string }>("SELECT action, tool FROM audit_log");
+    expect(audit).toEqual([{ action: "ADMIN_BROWSER_BLOCKLIST", tool: "admin.config.browser-blocklist count=2" }]);
+  });
+
+  it("an empty list clears it", async () => {
+    await call("PUT", URL, { domains: ["alpha.example"] });
+    expect((await call("PUT", URL, { domains: [] })).statusCode).toBe(200);
+    expect(getSettings().browser_blocked_domains).toEqual([]);
+  });
+
+  it("400 invalid_domains names the bad entries and saves nothing", async () => {
+    const res = await call("PUT", URL, { domains: ["ok.example", "not a domain", "com"] });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body)).toEqual({ error: "invalid_domains", invalid: ["not a domain", "com"] });
+    expect(await db.all("SELECT 1 FROM instance_settings")).toHaveLength(0);
+  });
+
+  it.each([[{}], [{ domains: "a.example" }], [{ domains: [1] }], [null]])("400 invalid_body for %j", async (body) => {
+    const res = await call("PUT", URL, body);
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toBe("invalid_body");
+  });
+
+  it("a corrupt stored entry is dropped on load, not fatal", async () => {
+    await db.run("INSERT INTO instance_settings (key, value) VALUES (?, ?)", [
+      "browser_blocked_domains",
+      JSON.stringify(["good.example", "bad entry", 5]),
+    ]);
+    const { loadSettings } = await import("../src/settings/instance-settings");
+    await loadSettings();
+    expect(getSettings().browser_blocked_domains).toEqual(["good.example"]);
+  });
+});

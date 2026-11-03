@@ -26,6 +26,7 @@ import { Resolver } from "node:dns/promises";
 import { readFileSync, statSync } from "node:fs";
 import { isIP } from "node:net";
 import { config } from "../config";
+import { isBrowserHostBlocked } from "../settings/instance-settings";
 import { effectivePort, isAllowedLoopbackPort, isInternalHost, isLoopbackAddress, isLoopbackHost } from "./browser-url";
 
 export interface CdpLike {
@@ -350,6 +351,8 @@ export async function isBlockedAgentRequest(rawUrl: unknown, resolver: DnsResolv
   const bare = host.startsWith("[") ? host.slice(1, -1) : normaliseHost(host);
   if (bare.length > MAX_HOST_LENGTH) return true;
   if (isInternalHost(host) || isInternalHost(bare)) return true;
+  // Admin blocklist (Config tab). Checked on the name, before any DNS.
+  if (isBrowserHostBlocked(host) || isBrowserHostBlocked(bare)) return true;
   const port = effectivePort(u);
   // A loopback target is refused unless its port is allow-listed; a chromium
   // debug port and this server's port never are (isAllowedLoopbackPort).

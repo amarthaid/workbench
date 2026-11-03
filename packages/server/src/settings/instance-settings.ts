@@ -1,5 +1,6 @@
 import { config } from "../config";
 import { db } from "../db";
+import { hostMatchesBlocklist, normaliseBlockedDomain } from "./browser-blocklist";
 
 export type CustomAppsMode = "all" | "none" | "allowlist";
 
@@ -11,11 +12,14 @@ export interface CustomAppsPolicy {
 export interface InstanceSettings {
   disabled_integrations: string[];
   custom_apps_policy: CustomAppsPolicy;
+  /** Hosts agent browser tabs may not load (each also blocks its subdomains). */
+  browser_blocked_domains: string[];
 }
 
 const DEFAULTS: InstanceSettings = {
   disabled_integrations: [],
   custom_apps_policy: { mode: "all", user_ids: [] },
+  browser_blocked_domains: [],
 };
 
 // The registry and the request path read these synchronously, so they read a
@@ -35,6 +39,11 @@ export function customAppsAllowedFor(userId: string): boolean {
   if (p.mode === "all") return true;
   if (p.mode === "none") return false;
   return p.user_ids.includes(userId);
+}
+
+/** True when an agent browser tab must not load a URL on this host. */
+export function isBrowserHostBlocked(host: string): boolean {
+  return hostMatchesBlocklist(host, snapshot.browser_blocked_domains);
 }
 
 // A stored value is operator-editable data, so parse it tolerantly: a corrupt
@@ -67,17 +76,27 @@ function parsePolicy(raw: string | undefined): CustomAppsPolicy {
   return { mode, user_ids: stringList(v.user_ids) };
 }
 
+function parseBlockedDomains(raw: string | undefined): string[] {
+  const out = new Set<string>();
+  for (const d of stringList(parseJson(raw))) {
+    const n = normaliseBlockedDomain(d);
+    if (n) out.add(n);
+  }
+  return [...out];
+}
+
 export async function loadSettings(): Promise<void> {
   const rows = await db.all<{ key: string; value: string }>("SELECT key, value FROM instance_settings");
   const byKey = new Map(rows.map((r) => [r.key, r.value]));
   snapshot = {
     disabled_integrations: parseDisabled(byKey.get("disabled_integrations")),
     custom_apps_policy: parsePolicy(byKey.get("custom_apps_policy")),
+    browser_blocked_domains: parseBlockedDomains(byKey.get("browser_blocked_domains")),
   };
 }
 
 export async function saveSetting(
-  key: "disabled_integrations" | "custom_apps_policy",
+  key: "disabled_integrations" | "custom_apps_policy" | "browser_blocked_domains",
   value: unknown,
   updatedBy: string
 ): Promise<void> {
@@ -112,4 +131,9 @@ export function stopSettingsPoll(): void {
 /** Test seam: forget everything loaded so far. */
 export function resetSettingsForTest(): void {
   snapshot = DEFAULTS;
+}
+
+/** Test seam: replace parts of the snapshot without a database round trip. */
+export function setSettingsForTest(patch: Partial<InstanceSettings>): void {
+  snapshot = { ...snapshot, ...patch };
 }

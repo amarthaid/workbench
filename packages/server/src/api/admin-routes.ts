@@ -4,7 +4,7 @@ import { db } from "../db";
 import { activeProfiles, profileDirName, profilesBaseDir } from "../auth/profile-chromium";
 import { adminScope, adminActor } from "./admin-scope";
 import { listUsers, disableUser, enableUser, revokeUserKey } from "../admin/users";
-import { getConfigView, setIntegrationEnabled, setCustomAppsPolicy } from "../admin/config";
+import { getConfigView, setIntegrationEnabled, setCustomAppsPolicy, setBrowserBlockedDomains } from "../admin/config";
 import { getInstanceInfo } from "../admin/instance";
 import { adminActivity } from "../admin/activity";
 import { getConnectionStats } from "../admin/connections";
@@ -45,6 +45,11 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
     scope.put<{ Body: unknown }>("/config/custom-apps", async (request, reply) => {
       const result = await setCustomAppsPolicy(adminActor(request), request.body);
       if (!result.ok) return reply.status(result.status).send({ error: result.error });
+      return { ok: true };
+    });
+    scope.put<{ Body: unknown }>("/config/browser-blocked-domains", async (request, reply) => {
+      const result = await setBrowserBlockedDomains(adminActor(request), request.body);
+      if (!result.ok) return reply.status(result.status).send({ error: result.error, invalid: result.invalid });
       return { ok: true };
     });
     scope.get("/overview/stats", async () => getUsageStats());

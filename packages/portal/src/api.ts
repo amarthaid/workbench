@@ -910,6 +910,7 @@ const ADMIN_ACTION_MESSAGES: Record<string, string> = {
   unknown_user: "One of the selected users no longer exists.",
   invalid_policy: "That policy is not valid.",
   invalid_body: "That request is not valid.",
+  invalid_domains: "Some entries are not valid domains",
 };
 
 // Bodyless POST: auth header only. A Content-Type of application/json with no
@@ -931,8 +932,11 @@ async function throwIfAdminActionFailed(res: Response): Promise<void> {
     throw new Error("Unauthorized");
   }
   if (res.ok) return;
-  const code = ((await res.json().catch(() => ({}))) as { error?: string }).error ?? "";
-  throw new Error(ADMIN_ACTION_MESSAGES[code] ?? "Action failed");
+  const body = (await res.json().catch(() => ({}))) as { error?: string; invalid?: unknown };
+  const code = body.error ?? "";
+  const message = ADMIN_ACTION_MESSAGES[code] ?? "Action failed";
+  const invalid = Array.isArray(body.invalid) ? body.invalid.filter((x): x is string => typeof x === "string") : [];
+  throw new Error(invalid.length ? `${message}: ${invalid.join(", ")}` : message);
 }
 
 export const disableAdminUser = (id: string) => adminPost(`/api/admin/users/${encodeURIComponent(id)}/disable`);
@@ -943,6 +947,7 @@ export const revokeAdminUserKey = (id: string) => adminPost(`/api/admin/users/${
 export interface AdminConfig {
   integrations: { name: string; display_name: string; enabled: boolean }[];
   custom_apps_policy: { mode: "all" | "none" | "allowlist"; user_ids: string[] };
+  browser_blocked_domains: string[];
 }
 
 export const fetchAdminConfig = () => adminGet<AdminConfig>("/api/admin/config", "config");
@@ -952,3 +957,6 @@ export const setAdminIntegrationEnabled = (name: string, enabled: boolean) =>
 
 export const setAdminCustomAppsPolicy = (policy: AdminConfig["custom_apps_policy"]) =>
   adminPut("/api/admin/config/custom-apps", policy);
+
+export const setAdminBrowserBlockedDomains = (domains: string[]) =>
+  adminPut("/api/admin/config/browser-blocked-domains", { domains });
