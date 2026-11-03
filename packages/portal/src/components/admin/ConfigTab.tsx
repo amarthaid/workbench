@@ -277,7 +277,7 @@ function BrowserBlocklist({
           style={{ fontFamily: "monospace", resize: "vertical" }}
           autoComplete="off"
           spellCheck={false}
-          placeholder={"example.com\nads.example.net"}
+          placeholder={"example.com\n*.ads.example.net"}
           value={text}
           onChange={(e) => {
             setSaved(false);
@@ -291,7 +291,7 @@ function BrowserBlocklist({
         </Button>
         {saved && !changed && <span role="status">Saved.</span>}
         <p className="ui-stat-note">
-          Each entry also blocks its subdomains. Every HTTP(S) request is checked, including redirects, iframes and scripts; WebSocket connections are not.
+          Each entry also blocks its subdomains; *.example.com blocks only the subdomains, not example.com itself. Every HTTP(S) request is checked, including redirects, iframes and scripts; WebSocket connections are not.
           Pages that are already open stay open. Other workers pick the change up within a few seconds.
         </p>
       </BoxRow>

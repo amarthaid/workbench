@@ -203,9 +203,9 @@ describe("PUT /api/admin/config/browser-blocked-domains", () => {
   it("normalises, de-duplicates and sorts, shows in the view, and audits", async () => {
     const res = await call("PUT", URL, { domains: ["Zeta.example", "*.alpha.example", "https://zeta.example/x", "  "] });
     expect(res.statusCode).toBe(200);
-    expect(getSettings().browser_blocked_domains).toEqual(["alpha.example", "zeta.example"]);
+    expect(getSettings().browser_blocked_domains).toEqual(["*.alpha.example", "zeta.example"]);
     const view = JSON.parse((await call("GET", "/api/admin/config")).body);
-    expect(view.browser_blocked_domains).toEqual(["alpha.example", "zeta.example"]);
+    expect(view.browser_blocked_domains).toEqual(["*.alpha.example", "zeta.example"]);
     const audit = await db.all<{ action: string; tool: string }>("SELECT action, tool FROM audit_log");
     expect(audit).toEqual([{ action: "ADMIN_BROWSER_BLOCKLIST", tool: "admin.config.browser-blocklist count=2" }]);
   });
@@ -217,9 +217,9 @@ describe("PUT /api/admin/config/browser-blocked-domains", () => {
   });
 
   it("400 invalid_domains names the bad entries and saves nothing", async () => {
-    const res = await call("PUT", URL, { domains: ["ok.example", "not a domain", "com"] });
+    const res = await call("PUT", URL, { domains: ["ok.example", "not a domain", "com", "ads.*.example"] });
     expect(res.statusCode).toBe(400);
-    expect(JSON.parse(res.body)).toEqual({ error: "invalid_domains", invalid: ["not a domain", "com"] });
+    expect(JSON.parse(res.body)).toEqual({ error: "invalid_domains", invalid: ["not a domain", "com", "ads.*.example"] });
     expect(await db.all("SELECT 1 FROM instance_settings")).toHaveLength(0);
   });
 
