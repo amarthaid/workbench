@@ -150,7 +150,11 @@ logs.
 
 Tool executions, `curl_session` mints and proxied curl requests are recorded
 separately in the audit log, which is configurable —
-see [observability](observability.md).
+see [observability](observability.md). With `AUDIT_PAYLOAD` on, the audit log also
+holds tool-call arguments and results, so it can contain users' data: credential-named
+fields, credentials inside URLs and query strings, `Bearer` / `Basic` values and binary
+data are stripped, but a bare secret typed into an ordinary field is recorded as sent.
+Treat the audit tables and the Kafka topic with the same care as the logs.
 
 ## Operator responsibilities
 
