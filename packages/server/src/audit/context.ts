@@ -78,3 +78,26 @@ export function installAuditContext(app: FastifyInstance): void {
     } as RouteOptions["handler"];
   });
 }
+
+/**
+ * The request-origin fields for an application log line about `userId`'s
+ * call: the same who/where the audit event carries, without arguments or
+ * results. Fields that are not known are left out.
+ */
+export async function requestLogFields(userId: string): Promise<Record<string, string>> {
+  const { auditUserEmail } = await import("./user-email.js"); // lazy: keeps the db out of modules (the admin gate) that import this file
+  const { oauthClientName } = await import("./client-name.js");
+  const out: Record<string, string> = {};
+  const email = await auditUserEmail(userId);
+  if (email) out.user_email = email;
+  const c = store.getStore();
+  if (c?.source_ip) out.source_ip = c.source_ip;
+  if (c?.user_agent) out.user_agent = c.user_agent;
+  if (c?.auth_method) out.auth_method = c.auth_method;
+  if (c?.client_id) {
+    out.client_id = c.client_id;
+    const name = await oauthClientName(c.client_id);
+    if (name) out.client_name = name;
+  }
+  return out;
+}
