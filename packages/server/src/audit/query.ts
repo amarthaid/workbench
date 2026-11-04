@@ -1,4 +1,5 @@
 import { config } from "../config";
+import { parseAuditDest } from "./destinations";
 import { db } from "../db";
 import type { SqlParam } from "../db-adapter";
 
@@ -28,13 +29,13 @@ export interface ListAuditOptions {
 }
 
 /**
- * Whether audit events land in the database at all. `stdout` and `kafka`
- * destinations write nothing here, so an empty table means "configured
- * elsewhere", not "nothing has happened yet" — and the two must not look
- * the same to a reader.
+ * Whether audit events land in the database at all. With `stdout` alone
+ * nothing is written here, so an empty table means "configured elsewhere",
+ * not "nothing has happened yet" — and the two must not look the same to a
+ * reader. `kafka` is always a copy alongside the database.
  */
 export function auditStored(): boolean {
-  return config.AUDIT_LOG_DEST === "sqlite";
+  return parseAuditDest(config.AUDIT_LOG_DEST).includes("db");
 }
 
 export function encodeCursor(createdAt: number, id: number): string {

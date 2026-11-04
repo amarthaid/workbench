@@ -136,7 +136,7 @@ describe("GET /api/admin/overview/instance", () => {
       version: expect.stringMatching(/^\d+\.\d+\.\d+/),
       db_backend: "sqlite",
       cluster_enabled: false,
-      audit_log_dest: "sqlite",
+      audit_log_dest: "db", // normalised: `sqlite` is the old name for the configured database
       audit_stored: true,
       user_count: 2,
       admin_count: 1,
@@ -148,6 +148,13 @@ describe("GET /api/admin/overview/instance", () => {
     const body = JSON.parse((await get("/api/admin/overview/instance")).body);
     expect(body.audit_log_dest).toBe("stdout");
     expect(body.audit_stored).toBe(false);
+  });
+
+  it("reports kafka as a copy next to the database", async () => {
+    config.AUDIT_LOG_DEST = "kafka";
+    const body = JSON.parse((await get("/api/admin/overview/instance")).body);
+    expect(body.audit_log_dest).toBe("db,kafka");
+    expect(body.audit_stored).toBe(true);
   });
 
   it("reports the cluster flag", async () => {

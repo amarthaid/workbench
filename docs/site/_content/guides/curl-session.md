@@ -29,8 +29,8 @@ You never see the credential. The proxy injects it.
 | You want a permanent capability | Write a plugin tool instead |
 
 Prefer a tool where one exists. Tool calls get argument validation, per-tool audit
-entries, and per-tool metrics. A proxied request gets an HTTP request log and nothing
-tool-shaped.
+entries, and per-tool metrics. A proxied request gets one `CURL_REQUEST` audit row
+(method and path) and an HTTP request log, and nothing tool-shaped.
 
 ## Minting a session
 
@@ -211,9 +211,20 @@ credential store. Two things follow:
   integrations, until it expires (15 minutes by default, 1 hour at most), with no revocation path. It is worth treating leaked
   curl tokens the way you would treat a leaked provider token — the mitigation is the
   short TTL.
-- Proxied requests appear in the HTTP request metrics
-  (`workbench_http_requests_total`, labelled by route) and in the Fastify request log,
-  but produce **no `audit_log` entries** — the audit trail records tool executions, and
-  no tool ran. The mint is not audited either: meta-tool calls do not write audit rows.
-  If you need per-request provenance for an integration, a plugin tool is the right
-  shape, not the proxy.
+- Every mint writes a `CURL_SESSION` audit row: the integrations and the lifetime,
+  refused mints included with the reason. The token itself is never logged.
+- Every proxied request writes a `CURL_REQUEST` audit row: user, integration,
+  `METHOD /path`, success (upstream status below 400), and duration. The error is
+  `HTTP <status>` or one fixed reason (`not connected`, `token expired`,
+  `token refresh failed (HTTP <status>)`, `target host not allowed`,
+  `upstream request failed (<network error code>)`, `cannot resolve proxy base URL`);
+  the raw error message is never recorded, because a failed token refresh carries
+  the token endpoint's response text. The query string, request and response
+  headers, and request and response bodies are not recorded either, so a row tells
+  you *which* endpoint was hit, not with what. (The Fastify request log, separate from
+  the audit log, does print the full URL with its query string.) Requests
+  refused by the proxy (integration not in the session, proxy not enabled) are
+  recorded too; a request with an invalid token has no user and writes nothing.
+  The path is recorded as sent, so an ID or email in a path segment is kept.
+- Proxied requests also appear in the HTTP request metrics
+  (`workbench_http_requests_total`, labelled by route) and in the Fastify request log.

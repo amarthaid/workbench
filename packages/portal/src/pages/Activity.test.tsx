@@ -11,7 +11,7 @@ vi.mock("../api", () => ({
       { name: "demo-repo", displayName: "Demo Repo", version: "1.0.0", toolCount: 2 },
     ],
   })),
-  UNSTORED_MESSAGE: "This deployment sends audit events somewhere other than its database, so there is nothing to show here. Set AUDIT_LOG_DEST=sqlite to record them.",
+  UNSTORED_MESSAGE: "This deployment sends audit events somewhere other than its database, so there is nothing to show here. Add db to AUDIT_LOG_DEST (the default) to record them.",
 }));
 
 import { fetchActivity } from "../api";

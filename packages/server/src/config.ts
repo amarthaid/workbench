@@ -20,9 +20,32 @@ export const configSchema = z.object({
   ),
   DATABASE_URL: z.string().default("./data/tokens.db"),
   PLUGINS_DIR: z.string().default("./plugins"),
-  AUDIT_LOG_DEST: z.enum(["sqlite", "stdout", "kafka"]).default("sqlite"),
-  AUDIT_LOG_KAFKA_BROKERS: z.string().optional(),
+  // Where audit events go: a comma-separated list of `db` (alias `sqlite`:
+  // the configured DATABASE_URL, SQLite or PostgreSQL), `stdout` and `kafka`.
+  // `kafka` is always a copy: listing it also writes the database
+  // (src/audit/destinations.ts).
+  AUDIT_LOG_DEST: z
+    .string()
+    .default("db")
+    .refine(
+      (v) => v.split(",").map((s) => s.trim()).filter(Boolean).length > 0
+        && v.split(",").map((s) => s.trim()).filter(Boolean).every((s) => ["db", "sqlite", "stdout", "kafka"].includes(s)),
+      { message: "AUDIT_LOG_DEST must be a comma-separated list of db, sqlite, stdout, kafka" }
+    ),
+  // Kafka copy of the audit log (only read when AUDIT_LOG_DEST lists kafka).
+  AUDIT_LOG_KAFKA_BROKERS: z.string().optional(), // comma-separated host:port
   AUDIT_LOG_KAFKA_TOPIC: z.string().default("audit-log"),
+  AUDIT_LOG_KAFKA_CLIENT_ID: z.string().default("workbench"),
+  AUDIT_LOG_KAFKA_SSL: z
+    .enum(["true", "false", "1", "0"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1"),
+  AUDIT_LOG_KAFKA_SASL_MECHANISM: z.enum(["plain", "scram-sha-256", "scram-sha-512"]).optional(),
+  AUDIT_LOG_KAFKA_SASL_USERNAME: z.string().optional(),
+  AUDIT_LOG_KAFKA_SASL_PASSWORD: z.string().optional(),
+  // Events waiting for Kafka, held in memory. Past it new events are dropped
+  // from the Kafka copy (the database still has them).
+  AUDIT_LOG_KAFKA_QUEUE_MAX: z.coerce.number().int().positive().default(10000),
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
   KEYCLOAK_ISSUER_URL: z.string().url().optional(),

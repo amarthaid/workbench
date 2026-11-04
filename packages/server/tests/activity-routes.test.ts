@@ -206,8 +206,15 @@ describe("GET /api/stats", () => {
     expect(JSON.parse(res.body)).toMatchObject({ tool_calls: 0, success_rate: null, most_used_integration: null });
   });
 
-  it("reports stored:false when audit events go somewhere other than the database", async () => {
+  it("kafka is a copy: the database is still written, so stats stay stored", async () => {
     config.AUDIT_LOG_DEST = "kafka";
+    const app = await buildApp();
+    const res = await app.inject({ method: "GET", url: "/api/stats", headers: AUTH });
+    expect(JSON.parse(res.body).stored).toBe(true);
+  });
+
+  it("reports stored:false when audit events go somewhere other than the database", async () => {
+    config.AUDIT_LOG_DEST = "stdout";
     const app = await buildApp();
     const res = await app.inject({ method: "GET", url: "/api/stats", headers: AUTH });
     expect(JSON.parse(res.body)).toEqual({

@@ -10,7 +10,7 @@ vi.mock("../api", () => ({
   fetchIntegrations: vi.fn(),
   fetchConnections: vi.fn(),
   fetchVaultSecrets: vi.fn(),
-  UNSTORED_MESSAGE: "This deployment sends audit events somewhere other than its database, so there is nothing to show here. Set AUDIT_LOG_DEST=sqlite to record them.",
+  UNSTORED_MESSAGE: "This deployment sends audit events somewhere other than its database, so there is nothing to show here. Add db to AUDIT_LOG_DEST (the default) to record them.",
 }));
 
 import { fetchStats, fetchActivity, fetchIntegrations, fetchConnections, fetchVaultSecrets } from "../api";

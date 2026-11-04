@@ -148,7 +148,8 @@ Fastify's logger redacts `Authorization`, `x-workbench-api-key`, `?token=`, and
 avoid putting secrets in query strings and be deliberate about who can read the
 logs.
 
-Tool executions are recorded separately in the audit log, which is configurable —
+Tool executions, `curl_session` mints and proxied curl requests are recorded
+separately in the audit log, which is configurable —
 see [observability](observability.md).
 
 ## Operator responsibilities

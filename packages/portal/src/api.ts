@@ -532,7 +532,7 @@ export interface ActivityPage {
 // state, so it lives beside the type rather than in whichever page rendered
 // it first.
 export const UNSTORED_MESSAGE =
-  "This deployment sends audit events somewhere other than its database, so there is nothing to show here. Set AUDIT_LOG_DEST=sqlite to record them.";
+  "This deployment sends audit events somewhere other than its database, so there is nothing to show here. Add db to AUDIT_LOG_DEST (the default) to record them.";
 
 export interface Stats {
   stored: boolean;

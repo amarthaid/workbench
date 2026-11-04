@@ -889,6 +889,17 @@ export const metaTools = [
         .default(CURL_TTL_DEFAULT_SECONDS),
     }),
     handler: async (ctx: { userId: string }, args: { integrations: string[]; expiresInSeconds: number }) => {
+      // Every mint is audited, refused or not: the token grants raw API access.
+      // The token itself is never logged.
+      const audit = (success: boolean, error?: string) =>
+        auditLogger.log({
+          user_id: ctx.userId,
+          integration: args.integrations.length === 1 ? args.integrations[0] : undefined,
+          tool: `curl_session ${args.integrations.join(",")} ttl=${args.expiresInSeconds}s`.slice(0, 500),
+          action: "CURL_SESSION",
+          success,
+          error,
+        });
       const errors: string[] = [];
       for (const name of args.integrations) {
         const integ = registry.getIntegration(name);
@@ -902,8 +913,12 @@ export const metaTools = [
               : !!(await getToken(ctx.userId, name));
         if (!isConnected) errors.push(`${name}: not connected`);
       }
-      if (errors.length) return { error: errors.join("; ") };
+      if (errors.length) {
+        await audit(false, errors.join("; "));
+        return { error: errors.join("; ") };
+      }
       const token = await signCurlToken(ctx.userId, args.integrations, args.expiresInSeconds);
+      await audit(true);
       return {
         token,
         expiresIn: args.expiresInSeconds,

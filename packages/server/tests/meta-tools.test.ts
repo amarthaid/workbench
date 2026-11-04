@@ -795,6 +795,39 @@ describe("meta-tools", () => {
       expect(schema().safeParse({ integrations: ["test-integ"], expiresInSeconds: ttl }).success).toBe(false);
     });
 
+    it("audits a successful mint as CURL_SESSION, without the token", async () => {
+      const { auditLogger } = await import("../src/audit/logger");
+      vi.mocked(auditLogger.log).mockClear();
+      const args = schema().parse({ integrations: ["test-integ"], expiresInSeconds: 300 });
+      const result: any = await findTool("curl_session").handler({ userId: "user-1" }, args);
+      expect(auditLogger.log).toHaveBeenCalledWith({
+        user_id: "user-1",
+        integration: "test-integ",
+        tool: "curl_session test-integ ttl=300s",
+        action: "CURL_SESSION",
+        success: true,
+        error: undefined,
+      });
+      expect(JSON.stringify(vi.mocked(auditLogger.log).mock.calls)).not.toContain(String(result.token));
+    });
+
+    it("audits a refused mint with the reason", async () => {
+      const { auditLogger } = await import("../src/audit/logger");
+      vi.mocked(auditLogger.log).mockClear();
+      vi.spyOn(registry, "getIntegration").mockReturnValue(undefined as any);
+      const args = schema().parse({ integrations: ["a-integ", "b-integ"] });
+      await findTool("curl_session").handler({ userId: "user-1" }, args);
+      expect(auditLogger.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "CURL_SESSION",
+          success: false,
+          integration: undefined,
+          tool: "curl_session a-integ,b-integ ttl=900s",
+          error: expect.stringContaining("integration not found"),
+        })
+      );
+    });
+
     it("advertises the lifetime bounds on the wire schema", async () => {
       const { metaToolSchemas } = await import("../src/mcp/meta-tools");
       const prop: any = (metaToolSchemas.curl_session as any).properties.expiresInSeconds;
