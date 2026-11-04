@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
+import { clientIp } from "../trust-proxy";
 import { SESSION_HEADER, mintSessionKey, verifySessionKey } from "./cdp-bridge";
 
 // A browser session is process-local (docs/findings/2026-09-10-browser-session-pod-affinity.md),
@@ -73,6 +74,12 @@ export async function forwardForBrowserAffinity(opts: ForwardOpts): Promise<bool
   if (auth) headers.authorization = auth;
   const apiKey = request.headers["x-workbench-api-key"] as string | undefined;
   if (apiKey) headers["x-workbench-api-key"] = apiKey;
+  // The owning replica writes the audit event: hand it the caller's user agent
+  // and address. It uses the address only if TRUST_PROXY trusts this replica.
+  const ua = request.headers["user-agent"];
+  if (typeof ua === "string" && ua) headers["user-agent"] = ua;
+  const ip = clientIp(request);
+  if (ip) headers["x-forwarded-for"] = ip;
   let res: Response;
   let text: string;
   try {

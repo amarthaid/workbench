@@ -114,6 +114,68 @@ The admin Activity and Overview tabs read the database, so they work whenever
 PostgreSQL rejects `1`/`0` for `BOOLEAN`. `created_at` is unix seconds. Two
 indexes support querying: `(user_id, created_at)` and `(integration, created_at)`.
 
+### Request origin
+
+Every event written while handling a request also records where it came from and how
+it authenticated, when known:
+
+| Field | Value |
+|---|---|
+| `source_ip` | The client address. Behind a load balancer this is the balancer unless `TRUST_PROXY` trusts it (then `X-Forwarded-For`). With `CLIENT_IP_HEADER` (e.g. `cf-connecting-ip`), that header wins when the connection comes from a trusted peer. With `INTERNAL_MCP_URL`, include the pod range so a call forwarded between replicas keeps the caller's address |
+| `user_agent` | The `User-Agent` header, first 512 characters |
+| `auth_method` | `api_key` (`x-workbench-api-key`), `oauth` (OAuth access token), `session` (portal sign-in, including every admin action) or `curl_token` (the curl proxy) |
+| `client_id`, `client_name` | The OAuth client, for `oauth`. The name is the one the client gave at dynamic registration, so it is self-declared, not verified |
+
+**Behind Cloudflare.** Set `CLIENT_IP_HEADER=cf-connecting-ip` and put in `TRUST_PROXY`
+whatever connects to the server directly: Cloudflare's published IP ranges
+(<https://www.cloudflare.com/ips/>) if Cloudflare reaches the server itself, or your
+ingress / load balancer range if Cloudflare reaches that first. Any client can send a
+`CF-Connecting-IP` header, so it is believed only from a trusted peer, and only when it
+is a single valid IP. If the ingress is also reachable without going through Cloudflare,
+lock it to Cloudflare's ranges first, or a caller hitting it directly can set the header.
+The same address is used everywhere: the audit log's `source_ip`, the request
+log's `remoteAddress` (next to `peerAddress`, the directly connected proxy), and the
+address handed to another replica.
+
+Events written outside a request (background token refreshes and reconnects) carry
+none of these. The MCP `initialize` `clientInfo` is not recorded: `/mcp` is stateless,
+so it is not known on later calls; the `User-Agent` usually names the client instead.
+
+### Arguments and results (`AUDIT_PAYLOAD`)
+
+Off by default. `AUDIT_PAYLOAD=args` records the arguments of every tool call
+(over `/mcp` and `/rest`); `full` also records the result. Every event, payload or not,
+also carries `user_email`.
+
+- **What is recorded.** Arguments as the agent *sent* them, before
+  `{{vault:NAME}}` references are resolved, so vault secrets stay placeholders. The
+  result as the agent received it, already vault-scrubbed. The vault's own tools never
+  record arguments.
+- **Sanitised.** Any key naming a credential (`password`, `secret`, `token`,
+  `apiKey`, `authorization`, `cookie`, `privateKey`, `otp`, `pin`, …), at any depth, is
+  replaced with `"[REDACTED]"`. Binary data, `data:` URIs and long base64 runs (screenshots,
+  file contents) become `"[binary N bytes]"`. A secret the agent typed into an ordinary
+  field (for example `browser_type` text) is **not** caught: the audit log holds what the
+  agent sent.
+- **Limited.** Arguments and result each have a cap, in UTF-8 bytes of their JSON text:
+  `AUDIT_PAYLOAD_ARGS_MAX_BYTES` and `AUDIT_PAYLOAD_RESULT_MAX_BYTES` (default 8192,
+  256–262144). Past the cap the value is **cut, not dropped**: the first part is kept,
+  `args_truncated` / `result_truncated` is `true`, and `args_bytes` / `result_bytes`
+  hold the full size. The event itself is always written. A cut value is no longer valid
+  JSON. The 256 KiB maximum keeps an event carrying both under Kafka's default 1 MB
+  message limit.
+- **Where it goes.** In the database, the separate `audit_payload` table (one row per
+  event that has a payload); in Kafka and stdout, the `args`, `args_truncated`,
+  `args_bytes`, `result`, `result_truncated`, `result_bytes` fields of the event.
+- **Who can read it.** Admins, per event, from Admin → Activity → **Details**. Every
+  such read writes its own `ADMIN_AUDIT_PAYLOAD_VIEW` event. Users do not see payloads on
+  their own Activity page.
+- **Not for curl.** `CURL_REQUEST` rows never carry bodies, headers or query strings,
+  whatever `AUDIT_PAYLOAD` says.
+- **Growth.** Up to the two caps per tool call, and nothing prunes it. On SQLite the
+  table lives in the same file as the stored credentials; size the volume, or prune
+  `audit_payload` yourself.
+
 ### Kafka copy
 
 Set `AUDIT_LOG_DEST=db,kafka` and `AUDIT_LOG_KAFKA_BROKERS`; the other
@@ -132,7 +194,9 @@ The server refuses to start when `kafka` is listed and no broker is set.
   retried, so a consumer can see an event twice. Each message carries an
   `event_id` to de-duplicate on.
 - **Message shape.** Key: `user_id` (one user's events stay ordered within a
-  partition). Value: the event as JSON, the same as the `stdout` line, plus
+  partition). Value: the event as JSON, the same as the `stdout` line (including
+  `user_email`, the request origin fields, and, with `AUDIT_PAYLOAD`, the captured
+  arguments and result), plus
   `event_id`. The topic is not auto-created; create it first.
 - **Metrics:** `workbench_audit_kafka_sent_total`,
   `workbench_audit_kafka_dropped_total`, `workbench_audit_kafka_send_errors_total`

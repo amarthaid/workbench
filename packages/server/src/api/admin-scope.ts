@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { noteRequestAuth } from "../audit/context";
 import { resolveAdmin } from "../auth/admin";
 
 type ScopeSetup = (scope: FastifyInstance) => Promise<void> | void;
@@ -39,6 +40,8 @@ export async function adminScope(app: FastifyInstance, setup: ScopeSetup): Promi
             .send({ error: admin.status === 401 ? "Unauthorized" : "Forbidden" });
         }
         actors.set(request, { userId: admin.userId, email: admin.email });
+        // The admin gate accepts the portal session only.
+        noteRequestAuth(request, "session");
       });
       await setup(scope);
     },

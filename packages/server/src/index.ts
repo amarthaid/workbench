@@ -31,11 +31,21 @@ import "./telemetry/tracing";
 import { httpRequestsTotal, httpRequestDuration } from "./telemetry/metrics";
 import { registerMetricsRoute } from "./telemetry/metrics-route";
 import { flushAuditDestinations } from "./audit/destinations";
+import { installAuditContext } from "./audit/context";
+import { trustProxyOption } from "./trust-proxy";
 
 async function main() {
   const app = Fastify({
     logger: loggerOptions,
+    ...trustProxyOption(config.TRUST_PROXY),
   });
+  // Before any route: every handler runs with its request's audit context.
+  installAuditContext(app);
+  if (config.CLIENT_IP_HEADER && config.TRUST_PROXY === undefined) {
+    app.log.warn(
+      `CLIENT_IP_HEADER=${config.CLIENT_IP_HEADER} is ignored: set TRUST_PROXY to the proxies allowed to send it`
+    );
+  }
 
   const { initDb } = await import("./db.js");
   await initDb();
@@ -150,3 +160,4 @@ function registerShutdown() {
   // synchronously: shutdownAllPulse sends the kills before its first await.
   process.once("exit", () => { void shutdownAllPulse(); });
 }
+

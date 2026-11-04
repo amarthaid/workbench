@@ -131,7 +131,43 @@ export async function summarizeAudit(userId: string, windowDays: number): Promis
 
 export interface AdminAuditEventRow extends AuditEventRow {
   user_id: string;
+  /** The current email, or the one recorded with the event if the user is gone. */
   user_email: string | null;
+  /** Arguments / result were captured for this event (AUDIT_PAYLOAD). */
+  has_payload: boolean;
+  /** Request origin and credential, when the event came from a request. */
+  source_ip: string | null;
+  user_agent: string | null;
+  auth_method: string | null;
+  client_id: string | null;
+  client_name: string | null;
+}
+
+export interface AuditPayload {
+  audit_id: number;
+  args: string | null;
+  args_truncated: boolean;
+  args_bytes: number | null;
+  result: string | null;
+  result_truncated: boolean;
+  result_bytes: number | null;
+}
+
+export async function getAuditPayload(auditId: number): Promise<AuditPayload | null> {
+  const r = await db.get<Record<string, unknown>>(
+    "SELECT audit_id, args, args_truncated, args_bytes, result, result_truncated, result_bytes FROM audit_payload WHERE audit_id = ?",
+    [auditId]
+  );
+  if (!r) return null;
+  return {
+    audit_id: Number(r.audit_id),
+    args: (r.args as string | null) ?? null,
+    args_truncated: !!r.args_truncated,
+    args_bytes: r.args_bytes === null || r.args_bytes === undefined ? null : Number(r.args_bytes),
+    result: (r.result as string | null) ?? null,
+    result_truncated: !!r.result_truncated,
+    result_bytes: r.result_bytes === null || r.result_bytes === undefined ? null : Number(r.result_bytes),
+  };
 }
 
 export interface ListAllAuditOptions {
@@ -162,7 +198,7 @@ export async function listAllAuditEvents(o: ListAllAuditOptions): Promise<AdminA
     params.push(o.status === "success");
   }
   if (o.email) {
-    where.push("LOWER(u.email) = ?");
+    where.push("LOWER(COALESCE(u.email, a.user_email)) = ?");
     params.push(o.email.trim().toLowerCase());
   }
   if (o.cursor) {
@@ -172,10 +208,13 @@ export async function listAllAuditEvents(o: ListAllAuditOptions): Promise<AdminA
   params.push(o.limit);
 
   const rows = await db.all<Record<string, unknown>>(
-    `SELECT a.id, a.user_id, u.email AS user_email, a.integration, a.tool, a.action,
-            a.success, a.error, a.duration_ms, a.created_at
+    `SELECT a.id, a.user_id, COALESCE(u.email, a.user_email) AS user_email, a.integration, a.tool, a.action,
+            a.success, a.error, a.duration_ms, a.created_at,
+            a.source_ip, a.user_agent, a.auth_method, a.client_id, a.client_name,
+            CASE WHEN p.audit_id IS NULL THEN 0 ELSE 1 END AS has_payload
        FROM audit_log a
        LEFT JOIN users u ON u.id = a.user_id
+       LEFT JOIN audit_payload p ON p.audit_id = a.id
       ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
       ORDER BY a.created_at DESC, a.id DESC
       LIMIT ?`,
@@ -185,5 +224,11 @@ export async function listAllAuditEvents(o: ListAllAuditOptions): Promise<AdminA
     ...normalize(r),
     user_id: String(r.user_id),
     user_email: (r.user_email as string | null) ?? null,
+    has_payload: Number(r.has_payload) === 1,
+    source_ip: (r.source_ip as string | null) ?? null,
+    user_agent: (r.user_agent as string | null) ?? null,
+    auth_method: (r.auth_method as string | null) ?? null,
+    client_id: (r.client_id as string | null) ?? null,
+    client_name: (r.client_name as string | null) ?? null,
   }));
 }

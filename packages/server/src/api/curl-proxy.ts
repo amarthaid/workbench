@@ -4,6 +4,7 @@ import { verifyCurlToken } from "../auth/curl-session";
 import { createContext, type ToolContext } from "../plugins/context";
 import { registry } from "../plugins/registry";
 import { auditLogger } from "../audit/logger";
+import { noteAuth } from "../audit/context";
 
 const AUDIT_PATH_MAX = 300;
 
@@ -127,6 +128,7 @@ export async function registerCurlProxy(app: FastifyInstance): Promise<void> {
         let session: { userId: string; integrations: string[] };
         try {
           session = await verifyCurlToken(authHeader.slice(7));
+          noteAuth("curl_token");
         } catch {
           return reply.code(401).send({ error: "Invalid or expired curl session token" });
         }

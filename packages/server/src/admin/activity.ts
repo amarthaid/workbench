@@ -2,9 +2,13 @@ import {
   auditStored,
   decodeCursor,
   encodeCursor,
+  getAuditPayload,
   listAllAuditEvents,
   type AdminAuditEventRow,
+  type AuditPayload,
 } from "../audit/query";
+import { auditLogger } from "../audit/logger";
+import type { AdminActor } from "../api/admin-scope";
 
 type Raw = Record<string, string | string[] | undefined>;
 
@@ -55,4 +59,24 @@ export async function adminActivity(raw: Raw): Promise<AdminActivityResult> {
   const last = events[events.length - 1];
   const next_cursor = rows.length > limit && last ? encodeCursor(last.created_at, last.id) : null;
   return { ok: true, page: { stored: true, events, next_cursor } };
+}
+
+/**
+ * One event's captured arguments / result. Reading them is itself audited
+ * (ADMIN_AUDIT_PAYLOAD_VIEW), because they can hold another user's data.
+ */
+export async function adminActivityPayload(
+  actor: AdminActor,
+  rawId: string
+): Promise<{ ok: true; payload: AuditPayload } | { ok: false; status: 400 | 404; error: "invalid_id" | "not_found" }> {
+  if (!/^\d{1,15}$/.test(rawId)) return { ok: false, status: 400, error: "invalid_id" };
+  const payload = await getAuditPayload(Number(rawId));
+  if (!payload) return { ok: false, status: 404, error: "not_found" };
+  await auditLogger.log({
+    user_id: actor.userId,
+    action: "ADMIN_AUDIT_PAYLOAD_VIEW",
+    tool: `admin.activity.payload id=${payload.audit_id}`,
+    success: true,
+  });
+  return { ok: true, payload };
 }

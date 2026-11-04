@@ -6,7 +6,7 @@ import { adminScope, adminActor } from "./admin-scope";
 import { listUsers, disableUser, enableUser, revokeUserKey } from "../admin/users";
 import { getConfigView, setIntegrationEnabled, setCustomAppsPolicy, setBrowserBlockedDomains } from "../admin/config";
 import { getInstanceInfo } from "../admin/instance";
-import { adminActivity } from "../admin/activity";
+import { adminActivity, adminActivityPayload } from "../admin/activity";
 import { getConnectionStats } from "../admin/connections";
 import { listAllCustomApps } from "../admin/custom-apps";
 import { listBrowserProfiles } from "../admin/profiles";
@@ -23,6 +23,11 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
       const result = await adminActivity(request.query as Record<string, string | string[] | undefined>);
       if (!result.ok) return reply.status(400).send({ error: result.error });
       return result.page;
+    });
+    scope.get<{ Params: { id: string } }>("/overview/activity/:id/payload", async (request, reply) => {
+      const result = await adminActivityPayload(adminActor(request), request.params.id);
+      if (!result.ok) return reply.status(result.status).send({ error: result.error });
+      return result.payload;
     });
     scope.get("/users", async () => listUsers());
     for (const [path, act] of [

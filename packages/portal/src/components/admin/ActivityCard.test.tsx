@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderWithClient } from "../../test-utils";
 import ActivityCard from "./ActivityCard";
 
-const api = vi.hoisted(() => ({ fetchAdminActivity: vi.fn(), fetchIntegrations: vi.fn() }));
+const api = vi.hoisted(() => ({ fetchAdminActivity: vi.fn(), fetchIntegrations: vi.fn(), fetchAdminActivityPayload: vi.fn() }));
 vi.mock("../../api", async (orig) => ({ ...(await orig<typeof import("../../api")>()), ...api }));
 
 const NOW = Math.floor(Date.now() / 1000);
@@ -27,6 +27,7 @@ function ev(id: number, over: Record<string, unknown> = {}) {
 beforeEach(() => {
   api.fetchAdminActivity.mockReset();
   api.fetchIntegrations.mockReset();
+  api.fetchAdminActivityPayload.mockReset();
   api.fetchIntegrations.mockResolvedValue({ integrations: [{ name: "acme", displayName: "Acme" }] });
 });
 
@@ -103,5 +104,61 @@ describe("ActivityCard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Load more" }));
     await screen.findByText("tool_2");
     expect(screen.getAllByText("tool_1")).toHaveLength(1);
+  });
+});
+
+describe("ActivityCard captured payload", () => {
+  it("offers Details only for events with a payload, and shows args and a truncated result", async () => {
+    api.fetchAdminActivity.mockResolvedValue({
+      stored: true,
+      events: [ev(1, { tool: "with_payload", has_payload: true }), ev(2, { tool: "plain" })],
+      next_cursor: null,
+    });
+    api.fetchAdminActivityPayload.mockResolvedValue({
+      audit_id: 1,
+      args: '{"q":"hello"}',
+      args_truncated: false,
+      args_bytes: 13,
+      result: '{"body":"abc',
+      result_truncated: true,
+      result_bytes: 20480,
+    });
+    renderWithClient(<ActivityCard />);
+    await screen.findByText("with_payload");
+    expect(screen.queryByRole("button", { name: /plain/ })).not.toBeInTheDocument();
+    expect(api.fetchAdminActivityPayload).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "View arguments and result of with_payload" }));
+    const dialog = await screen.findByRole("dialog");
+    await waitFor(() => expect(dialog).toHaveTextContent('"q": "hello"'));
+    expect(dialog).toHaveTextContent("Truncated: showing the first part of 20.0 KB");
+    expect(dialog).toHaveTextContent('{"body":"abc');
+    expect(dialog).toHaveTextContent(/recorded in the audit log/);
+    expect(api.fetchAdminActivityPayload).toHaveBeenCalledWith(1);
+  });
+});
+
+describe("ActivityCard request origin", () => {
+  it("shows auth method, OAuth client and IP under the user, with the user agent on hover", async () => {
+    api.fetchAdminActivity.mockResolvedValue({
+      stored: true,
+      events: [
+        ev(1, {
+          tool: "via_oauth",
+          auth_method: "oauth",
+          client_name: "Claude Code",
+          source_ip: "203.0.113.9",
+          user_agent: "claude-code/2.0",
+        }),
+        ev(2, { tool: "via_key", auth_method: "api_key", source_ip: "198.51.100.1" }),
+        ev(3, { tool: "background" }),
+      ],
+      next_cursor: null,
+    });
+    renderWithClient(<ActivityCard />);
+    const oauthRow = (await screen.findByText("via_oauth")).closest("tr")!;
+    const origin = within(oauthRow).getByText(/OAuth: Claude Code · 203\.0\.113\.9/);
+    expect(origin).toHaveAttribute("title", "claude-code/2.0");
+    expect(screen.getByText("via_key").closest("tr")).toHaveTextContent("API key · 198.51.100.1");
+    expect(screen.getByText("background").closest("tr")!.querySelector(".ui-stat-note")).toBeNull();
   });
 });

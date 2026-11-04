@@ -32,6 +32,16 @@ export const configSchema = z.object({
         && v.split(",").map((s) => s.trim()).filter(Boolean).every((s) => ["db", "sqlite", "stdout", "kafka"].includes(s)),
       { message: "AUDIT_LOG_DEST must be a comma-separated list of db, sqlite, stdout, kafka" }
     ),
+  // Tool-call arguments / results in the audit log (src/audit/payload.ts):
+  // off (default), args, or full (args + result). Sanitised and capped per
+  // value (arguments and result each have their own cap, in UTF-8 bytes of the
+  // JSON text); stored in `audit_payload` and carried in the Kafka / stdout
+  // events. Curl proxy bodies are never recorded.
+  AUDIT_PAYLOAD: z.enum(["off", "args", "full"]).default("off"),
+  // At most 256 KiB each, so an event carrying both stays under Kafka's
+  // default 1 MB message limit (message.max.bytes).
+  AUDIT_PAYLOAD_ARGS_MAX_BYTES: z.coerce.number().int().min(256).max(262_144).default(8192),
+  AUDIT_PAYLOAD_RESULT_MAX_BYTES: z.coerce.number().int().min(256).max(262_144).default(8192),
   // Kafka copy of the audit log (only read when AUDIT_LOG_DEST lists kafka).
   AUDIT_LOG_KAFKA_BROKERS: z.string().optional(), // comma-separated host:port
   AUDIT_LOG_KAFKA_TOPIC: z.string().default("audit-log"),
@@ -161,6 +171,35 @@ export const configSchema = z.object({
   // Set to the k8s ClusterIP service URL, e.g. http://a-workbench/mcp.
   // Leave unset for single-replica or local-dev deployments.
   INTERNAL_MCP_URL: z.string().url().optional(),
+  // Which proxies in front of the server to trust for X-Forwarded-For, so
+  // request.ip (and so the audit log's source_ip and the request log's remoteAddress)
+  // is the client and not the load balancer. Unset = trust none (the direct
+  // peer is the address). "true" = trust every hop (only when nothing can
+  // reach the server except through your proxy); a number = that many hops;
+  // otherwise a comma-separated list of proxy IPs / CIDRs (include the pod
+  // range when INTERNAL_MCP_URL forwards between replicas).
+  TRUST_PROXY: z
+    .string()
+    .optional()
+    .transform((v): boolean | number | string[] | undefined => {
+      const s = v?.trim();
+      if (!s || s === "false") return undefined;
+      if (s === "true") return true;
+      if (/^\d+$/.test(s)) return Number(s);
+      return s.split(",").map((x) => x.trim()).filter(Boolean);
+    }),
+  // A single-value header a CDN puts the real client address in, e.g.
+  // cf-connecting-ip (Cloudflare), true-client-ip, x-real-ip. Believed only
+  // when the connection comes from a peer TRUST_PROXY trusts, and only when it
+  // is a valid IP; otherwise the X-Forwarded-For / socket address stands.
+  // Ignored without TRUST_PROXY (src/trust-proxy.ts).
+  CLIENT_IP_HEADER: z
+    .string()
+    .optional()
+    .transform((v) => v?.trim().toLowerCase() || undefined)
+    .refine((v) => v === undefined || /^[a-z0-9-]{1,64}$/.test(v), {
+      message: "CLIENT_IP_HEADER must be a header name, e.g. cf-connecting-ip",
+    }),
 });
 
 export const config = configSchema.parse(process.env);

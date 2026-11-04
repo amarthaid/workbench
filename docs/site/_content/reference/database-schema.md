@@ -170,15 +170,21 @@ swept opportunistically whenever a new one is created.
 
 ## `audit_log`
 
-Every tool execution, success or failure.
+Every tool execution, success or failure, plus curl sessions and admin changes.
 
 | Column | Type | Stores |
 |---|---|---|
 | `id` | INTEGER PK | autoincrement / serial |
 | `user_id` | TEXT NOT NULL | Who ran it |
+| `user_email` | TEXT | The user's email when the event was written (cached up to 5 min); shown when the user row is gone |
+| `source_ip` | TEXT | Client address (`request.ip`; behind a proxy, only with `TRUST_PROXY`) |
+| `user_agent` | TEXT | `User-Agent` header, first 512 chars |
+| `auth_method` | TEXT | `api_key`, `oauth`, `session` (portal) or `curl_token` |
+| `client_id` | TEXT | OAuth client, for `oauth` |
+| `client_name` | TEXT | That client's registered name (self-declared at dynamic registration) |
 | `integration` | TEXT | Owning plugin |
 | `tool` | TEXT | Tool name |
-| `action` | TEXT NOT NULL | `EXECUTE` for tool runs |
+| `action` | TEXT NOT NULL | `EXECUTE` for tool runs; also `CURL_SESSION`, `CURL_REQUEST`, `ADMIN_*` |
 | `success` | BOOLEAN NOT NULL | Outcome |
 | `error` | TEXT | Failure message, when any |
 | `duration_ms` | INTEGER | Wall-clock duration |
@@ -192,6 +198,30 @@ default; `sqlite` is its old name, and `kafka` implies it). It writes to whichev
 is configured. With `stdout` alone nothing is written here.
 
 Nothing prunes this table. Plan retention yourself.
+
+## `audit_payload`
+
+Captured tool-call arguments and results, written only when `AUDIT_PAYLOAD` is `args`
+or `full` (see [Audit log](../deploy/observability.md#audit-log)). One row per
+`audit_log` row that has any. Kept apart so the Activity and Overview scans never read
+the wide columns (SQLite stores a large value inside the row, so it would slow every
+scan), so old payloads can be deleted on their own while the summary rows stay, and so
+only the audited admin endpoint reads them.
+
+| Column | Type | Stores |
+|---|---|---|
+| `audit_id` | INTEGER PK, FK → `audit_log.id` (`ON DELETE CASCADE`) | The event |
+| `args` | TEXT | Sanitised JSON text of the arguments the agent sent, cut at `AUDIT_PAYLOAD_ARGS_MAX_BYTES` |
+| `args_truncated` | BOOLEAN NOT NULL | The arguments were cut |
+| `args_bytes` | INTEGER | Full size before the cut (UTF-8 bytes) |
+| `result` | TEXT | Sanitised JSON text of the result (`full` only), cut at `AUDIT_PAYLOAD_RESULT_MAX_BYTES` |
+| `result_truncated` | BOOLEAN NOT NULL | The result was cut |
+| `result_bytes` | INTEGER | Full size before the cut (UTF-8 bytes) |
+
+A truncated value is no longer valid JSON. Nothing prunes this table either; it grows
+by up to the two caps per tool call, so size the volume (SQLite shares it with the
+credentials) or prune it yourself. Deleting an `audit_log` row deletes its payload on
+PostgreSQL; SQLite enforces the foreign key only with `PRAGMA foreign_keys=ON`.
 
 ## `oauth_clients`
 

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   fetchAdminActivity,
+  fetchAdminActivityPayload,
   fetchIntegrations,
   UNSTORED_MESSAGE,
   type AdminActivityEvent,
@@ -14,6 +15,7 @@ import { Button } from "../ui/Button";
 import { DataTable } from "../ui/DataTable";
 import { EmptyState } from "../ui/EmptyState";
 import { Input, Select } from "../ui/Input";
+import { Modal } from "../ui/Modal";
 import { Tabs } from "../ui/Tabs";
 import { ADMIN_STALE_MS, CardBody } from "./CardBody";
 
@@ -25,6 +27,7 @@ export default function ActivityCard() {
   const [integration, setIntegration] = useState("all");
   // The box is a draft; the query follows it after a pause, so typing does not
   // refetch on every keystroke.
+  const [open, setOpen] = useState<AdminActivityEvent | null>(null);
   const [emailDraft, setEmailDraft] = useState("");
   const [email, setEmail] = useState("");
   useEffect(() => {
@@ -124,11 +127,26 @@ export default function ActivityCard() {
               return (
                 <tr key={e.id}>
                   <td className="wb-cell-time">{dayLabel(e.created_at)} {timeLabel(e.created_at)}</td>
-                  <td>{e.user_email ?? "—"}</td>
+                  <td>
+                    {e.user_email ?? "—"}
+                    <RequestOrigin event={e} />
+                  </td>
                   <td>{app}</td>
                   <td>
                     <code className="wb-mono">{e.tool ?? "—"}</code>
                     {!e.success && e.error && <div className="wb-cell-error" title={e.error}>{e.error}</div>}
+                    {e.has_payload && (
+                      <div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          aria-label={`View arguments and result of ${e.tool ?? "this call"}`}
+                          onClick={() => setOpen(e)}
+                        >
+                          Details
+                        </Button>
+                      </div>
+                    )}
                   </td>
                   <td>
                     <span className={e.success ? "wb-status-ok" : "wb-status-bad"}>
@@ -142,6 +160,8 @@ export default function ActivityCard() {
         )}
       </CardBody>
 
+      <PayloadModal event={open} onClose={() => setOpen(null)} />
+
       {query.hasNextPage && (
         <div className="wb-load-more">
           <Button variant="outline" onClick={() => query.fetchNextPage()} disabled={query.isFetchingNextPage}>
@@ -150,5 +170,109 @@ export default function ActivityCard() {
         </div>
       )}
     </Box>
+  );
+}
+
+function formatBytes(n: number | null): string {
+  if (n === null) return "";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** Pretty-print when the text is whole JSON; a truncated value is shown as stored. */
+function pretty(text: string, truncated: boolean): string {
+  if (truncated) return text;
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text;
+  }
+}
+
+function PayloadSection({
+  title,
+  text,
+  truncated,
+  bytes,
+}: {
+  title: string;
+  text: string | null;
+  truncated: boolean;
+  bytes: number | null;
+}) {
+  return (
+    <section>
+      <h3>{title}</h3>
+      {text === null ? (
+        <p className="ui-stat-note">Not captured.</p>
+      ) : (
+        <>
+          {truncated && (
+            <p className="ui-stat-note" role="note">
+              Truncated: showing the first part of {formatBytes(bytes)}.
+            </p>
+          )}
+          <pre className="wb-mono" style={{ maxHeight: "40vh", overflow: "auto", whiteSpace: "pre-wrap" }}>
+            {pretty(text, truncated)}
+          </pre>
+        </>
+      )}
+    </section>
+  );
+}
+
+function PayloadModal({ event, onClose }: { event: AdminActivityEvent | null; onClose: () => void }) {
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ["admin", "activity-payload", event?.id],
+    queryFn: () => fetchAdminActivityPayload(event!.id),
+    enabled: event !== null,
+    // Each read is audited server-side; do not refetch behind the admin's back.
+    staleTime: Infinity,
+    retry: false,
+  });
+  return (
+    <Modal open={event !== null} onClose={onClose} title={event?.tool ?? "Tool call"} size="lg">
+      <p className="ui-stat-note">
+        {event?.user_email ?? event?.user_id} · opening this is recorded in the audit log.
+      </p>
+      {event?.user_agent && (
+        <p className="ui-stat-note">
+          User agent: <code className="wb-mono">{event.user_agent}</code>
+        </p>
+      )}
+      {isLoading ? (
+        <p>Loading…</p>
+      ) : isError || !data ? (
+        <p role="alert">Couldn't load the captured arguments and result.</p>
+      ) : (
+        <>
+          <PayloadSection title="Arguments" text={data.args} truncated={data.args_truncated} bytes={data.args_bytes} />
+          <PayloadSection title="Result" text={data.result} truncated={data.result_truncated} bytes={data.result_bytes} />
+        </>
+      )}
+    </Modal>
+  );
+}
+
+const AUTH_LABELS: Record<string, string> = {
+  api_key: "API key",
+  oauth: "OAuth",
+  session: "Portal",
+  curl_token: "Curl token",
+};
+
+/** How and from where the call came: auth method, OAuth client, IP; the user agent on hover. */
+function RequestOrigin({ event: e }: { event: AdminActivityEvent }) {
+  const parts = [
+    e.auth_method ? (AUTH_LABELS[e.auth_method] ?? e.auth_method) + (e.client_name ? `: ${e.client_name}` : "") : null,
+    e.source_ip ?? null,
+  ].filter(Boolean);
+  if (parts.length === 0 && !e.user_agent) return null;
+  return (
+    <div className="ui-stat-note" title={e.user_agent ?? undefined}>
+      {parts.join(" · ") || "—"}
+      {e.user_agent && <span className="ui-sr-only"> · {e.user_agent}</span>}
+    </div>
   );
 }

@@ -63,6 +63,18 @@ const SQLITE_SCHEMA = `
   CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_log(user_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_audit_integration ON audit_log(integration, created_at);
 
+  -- AUDIT_PAYLOAD: captured tool arguments / result, one row per audit_log row
+  -- that has any. Separate so the summary scans never read the wide columns.
+  CREATE TABLE IF NOT EXISTS audit_payload (
+    audit_id INTEGER PRIMARY KEY REFERENCES audit_log(id) ON DELETE CASCADE,
+    args TEXT,
+    args_truncated BOOLEAN NOT NULL DEFAULT FALSE,
+    args_bytes INTEGER,
+    result TEXT,
+    result_truncated BOOLEAN NOT NULL DEFAULT FALSE,
+    result_bytes INTEGER
+  );
+
   CREATE TABLE IF NOT EXISTS oauth_clients (
     client_id TEXT PRIMARY KEY,
     client_name TEXT,
@@ -168,6 +180,18 @@ const POSTGRES_SCHEMA = `
   CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_log(user_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_audit_integration ON audit_log(integration, created_at);
 
+  -- AUDIT_PAYLOAD: captured tool arguments / result, one row per audit_log row
+  -- that has any. Separate so the summary scans never read the wide columns.
+  CREATE TABLE IF NOT EXISTS audit_payload (
+    audit_id INTEGER PRIMARY KEY REFERENCES audit_log(id) ON DELETE CASCADE,
+    args TEXT,
+    args_truncated BOOLEAN NOT NULL DEFAULT FALSE,
+    args_bytes INTEGER,
+    result TEXT,
+    result_truncated BOOLEAN NOT NULL DEFAULT FALSE,
+    result_bytes INTEGER
+  );
+
   CREATE TABLE IF NOT EXISTS oauth_clients (
     client_id TEXT PRIMARY KEY,
     client_name TEXT,
@@ -244,6 +268,12 @@ async function initSqliteSchema(db: DbAdapter): Promise<void> {
     "ALTER TABLE pending_auth ADD COLUMN nonce TEXT",
     "ALTER TABLE users ADD COLUMN disabled_at INTEGER",
     "ALTER TABLE custom_apps ADD COLUMN headers_enc BLOB",
+    "ALTER TABLE audit_log ADD COLUMN user_email TEXT",
+    "ALTER TABLE audit_log ADD COLUMN source_ip TEXT",
+    "ALTER TABLE audit_log ADD COLUMN user_agent TEXT",
+    "ALTER TABLE audit_log ADD COLUMN auth_method TEXT",
+    "ALTER TABLE audit_log ADD COLUMN client_id TEXT",
+    "ALTER TABLE audit_log ADD COLUMN client_name TEXT",
   ]) {
     try {
       await db.exec(stmt);
@@ -282,6 +312,12 @@ async function initPostgresSchema(db: DbAdapter): Promise<void> {
     ALTER TABLE pending_auth ADD COLUMN IF NOT EXISTS nonce TEXT;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled_at INTEGER;
     ALTER TABLE custom_apps ADD COLUMN IF NOT EXISTS headers_enc BYTEA;
+    ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS user_email TEXT;
+    ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS source_ip TEXT;
+    ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS user_agent TEXT;
+    ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS auth_method TEXT;
+    ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS client_id TEXT;
+    ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS client_name TEXT;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_keycloak_sub ON users(keycloak_sub) WHERE keycloak_sub IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_users_api_key_sha ON users(api_key_sha) WHERE api_key_sha IS NOT NULL;
   `);
