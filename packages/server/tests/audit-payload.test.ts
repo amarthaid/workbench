@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { randomBytes } from "node:crypto";
-import { captureValue, isSecretKey, sanitizeForAudit } from "../src/audit/payload";
+import { captureValue, isSecretKey, redactInlineSecrets, sanitizeForAudit } from "../src/audit/payload";
 import { AuditLogger } from "../src/audit/logger";
 import { DbDestination } from "../src/audit/destinations";
 import { resetAuditEmailCache } from "../src/audit/user-email";
@@ -19,6 +19,45 @@ describe("isSecretKey", () => {
     "keeps %s",
     (k) => expect(isSecretKey(k)).toBe(false)
   );
+});
+
+describe("redactInlineSecrets", () => {
+  it.each([
+    ["postgres://app:pw-fake@db.example.com:5432/main", "postgres://app:[REDACTED]@db.example.com:5432/main"],
+    ["mysql://root:p@ss:w0rd@db.example.com/x", "mysql://root:[REDACTED]@db.example.com/x"],
+    ["redis://:pw-fake@cache.example.com:6379", "redis://:[REDACTED]@cache.example.com:6379"],
+    ["amqp://user:pw-fake@mq.example.com", "amqp://user:[REDACTED]@mq.example.com"],
+    ["https://x-access-token:tok-abc@github.com/acme/demo-repo.git", "https://x-access-token:[REDACTED]@github.com/acme/demo-repo.git"],
+    ["https://tok-abcdefghijklmnop@github.com/acme/demo-repo", "https://[REDACTED]@github.com/acme/demo-repo"],
+    ["connect to mongodb+srv://u:pw-fake@cluster0.example.com/db?retryWrites=true now", "connect to mongodb+srv://u:[REDACTED]@cluster0.example.com/db?retryWrites=true now"],
+    ["a: postgres://a:x1@h1/d, b: postgres://b:x2@h2/d", "a: postgres://a:[REDACTED]@h1/d, b: postgres://b:[REDACTED]@h2/d"],
+    ["https://api.example.com/v1/items?page=2&api_key=gsecret&q=hi", "https://api.example.com/v1/items?page=2&api_key=[REDACTED]&q=hi"],
+    ["https://api.example.com/cb?access_token=tok-abc", "https://api.example.com/cb?access_token=[REDACTED]"],
+    ["grant_type=password&username=u&password=pw-fake", "grant_type=password&username=u&password=[REDACTED]"],
+    ["curl -H 'Authorization: Bearer tok-abcdefgh' https://x", "curl -H 'Authorization: Bearer [REDACTED]' https://x"],
+    ["Authorization: Basic dXNlcjpwYXNz", "Authorization: Basic [REDACTED]"],
+  ])("%s", (input, want) => {
+    expect(redactInlineSecrets(input)).toBe(want);
+  });
+
+  it.each([
+    "mail dev@example.com about it",
+    "ssh://git@github.com/acme/demo-repo.git",
+    "git@github.com:acme/demo-repo.git",
+    "https://example.com/users/@acme/profile",
+    "https://example.com/search?q=token&page=2",
+    "https://example.com/path?sort=desc",
+    "The Bearer of bad news",
+    "short",
+  ])("leaves %s alone", (input) => {
+    expect(redactInlineSecrets(input)).toBe(input);
+  });
+
+  it("applies to every string in arguments and results, at any depth", () => {
+    expect(
+      sanitizeForAudit({ steps: [{ url: "postgres://app:pw-fake@db.example.com/main" }], note: "use ?token=tok-abc" })
+    ).toEqual({ steps: [{ url: "postgres://app:[REDACTED]@db.example.com/main" }], note: "use ?token=[REDACTED]" });
+  });
 });
 
 describe("sanitizeForAudit", () => {
@@ -170,6 +209,16 @@ describe("AuditLogger with AUDIT_PAYLOAD", () => {
     expect(seen[0]).not.toHaveProperty("client_id");
     expect(seen[1]).toMatchObject({ client_id: "gone" });
     expect(seen[1]).not.toHaveProperty("client_name");
+  });
+
+  it("redacts URL credentials in the error text too", async () => {
+    await logger().log({
+      user_id: "u1",
+      action: "EXECUTE",
+      success: false,
+      error: "connect ECONNREFUSED postgres://app:pw-fake@db.example.com:5432/main",
+    });
+    expect(seen[0].error).toBe("connect ECONNREFUSED postgres://app:[REDACTED]@db.example.com:5432/main");
   });
 
   it("outside a request (background work) none of the request fields are set", async () => {

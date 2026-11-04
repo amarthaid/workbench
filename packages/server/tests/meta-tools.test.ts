@@ -300,6 +300,18 @@ describe("meta-tools", () => {
       expect(JSON.stringify(line)).not.toMatch(/arg-xyz|res-xyz/);
     });
 
+    it("the failure log line redacts credentials quoted in the error", async () => {
+      const { executeSingle } = await import("../src/mcp/meta-tools");
+      const t = { ...mockTool, inputSchema: { safeParse: (a: unknown) => ({ success: true, data: a }) }, handler: vi.fn(async () => { throw new Error("cannot reach postgres://app:pw-fake@db.example.com/main"); }) };
+      vi.spyOn(registry, "getTool").mockReturnValue(t as any);
+      const lines: string[] = [];
+      const spy = vi.spyOn(console, "log").mockImplementation((m: unknown) => void lines.push(String(m)));
+      await executeSingle("user-1", "test_tool", {});
+      spy.mockRestore();
+      const line = lines.map((l) => { try { return JSON.parse(l); } catch { return null; } }).find((l) => l?.msg === "tool execute failed");
+      expect(line.error).toBe("cannot reach postgres://app:[REDACTED]@db.example.com/main");
+    });
+
     it("never passes the vault tools' arguments", async () => {
       const { executeSingle } = await import("../src/mcp/meta-tools");
       const t = { ...mockTool, name: "vault_set", inputSchema: { safeParse: (a: unknown) => ({ success: true, data: a }) }, handler: vi.fn(async () => ({ ok: true })) };

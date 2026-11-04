@@ -7,8 +7,10 @@
 //   vault-scrubbed result the agent was given.
 // - Any object key that names a credential (password, secret, token, api key,
 //   authorization, cookie, private key …) has its value replaced with
-//   "[REDACTED]", at any depth. A secret the agent typed into an ordinary
-//   field is NOT caught: the audit log holds what the agent sent.
+//   "[REDACTED]", at any depth. Inside every string, credentials in URLs
+//   (`scheme://user:password@host`), credential-named query parameters and
+//   inline `Bearer` / `Basic` values are redacted too (redactInlineSecrets).
+//   Any other secret the agent typed into an ordinary field is NOT caught.
 // - Binary data (Buffer / typed arrays), `data:` URIs and long base64 runs
 //   (screenshots, file contents) become "[binary N bytes]".
 // - The JSON text is cut at AUDIT_PAYLOAD_ARGS_MAX_BYTES (arguments) or
@@ -72,6 +74,49 @@ function binaryNote(bytes: number): string {
   return `[binary ${bytes} bytes]`;
 }
 
+// A credential inside a string, not under a credential-named key: the key
+// check cannot see these.
+//
+// - URL userinfo, `scheme://user:password@host`: the password goes, the user
+//   stays. The userinfo runs to the LAST `@` before the host's path, so a raw
+//   `@` inside a password (`u:p@ss@host`) is covered too. A userinfo with no
+//   colon is a token when it is long (`https://<token>@github.com`) and is
+//   redacted whole; a short one (`ssh://git@host`) is a user name and stays.
+// - A query / form parameter whose name names a credential (`?api_key=…`,
+//   `&access_token=…`), by the same word rule as object keys.
+// - An inline `Bearer <token>` / `Basic <credentials>`.
+const URL_USERINFO = /\b([a-z][a-z0-9+.-]*:\/\/)([^\s/?#"'<>]+)@(?=[^\s@/?#"'<>]*[^\s@])/gi;
+const QUERY_PARAM = /([?&;])([^=&#\s"'<>]+)=([^&#\s"'<>]*)/g;
+const AUTH_SCHEME = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/g;
+const TOKEN_USERINFO_MIN = 16;
+export const REDACTED = "[REDACTED]";
+
+/** `s` with credentials embedded in URLs, query strings and auth headers redacted. */
+export function redactInlineSecrets(s: string): string {
+  if (s.length < 8) return s;
+  let out = s;
+  if (out.includes("://")) {
+    out = out.replace(URL_USERINFO, (_m, scheme: string, info: string) => {
+      const colon = info.indexOf(":");
+      if (colon >= 0) return `${scheme}${info.slice(0, colon)}:${REDACTED}@`;
+      return info.length >= TOKEN_USERINFO_MIN ? `${scheme}${REDACTED}@` : `${scheme}${info}@`;
+    });
+  }
+  if (out.includes("=")) {
+    out = out.replace(QUERY_PARAM, (m, sep: string, name: string, value: string) => {
+      let key = name;
+      try {
+        key = decodeURIComponent(name);
+      } catch {
+        // keep the raw name
+      }
+      return value && isSecretKey(key) ? `${sep}${name}=${REDACTED}` : m;
+    });
+  }
+  if (/Bearer|Basic/.test(out)) out = out.replace(AUTH_SCHEME, (_m, scheme: string) => `${scheme} ${REDACTED}`);
+  return out;
+}
+
 /** A JSON-safe copy with credentials redacted and binary blobs replaced. Never throws. */
 export function sanitizeForAudit(value: unknown): unknown {
   const seen = new WeakSet<object>();
@@ -88,7 +133,7 @@ export function sanitizeForAudit(value: unknown): unknown {
           return binaryNote(base64Bytes(compact));
         }
       }
-      return v;
+      return redactInlineSecrets(v);
     }
     if (typeof v === "number" || typeof v === "boolean") return v;
     if (typeof v === "bigint") return v.toString();
@@ -104,7 +149,7 @@ export function sanitizeForAudit(value: unknown): unknown {
     const out: Record<string, unknown> = {};
     for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
       if (isSecretKey(k) && x !== null && x !== undefined && x !== "") {
-        out[k] = "[REDACTED]";
+        out[k] = REDACTED;
         continue;
       }
       const w = walk(x, depth + 1);
