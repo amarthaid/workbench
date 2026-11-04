@@ -148,6 +148,7 @@ error** that crashes the boot, not a falsy value.
 | Variable | Type / validation | Default | Required | Purpose |
 |---|---|---|---|---|
 | `AUDIT_LOG_DEST` | comma-separated `db` \| `sqlite` \| `stdout` \| `kafka` | `db` | no | Where audit events go. `kafka` is a copy and always implies `db` |
+| `TRUST_PROXY` | `true` \| hop count \| comma-separated IPs / CIDRs | unset (trust none) | no | Proxies whose `X-Forwarded-For` is believed, so the audit log's `source_ip` (and the request log's `remoteAddress`) is the client, not the load balancer. Use `true` only when nothing can reach the server except through your proxy |
 | `AUDIT_PAYLOAD` | `off` \| `args` \| `full` | `off` | no | Record tool-call arguments (`args`) or arguments and result (`full`) in the audit log |
 | `AUDIT_PAYLOAD_ARGS_MAX_BYTES` | integer 256–262144 | `8192` | no | Cap on recorded arguments (UTF-8 bytes of JSON); longer values are cut and flagged `args_truncated` |
 | `AUDIT_PAYLOAD_RESULT_MAX_BYTES` | integer 256–262144 | `8192` | no | Cap on recorded results; longer values are cut and flagged `result_truncated` |

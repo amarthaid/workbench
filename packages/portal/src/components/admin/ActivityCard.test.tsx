@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderWithClient } from "../../test-utils";
 import ActivityCard from "./ActivityCard";
 
@@ -134,5 +134,31 @@ describe("ActivityCard captured payload", () => {
     expect(dialog).toHaveTextContent('{"body":"abc');
     expect(dialog).toHaveTextContent(/recorded in the audit log/);
     expect(api.fetchAdminActivityPayload).toHaveBeenCalledWith(1);
+  });
+});
+
+describe("ActivityCard request origin", () => {
+  it("shows auth method, OAuth client and IP under the user, with the user agent on hover", async () => {
+    api.fetchAdminActivity.mockResolvedValue({
+      stored: true,
+      events: [
+        ev(1, {
+          tool: "via_oauth",
+          auth_method: "oauth",
+          client_name: "Claude Code",
+          source_ip: "203.0.113.9",
+          user_agent: "claude-code/2.0",
+        }),
+        ev(2, { tool: "via_key", auth_method: "api_key", source_ip: "198.51.100.1" }),
+        ev(3, { tool: "background" }),
+      ],
+      next_cursor: null,
+    });
+    renderWithClient(<ActivityCard />);
+    const oauthRow = (await screen.findByText("via_oauth")).closest("tr")!;
+    const origin = within(oauthRow).getByText(/OAuth: Claude Code · 203\.0\.113\.9/);
+    expect(origin).toHaveAttribute("title", "claude-code/2.0");
+    expect(screen.getByText("via_key").closest("tr")).toHaveTextContent("API key · 198.51.100.1");
+    expect(screen.getByText("background").closest("tr")!.querySelector(".ui-stat-note")).toBeNull();
   });
 });

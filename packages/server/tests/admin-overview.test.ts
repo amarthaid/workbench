@@ -41,6 +41,7 @@ vi.mock("../src/auth/profile-chromium", () => ({
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { installAuditContext } from "../src/audit/context";
 import { registerAdminRoutes } from "../src/api/admin-routes";
 import { config } from "../src/config";
 import { db } from "../src/db";
@@ -50,6 +51,7 @@ const DEV = { authorization: "Bearer dev-jwt" };
 
 async function get(url: string, headers: Record<string, string> = ADMIN) {
   const app = Fastify();
+  installAuditContext(app); // as the real boot does
   await registerAdminRoutes(app);
   return app.inject({ method: "GET", url, headers });
 }
@@ -202,6 +204,35 @@ describe("GET /api/admin/overview/activity", () => {
     expect(body.events[0].user_email).toBe("gone@example.com");
     const filtered = JSON.parse((await get("/api/admin/overview/activity?email=gone@example.com")).body);
     expect(filtered.events).toHaveLength(1);
+  });
+
+  it("returns each event's source IP, user agent, auth method and client", async () => {
+    await db.run(
+      "INSERT INTO audit_log (user_id, action, success, created_at, source_ip, user_agent, auth_method, client_id, client_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      ["user-dev", "EXECUTE", true, NOW, "203.0.113.9", "claude-code/2.0", "oauth", "client-abc", "Claude Code"]
+    );
+    const body = JSON.parse((await get("/api/admin/overview/activity")).body);
+    expect(body.events[0]).toMatchObject({
+      source_ip: "203.0.113.9",
+      user_agent: "claude-code/2.0",
+      auth_method: "oauth",
+      client_id: "client-abc",
+      client_name: "Claude Code",
+    });
+  });
+
+  it("records the admin's own reads with auth method session", async () => {
+    await seedUser("user-admin", "admin@example.com");
+    await db.run("INSERT INTO audit_log (user_id, tool, action, success, created_at) VALUES (?, ?, ?, ?, ?)", [
+      "user-dev", "p", "EXECUTE", true, NOW,
+    ]);
+    const id = (await db.get<{ id: number }>("SELECT id FROM audit_log WHERE tool = ?", ["p"]))!.id;
+    await db.run("INSERT INTO audit_payload (audit_id, args) VALUES (?, ?)", [id, "{}"]);
+    await get(`/api/admin/overview/activity/${id}/payload`);
+    const view = await db.get<{ auth_method: string }>(
+      "SELECT auth_method FROM audit_log WHERE action = 'ADMIN_AUDIT_PAYLOAD_VIEW'"
+    );
+    expect(view?.auth_method).toBe("session");
   });
 
   it("flags events that have captured arguments / result", async () => {

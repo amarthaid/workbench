@@ -129,3 +129,23 @@ describe("curlFailureReason", () => {
     expect(curlFailureReason(err)).toBe(want);
   });
 });
+
+describe("curl proxy audit context", () => {
+  it("records curl_token, the caller's user agent and IP for proxied requests", async () => {
+    const { installAuditContext, currentAuditContext } = await import("../src/audit/context");
+    let seenCtx: unknown;
+    vi.mocked(auditLogger.log).mockImplementation(async () => {
+      seenCtx = { ...currentAuditContext() };
+    });
+    http.mockResolvedValue(new Response("ok", { status: 200 }));
+    const app = Fastify();
+    installAuditContext(app);
+    await registerCurlProxy(app);
+    await app.inject({
+      method: "GET",
+      url: "/c/acme/x",
+      headers: { authorization: "Bearer curl-jwt", "user-agent": "curl/8.5.0" },
+    });
+    expect(seenCtx).toEqual({ source_ip: "127.0.0.1", user_agent: "curl/8.5.0", auth_method: "curl_token", client_id: undefined });
+  });
+});

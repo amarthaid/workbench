@@ -3,6 +3,8 @@ import { captureValue, isSecretKey, sanitizeForAudit } from "../src/audit/payloa
 import { AuditLogger } from "../src/audit/logger";
 import { DbDestination } from "../src/audit/destinations";
 import { resetAuditEmailCache } from "../src/audit/user-email";
+import { resetClientNameCache } from "../src/audit/client-name";
+import { runWithAuditContext } from "../src/audit/context";
 import { getAuditPayload } from "../src/audit/query";
 import { config } from "../src/config";
 import { db } from "../src/db";
@@ -95,6 +97,8 @@ describe("AuditLogger with AUDIT_PAYLOAD", () => {
   beforeEach(async () => {
     seen = [];
     resetAuditEmailCache();
+    resetClientNameCache();
+    await db.exec("DELETE FROM oauth_clients");
     await db.exec("DELETE FROM audit_payload");
     await db.exec("DELETE FROM audit_log");
     await db.exec("DELETE FROM users");
@@ -111,6 +115,54 @@ describe("AuditLogger with AUDIT_PAYLOAD", () => {
     await logger().log({ user_id: "ghost", action: "EXECUTE", success: true });
     expect(seen[0].user_email).toBe("dev@example.com");
     expect(seen[1].user_email).toBeNull();
+  });
+
+  it("adds the request's IP, user agent, auth method and OAuth client name", async () => {
+    await db.run("INSERT INTO oauth_clients (client_id, client_name, redirect_uris) VALUES (?, ?, ?)", [
+      "client-abc", "Claude Code", "[]",
+    ]);
+    await runWithAuditContext(
+      { source_ip: "203.0.113.9", user_agent: "claude-code/2.0", auth_method: "oauth", client_id: "client-abc" },
+      () => logger().log({ user_id: "u1", action: "EXECUTE", success: true })
+    );
+    expect(seen[0]).toMatchObject({
+      source_ip: "203.0.113.9",
+      user_agent: "claude-code/2.0",
+      auth_method: "oauth",
+      client_id: "client-abc",
+      client_name: "Claude Code",
+    });
+  });
+
+  it("an API key has no client; an unknown client id has no name", async () => {
+    await runWithAuditContext({ source_ip: "198.51.100.1", auth_method: "api_key" }, () =>
+      logger().log({ user_id: "u1", action: "EXECUTE", success: true })
+    );
+    await runWithAuditContext({ auth_method: "oauth", client_id: "gone" }, () =>
+      logger().log({ user_id: "u1", action: "EXECUTE", success: true })
+    );
+    expect(seen[0]).toMatchObject({ source_ip: "198.51.100.1", auth_method: "api_key" });
+    expect(seen[0]).not.toHaveProperty("client_id");
+    expect(seen[1]).toMatchObject({ client_id: "gone" });
+    expect(seen[1]).not.toHaveProperty("client_name");
+  });
+
+  it("outside a request (background work) none of the request fields are set", async () => {
+    await logger().log({ user_id: "u1", action: "REFRESH", success: true });
+    for (const k of ["source_ip", "user_agent", "auth_method", "client_id", "client_name"]) {
+      expect(seen[0]).not.toHaveProperty(k);
+    }
+  });
+
+  it("the database row stores the request fields", async () => {
+    const l = new AuditLogger();
+    (l as any).destination = new DbDestination();
+    await runWithAuditContext({ source_ip: "203.0.113.9", user_agent: "ua/1", auth_method: "api_key" }, () =>
+      l.log({ user_id: "u1", action: "EXECUTE", success: true })
+    );
+    expect(
+      await db.get("SELECT source_ip, user_agent, auth_method, client_id, client_name FROM audit_log")
+    ).toEqual({ source_ip: "203.0.113.9", user_agent: "ua/1", auth_method: "api_key", client_id: null, client_name: null });
   });
 
   it("off (default): no args or result, whatever the caller passed", async () => {

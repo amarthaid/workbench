@@ -177,6 +177,11 @@ Every tool execution, success or failure, plus curl sessions and admin changes.
 | `id` | INTEGER PK | autoincrement / serial |
 | `user_id` | TEXT NOT NULL | Who ran it |
 | `user_email` | TEXT | The user's email when the event was written (cached up to 5 min); shown when the user row is gone |
+| `source_ip` | TEXT | Client address (`request.ip`; behind a proxy, only with `TRUST_PROXY`) |
+| `user_agent` | TEXT | `User-Agent` header, first 512 chars |
+| `auth_method` | TEXT | `api_key`, `oauth`, `session` (portal) or `curl_token` |
+| `client_id` | TEXT | OAuth client, for `oauth` |
+| `client_name` | TEXT | That client's registered name (self-declared at dynamic registration) |
 | `integration` | TEXT | Owning plugin |
 | `tool` | TEXT | Tool name |
 | `action` | TEXT NOT NULL | `EXECUTE` for tool runs; also `CURL_SESSION`, `CURL_REQUEST`, `ADMIN_*` |
@@ -198,8 +203,10 @@ Nothing prunes this table. Plan retention yourself.
 
 Captured tool-call arguments and results, written only when `AUDIT_PAYLOAD` is `args`
 or `full` (see [Audit log](../deploy/observability.md#audit-log)). One row per
-`audit_log` row that has any; kept apart so the Activity and Overview scans never read
-the wide columns.
+`audit_log` row that has any. Kept apart so the Activity and Overview scans never read
+the wide columns (SQLite stores a large value inside the row, so it would slow every
+scan), so old payloads can be deleted on their own while the summary rows stay, and so
+only the audited admin endpoint reads them.
 
 | Column | Type | Stores |
 |---|---|---|

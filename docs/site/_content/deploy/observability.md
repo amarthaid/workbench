@@ -114,6 +114,22 @@ The admin Activity and Overview tabs read the database, so they work whenever
 PostgreSQL rejects `1`/`0` for `BOOLEAN`. `created_at` is unix seconds. Two
 indexes support querying: `(user_id, created_at)` and `(integration, created_at)`.
 
+### Request origin
+
+Every event written while handling a request also records where it came from and how
+it authenticated, when known:
+
+| Field | Value |
+|---|---|
+| `source_ip` | The client address. Behind a load balancer this is the balancer unless `TRUST_PROXY` trusts it (then `X-Forwarded-For`). With `INTERNAL_MCP_URL`, include the pod range so a call forwarded between replicas keeps the caller's address |
+| `user_agent` | The `User-Agent` header, first 512 characters |
+| `auth_method` | `api_key` (`x-workbench-api-key`), `oauth` (OAuth access token), `session` (portal sign-in, including every admin action) or `curl_token` (the curl proxy) |
+| `client_id`, `client_name` | The OAuth client, for `oauth`. The name is the one the client gave at dynamic registration, so it is self-declared, not verified |
+
+Events written outside a request (background token refreshes and reconnects) carry
+none of these. The MCP `initialize` `clientInfo` is not recorded: `/mcp` is stateless,
+so it is not known on later calls; the `User-Agent` usually names the client instead.
+
 ### Arguments and results (`AUDIT_PAYLOAD`)
 
 Off by default. `AUDIT_PAYLOAD=args` records the arguments of every tool call
@@ -168,7 +184,8 @@ The server refuses to start when `kafka` is listed and no broker is set.
   `event_id` to de-duplicate on.
 - **Message shape.** Key: `user_id` (one user's events stay ordered within a
   partition). Value: the event as JSON, the same as the `stdout` line (including
-  `user_email` and, with `AUDIT_PAYLOAD`, the captured arguments and result), plus
+  `user_email`, the request origin fields, and, with `AUDIT_PAYLOAD`, the captured
+  arguments and result), plus
   `event_id`. The topic is not auto-created; create it first.
 - **Metrics:** `workbench_audit_kafka_sent_total`,
   `workbench_audit_kafka_dropped_total`, `workbench_audit_kafka_send_errors_total`

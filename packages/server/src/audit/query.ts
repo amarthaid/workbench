@@ -135,6 +135,12 @@ export interface AdminAuditEventRow extends AuditEventRow {
   user_email: string | null;
   /** Arguments / result were captured for this event (AUDIT_PAYLOAD). */
   has_payload: boolean;
+  /** Request origin and credential, when the event came from a request. */
+  source_ip: string | null;
+  user_agent: string | null;
+  auth_method: string | null;
+  client_id: string | null;
+  client_name: string | null;
 }
 
 export interface AuditPayload {
@@ -204,6 +210,7 @@ export async function listAllAuditEvents(o: ListAllAuditOptions): Promise<AdminA
   const rows = await db.all<Record<string, unknown>>(
     `SELECT a.id, a.user_id, COALESCE(u.email, a.user_email) AS user_email, a.integration, a.tool, a.action,
             a.success, a.error, a.duration_ms, a.created_at,
+            a.source_ip, a.user_agent, a.auth_method, a.client_id, a.client_name,
             CASE WHEN p.audit_id IS NULL THEN 0 ELSE 1 END AS has_payload
        FROM audit_log a
        LEFT JOIN users u ON u.id = a.user_id
@@ -218,5 +225,10 @@ export async function listAllAuditEvents(o: ListAllAuditOptions): Promise<AdminA
     user_id: String(r.user_id),
     user_email: (r.user_email as string | null) ?? null,
     has_payload: Number(r.has_payload) === 1,
+    source_ip: (r.source_ip as string | null) ?? null,
+    user_agent: (r.user_agent as string | null) ?? null,
+    auth_method: (r.auth_method as string | null) ?? null,
+    client_id: (r.client_id as string | null) ?? null,
+    client_name: (r.client_name as string | null) ?? null,
   }));
 }

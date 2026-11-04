@@ -127,7 +127,10 @@ export default function ActivityCard() {
               return (
                 <tr key={e.id}>
                   <td className="wb-cell-time">{dayLabel(e.created_at)} {timeLabel(e.created_at)}</td>
-                  <td>{e.user_email ?? "—"}</td>
+                  <td>
+                    {e.user_email ?? "—"}
+                    <RequestOrigin event={e} />
+                  </td>
                   <td>{app}</td>
                   <td>
                     <code className="wb-mono">{e.tool ?? "—"}</code>
@@ -233,6 +236,11 @@ function PayloadModal({ event, onClose }: { event: AdminActivityEvent | null; on
       <p className="ui-stat-note">
         {event?.user_email ?? event?.user_id} · opening this is recorded in the audit log.
       </p>
+      {event?.user_agent && (
+        <p className="ui-stat-note">
+          User agent: <code className="wb-mono">{event.user_agent}</code>
+        </p>
+      )}
       {isLoading ? (
         <p>Loading…</p>
       ) : isError || !data ? (
@@ -244,5 +252,27 @@ function PayloadModal({ event, onClose }: { event: AdminActivityEvent | null; on
         </>
       )}
     </Modal>
+  );
+}
+
+const AUTH_LABELS: Record<string, string> = {
+  api_key: "API key",
+  oauth: "OAuth",
+  session: "Portal",
+  curl_token: "Curl token",
+};
+
+/** How and from where the call came: auth method, OAuth client, IP; the user agent on hover. */
+function RequestOrigin({ event: e }: { event: AdminActivityEvent }) {
+  const parts = [
+    e.auth_method ? (AUTH_LABELS[e.auth_method] ?? e.auth_method) + (e.client_name ? `: ${e.client_name}` : "") : null,
+    e.source_ip ?? null,
+  ].filter(Boolean);
+  if (parts.length === 0 && !e.user_agent) return null;
+  return (
+    <div className="ui-stat-note" title={e.user_agent ?? undefined}>
+      {parts.join(" · ") || "—"}
+      {e.user_agent && <span className="ui-sr-only"> · {e.user_agent}</span>}
+    </div>
   );
 }

@@ -174,6 +174,14 @@ export interface AuditEvent {
   error?: string;
   /** The user's email when the event was written (null if unknown). */
   user_email?: string | null;
+  /** Request origin, when the event came from a request (see server src/audit/context.ts). */
+  source_ip?: string;
+  user_agent?: string;
+  /** How the request authenticated: api_key, oauth, session (portal) or curl_token. */
+  auth_method?: string;
+  /** OAuth client, for auth_method "oauth". The name is self-declared at registration. */
+  client_id?: string;
+  client_name?: string;
   /** AUDIT_PAYLOAD: sanitised JSON text of the arguments the agent sent, capped. */
   args?: string;
   args_truncated?: boolean;

@@ -36,6 +36,28 @@ Off by default. Every event also carries `user_email` now.
   stored on the row; the admin view shows the current email and falls back to
   the stored one when the user row is gone.
 
+## Request origin
+
+Every event written during a request also records `source_ip`, `user_agent`,
+`auth_method` (`api_key` / `oauth` / `session` / `curl_token`), and the OAuth
+`client_id` + registered `client_name`.
+
+- An `onRoute` hook at the app root (`installAuditContext`, registered before
+  any route) wraps every handler in an AsyncLocalStorage store built from its
+  request, so no route can be missed and no audit call site changed. The
+  credential checks (`resolveMcpUser`, `authenticatePortal`, the curl proxy)
+  call `noteAuth()` when they succeed. The admin gate runs in a `preHandler`,
+  *before* the handler's store exists, so it records on a request-keyed
+  WeakMap that the store reads when it is created.
+- `source_ip` is `request.ip`: behind a load balancer it is the balancer unless
+  `TRUST_PROXY` trusts it. Trusting `X-Forwarded-For` by default would let any
+  client write its own address into the audit log. Fastify's types take no
+  hop count, so a number becomes `(addr, i) => i < n`. The browser-affinity
+  forward between replicas now passes `User-Agent` and `X-Forwarded-For`, which
+  the owning replica believes only if `TRUST_PROXY` includes the pod range.
+- `client_name` is what the client sent at dynamic registration: self-declared.
+  MCP `initialize` `clientInfo` is not recorded because `/mcp` is stateless.
+
 ## Not done
 
 - Retention: nothing prunes `audit_log` or `audit_payload` (out of scope).

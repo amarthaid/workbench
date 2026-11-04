@@ -171,6 +171,23 @@ export const configSchema = z.object({
   // Set to the k8s ClusterIP service URL, e.g. http://a-workbench/mcp.
   // Leave unset for single-replica or local-dev deployments.
   INTERNAL_MCP_URL: z.string().url().optional(),
+  // Which proxies in front of the server to trust for X-Forwarded-For, so
+  // request.ip (the audit log's source_ip, the request log's remoteAddress)
+  // is the client and not the load balancer. Unset = trust none (the direct
+  // peer is the address). "true" = trust every hop (only when nothing can
+  // reach the server except through your proxy); a number = that many hops;
+  // otherwise a comma-separated list of proxy IPs / CIDRs (include the pod
+  // range when INTERNAL_MCP_URL forwards between replicas).
+  TRUST_PROXY: z
+    .string()
+    .optional()
+    .transform((v): boolean | number | string[] | undefined => {
+      const s = v?.trim();
+      if (!s || s === "false") return undefined;
+      if (s === "true") return true;
+      if (/^\d+$/.test(s)) return Number(s);
+      return s.split(",").map((x) => x.trim()).filter(Boolean);
+    }),
 });
 
 export const config = configSchema.parse(process.env);

@@ -57,7 +57,7 @@ Protected routes answer 401 `{ "error": "Unauthorized" }`.
 | GET | `/api/auth/keycloak/callback` | provider redirect | query `code`, `state`, `error` | 302 to `PORTAL_URL#token=<sessionJWT>` | 400 |
 | GET | `/api/auth/me` | session or api-key | — | `{ id, email, isAdmin, canCreateCustomApps }` | 401, 404 |
 | GET | `/api/admin/overview/instance` | session only, admin | — | `{ version, db_backend, cluster_enabled, audit_log_dest, audit_stored, user_count, admin_count }` | 401, 403 |
-| GET | `/api/admin/overview/activity` | session only, admin | query `limit`, `cursor`, `integration`, `status`, `email` | `{ stored, events[], next_cursor }`; each event carries `user_id`, `user_email`, `has_payload` | 400, 401, 403 |
+| GET | `/api/admin/overview/activity` | session only, admin | query `limit`, `cursor`, `integration`, `status`, `email` | `{ stored, events[], next_cursor }`; each event carries `user_id`, `user_email`, `has_payload`, `source_ip`, `user_agent`, `auth_method`, `client_id`, `client_name` | 400, 401, 403 |
 | GET | `/api/admin/overview/activity/:id/payload` | session only, admin | — | `{ audit_id, args, args_truncated, args_bytes, result, result_truncated, result_bytes }`; each read writes an `ADMIN_AUDIT_PAYLOAD_VIEW` audit event | 400 `invalid_id`, 401, 403, 404 `not_found` |
 | GET | `/api/admin/overview/connections` | session only, admin | — | `{ integrations: [{ integration, connected, needs_reconnect }] }` | 401, 403 |
 | GET | `/api/admin/overview/custom-apps` | session only, admin | — | `{ apps[], total }` | 401, 403 |

@@ -774,6 +774,12 @@ export interface AdminActivityEvent extends ActivityEvent {
   user_email: string | null;
   /** Arguments / result were captured for this event (AUDIT_PAYLOAD). */
   has_payload?: boolean;
+  /** Request origin and credential; null for events not tied to a request. */
+  source_ip?: string | null;
+  user_agent?: string | null;
+  auth_method?: string | null;
+  client_id?: string | null;
+  client_name?: string | null;
 }
 
 export interface AdminAuditPayload {

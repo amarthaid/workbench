@@ -2,6 +2,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { config } from "../config";
 import { resolveMcpUser } from "./oauth-server/resolve";
 import { verifySession } from "./session";
+import { noteAuth } from "../audit/context";
 
 // Portal-session-only authentication, narrower than an agent credential.
 //
@@ -24,7 +25,10 @@ export async function authenticatePortal(
   if (token) {
     try {
       const { userId } = await verifySession(token);
-      if (userId) return userId;
+      if (userId) {
+        noteAuth("session");
+        return userId;
+      }
     } catch {
       // Not a portal session. It may still be an agent credential - ask.
     }
