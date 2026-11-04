@@ -207,7 +207,7 @@ describe("PUT /api/admin/config/browser-blocked-domains", () => {
     const view = JSON.parse((await call("GET", "/api/admin/config")).body);
     expect(view.browser_blocked_domains).toEqual(["*.alpha.example", "zeta.example"]);
     const audit = await db.all<{ action: string; tool: string }>("SELECT action, tool FROM audit_log");
-    expect(audit).toEqual([{ action: "ADMIN_BROWSER_BLOCKLIST", tool: "admin.config.browser-blocklist count=2" }]);
+    expect(audit).toEqual([{ action: "ADMIN_BROWSER_BLOCKLIST", tool: "admin.config.browser-blocklist count=2 allowed=0" }]);
   });
 
   it("an empty list clears it", async () => {
@@ -238,4 +238,48 @@ describe("PUT /api/admin/config/browser-blocked-domains", () => {
     await loadSettings();
     expect(getSettings().browser_blocked_domains).toEqual(["good.example"]);
   });
+});
+
+describe("PUT /api/admin/config/browser-blocked-domains with allow exceptions", () => {
+  const URL = "/api/admin/config/browser-blocked-domains";
+
+  it("saves both lists, normalised, and shows them in the view", async () => {
+    const res = await call("PUT", URL, {
+      domains: ["*.prod.example.com"],
+      allowed: ["Z.prod.example.com", "https://x.prod.example.com/path"],
+    });
+    expect(res.statusCode).toBe(200);
+    expect(getSettings().browser_blocked_domains).toEqual(["*.prod.example.com"]);
+    expect(getSettings().browser_allowed_domains).toEqual(["x.prod.example.com", "z.prod.example.com"]);
+    const view = JSON.parse((await call("GET", "/api/admin/config")).body);
+    expect(view.browser_allowed_domains).toEqual(["x.prod.example.com", "z.prod.example.com"]);
+    const audit = await db.all<{ tool: string }>("SELECT tool FROM audit_log");
+    expect(audit).toEqual([{ tool: "admin.config.browser-blocklist count=1 allowed=2" }]);
+  });
+
+  it("omitting allowed leaves the stored exceptions alone", async () => {
+    await call("PUT", URL, { domains: ["*.prod.example.com"], allowed: ["x.prod.example.com"] });
+    await call("PUT", URL, { domains: ["*.prod.example.com", "other.example"] });
+    expect(getSettings().browser_allowed_domains).toEqual(["x.prod.example.com"]);
+  });
+
+  it("an empty allowed list clears the exceptions", async () => {
+    await call("PUT", URL, { domains: [], allowed: ["x.prod.example.com"] });
+    await call("PUT", URL, { domains: [], allowed: [] });
+    expect(getSettings().browser_allowed_domains).toEqual([]);
+  });
+
+  it("an invalid allow entry rejects the whole save", async () => {
+    const res = await call("PUT", URL, { domains: ["ok.example"], allowed: ["not a domain"] });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body)).toEqual({ error: "invalid_domains", invalid: ["not a domain"] });
+    expect(await db.all("SELECT 1 FROM instance_settings")).toHaveLength(0);
+  });
+
+  it.each([[{ domains: [], allowed: "x.example" }], [{ domains: [], allowed: [1] }]])(
+    "400 invalid_body for %j",
+    async (body) => {
+      expect(JSON.parse((await call("PUT", URL, body)).body).error).toBe("invalid_body");
+    }
+  );
 });

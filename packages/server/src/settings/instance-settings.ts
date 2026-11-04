@@ -1,6 +1,6 @@
 import { config } from "../config";
 import { db } from "../db";
-import { hostMatchesBlocklist, normaliseBlockedDomain } from "./browser-blocklist";
+import { isHostBlockedBy, normaliseBlockedDomain } from "./browser-blocklist";
 
 export type CustomAppsMode = "all" | "none" | "allowlist";
 
@@ -14,12 +14,15 @@ export interface InstanceSettings {
   custom_apps_policy: CustomAppsPolicy;
   /** Hosts agent browser tabs may not load (each also blocks its subdomains). */
   browser_blocked_domains: string[];
+  /** Exceptions to the blocklist: the more specific entry wins, allow wins a tie. */
+  browser_allowed_domains: string[];
 }
 
 const DEFAULTS: InstanceSettings = {
   disabled_integrations: [],
   custom_apps_policy: { mode: "all", user_ids: [] },
   browser_blocked_domains: [],
+  browser_allowed_domains: [],
 };
 
 // The registry and the request path read these synchronously, so they read a
@@ -43,7 +46,7 @@ export function customAppsAllowedFor(userId: string): boolean {
 
 /** True when an agent browser tab must not load a URL on this host. */
 export function isBrowserHostBlocked(host: string): boolean {
-  return hostMatchesBlocklist(host, snapshot.browser_blocked_domains);
+  return isHostBlockedBy(host, snapshot.browser_blocked_domains, snapshot.browser_allowed_domains);
 }
 
 // A stored value is operator-editable data, so parse it tolerantly: a corrupt
@@ -92,11 +95,12 @@ export async function loadSettings(): Promise<void> {
     disabled_integrations: parseDisabled(byKey.get("disabled_integrations")),
     custom_apps_policy: parsePolicy(byKey.get("custom_apps_policy")),
     browser_blocked_domains: parseBlockedDomains(byKey.get("browser_blocked_domains")),
+    browser_allowed_domains: parseBlockedDomains(byKey.get("browser_allowed_domains")),
   };
 }
 
 export async function saveSetting(
-  key: "disabled_integrations" | "custom_apps_policy" | "browser_blocked_domains",
+  key: "disabled_integrations" | "custom_apps_policy" | "browser_blocked_domains" | "browser_allowed_domains",
   value: unknown,
   updatedBy: string
 ): Promise<void> {

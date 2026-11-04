@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { hostMatchesBlocklist, normaliseBlockedDomain } from "../src/settings/browser-blocklist";
+import { hostMatchesBlocklist, isHostBlockedBy, normaliseBlockedDomain } from "../src/settings/browser-blocklist";
 import { isBlockedAgentRequest, __netGuard } from "../src/auth/agent-net-guard";
 import { resetSettingsForTest, setSettingsForTest } from "../src/settings/instance-settings";
 import { browserPlugin } from "../src/plugins/internal/browser";
@@ -57,6 +57,37 @@ describe("hostMatchesBlocklist", () => {
   });
 });
 
+describe("allow exceptions: the more specific entry wins, allow wins a tie", () => {
+  const block = ["*.prod.example.com"];
+  const allow = ["x.prod.example.com", "z.prod.example.com"];
+  it("the example: allow x and z, block every other *.prod host", () => {
+    expect(isHostBlockedBy("x.prod.example.com", block, allow)).toBe(false);
+    expect(isHostBlockedBy("z.prod.example.com", block, allow)).toBe(false);
+    expect(isHostBlockedBy("api.x.prod.example.com", block, allow)).toBe(false); // allow covers subdomains
+    expect(isHostBlockedBy("y.prod.example.com", block, allow)).toBe(true);
+    expect(isHostBlockedBy("a.b.prod.example.com", block, allow)).toBe(true);
+    expect(isHostBlockedBy("prod.example.com", block, allow)).toBe(false); // *. never matched the apex
+  });
+  it("a more specific block inside an allowed host wins again", () => {
+    expect(isHostBlockedBy("bad.x.prod.example.com", [...block, "bad.x.prod.example.com"], allow)).toBe(true);
+    expect(isHostBlockedBy("ok.x.prod.example.com", [...block, "bad.x.prod.example.com"], allow)).toBe(false);
+  });
+  it("an allow entry less specific than the block does not lift it", () => {
+    expect(isHostBlockedBy("ads.example.com", ["ads.example.com"], ["example.com"])).toBe(true);
+    expect(isHostBlockedBy("www.example.com", ["ads.example.com"], ["example.com"])).toBe(false);
+  });
+  it("allow wins a tie at the same domain", () => {
+    expect(isHostBlockedBy("example.com", ["example.com"], ["example.com"])).toBe(false);
+    expect(isHostBlockedBy("www.example.com", ["*.example.com"], ["example.com"])).toBe(false);
+  });
+  it("allow alone blocks nothing", () => {
+    expect(isHostBlockedBy("anything.example", [], ["x.prod.example.com"])).toBe(false);
+  });
+  it("an IP allow exception lifts an IP block", () => {
+    expect(isHostBlockedBy("93.184.216.34", ["93.184.216.34"], ["93.184.216.34"])).toBe(false);
+  });
+});
+
 describe("blocklist in the agent browser", () => {
   const savedResolve = __netGuard.resolve;
   afterEach(() => {
@@ -86,6 +117,19 @@ describe("blocklist in the agent browser", () => {
     setSettingsForTest({ browser_blocked_domains: ["*.wild.example"] });
     expect(await isBlockedAgentRequest("https://cdn.wild.example/x.js")).toBe(true);
     expect(await isBlockedAgentRequest("https://wild.example/")).toBe(false);
+  });
+
+  it("the guard honours allow exceptions, but they never lift the loopback guard", async () => {
+    __netGuard.cache.clear();
+    __netGuard.resolve = async () => ["93.184.216.34"];
+    setSettingsForTest({
+      browser_blocked_domains: ["*.prod.example.com"],
+      browser_allowed_domains: ["x.prod.example.com", "localhost", "127.0.0.1"],
+    });
+    expect(await isBlockedAgentRequest("https://x.prod.example.com/")).toBe(false);
+    expect(await isBlockedAgentRequest("https://y.prod.example.com/")).toBe(true);
+    expect(await isBlockedAgentRequest("http://localhost:41234/json/list")).toBe(true);
+    expect(await isBlockedAgentRequest("http://127.0.0.1:41234/json/list")).toBe(true);
   });
 
   it("an empty list blocks nothing extra", async () => {

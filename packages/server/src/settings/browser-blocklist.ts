@@ -42,21 +42,54 @@ export function normaliseBlockedDomain(raw: string): string | null {
   return wildcard ? `*.${ascii}` : ascii;
 }
 
+function canonicalHost(host: string): string {
+  let h = host.toLowerCase();
+  if (h.startsWith("[") && h.endsWith("]")) h = h.slice(1, -1);
+  return h.replace(/\.+$/, "");
+}
+
+/**
+ * How specifically `entries` match `host`: the number of labels in the
+ * longest matching entry (an IP literal counts as fully specific), or -1 when
+ * none matches. A plain entry matches the domain and its subdomains; a `*.`
+ * entry matches subdomains only, and counts the labels after `*.`.
+ */
+export function matchSpecificity(host: string, entries: readonly string[]): number {
+  if (!entries.length) return -1;
+  const h = canonicalHost(host);
+  if (isIP(h)) return entries.includes(h) ? Number.MAX_SAFE_INTEGER : -1;
+  let best = -1;
+  for (const entry of entries) {
+    const wildcard = entry.startsWith("*.");
+    const d = wildcard ? entry.slice(2) : entry;
+    const hit =
+      (!wildcard && h === d) || (h.length > d.length && h.endsWith(d) && h[h.length - d.length - 1] === ".");
+    if (hit) best = Math.max(best, d.split(".").length);
+  }
+  return best;
+}
+
 /**
  * True when `host` (a URL hostname) is blocked: equal to a plain entry, or a
  * subdomain of any entry (plain or `*.`).
  */
 export function hostMatchesBlocklist(host: string, blocked: readonly string[]): boolean {
-  if (!blocked.length) return false;
-  let h = host.toLowerCase();
-  if (h.startsWith("[") && h.endsWith("]")) h = h.slice(1, -1);
-  h = h.replace(/\.+$/, "");
-  if (isIP(h)) return blocked.includes(h);
-  for (const entry of blocked) {
-    const wildcard = entry.startsWith("*.");
-    const d = wildcard ? entry.slice(2) : entry;
-    if (!wildcard && h === d) return true;
-    if (h.length > d.length && h.endsWith(d) && h[h.length - d.length - 1] === ".") return true;
-  }
-  return false;
+  return matchSpecificity(host, blocked) >= 0;
+}
+
+/**
+ * The blocklist with allow exceptions. A host is blocked when a block entry
+ * matches it and no allow entry matches it at least as specifically: the
+ * more specific entry wins, and an allow entry wins a tie. So with
+ * `block *.prod.example.com` and `allow x.prod.example.com`, `x.prod…` and its
+ * subdomains load and every other `*.prod…` host is blocked; adding
+ * `block bad.x.prod.example.com` blocks that one host again. An allow entry
+ * on its own blocks nothing and unblocks nothing else: it only carves
+ * exceptions out of block entries. It never lifts the loopback / internal-host
+ * guard, which is checked separately.
+ */
+export function isHostBlockedBy(host: string, blocked: readonly string[], allowed: readonly string[]): boolean {
+  const b = matchSpecificity(host, blocked);
+  if (b < 0) return false;
+  return matchSpecificity(host, allowed) < b;
 }

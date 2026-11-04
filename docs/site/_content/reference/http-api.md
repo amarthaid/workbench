@@ -65,10 +65,10 @@ Protected routes answer 401 `{ "error": "Unauthorized" }`.
 | POST | `/api/admin/users/:id/disable` | session only, admin | — | `{ ok: true }` | 400 `cannot_disable_self` / `cannot_disable_admin`, 401, 403, 404 |
 | POST | `/api/admin/users/:id/enable` | session only, admin | — | `{ ok: true }` | 401, 403, 404 |
 | POST | `/api/admin/users/:id/revoke-key` | session only, admin | — | `{ ok: true }` | 401, 403, 404 |
-| GET | `/api/admin/config` | session only, admin | — | `{ integrations: [{ name, display_name, enabled }], custom_apps_policy, browser_blocked_domains }` | 401, 403 |
+| GET | `/api/admin/config` | session only, admin | — | `{ integrations: [{ name, display_name, enabled }], custom_apps_policy, browser_blocked_domains, browser_allowed_domains }` | 401, 403 |
 | PUT | `/api/admin/config/integrations/:name` | session only, admin | `{ enabled: boolean }` | `{ ok: true }` | 400, 401, 403, 404 `unknown_integration` |
 | PUT | `/api/admin/config/custom-apps` | session only, admin | `{ mode: "all" \| "none" \| "allowlist", user_ids? }` | `{ ok: true }` | 400 `invalid_policy` / `unknown_user`, 401, 403 |
-| PUT | `/api/admin/config/browser-blocked-domains` | session only, admin | `{ domains: string[] }` (whole list, max 1000) | `{ ok: true }` | 400 `invalid_body` / `invalid_domains` (with `invalid[]`), 401, 403 |
+| PUT | `/api/admin/config/browser-blocked-domains` | session only, admin | `{ domains: string[], allowed?: string[] }` (each a whole list, max 1000; `allowed` omitted = unchanged) | `{ ok: true }` | 400 `invalid_body` / `invalid_domains` (with `invalid[]`), 401, 403 |
 | POST | `/api/auth/logout` | **none** | — | `{ success: true }` | — |
 
 The session JWT arrives in the URL **fragment**, not a query parameter, so it never

@@ -15,6 +15,7 @@ export interface ConfigView {
   integrations: { name: string; display_name: string; enabled: boolean }[];
   custom_apps_policy: CustomAppsPolicy;
   browser_blocked_domains: string[];
+  browser_allowed_domains: string[];
 }
 
 export type ConfigResult =
@@ -36,6 +37,7 @@ export function getConfigView(): ConfigView {
       .sort((a, b) => a.name.localeCompare(b.name)),
     custom_apps_policy: getSettings().custom_apps_policy,
     browser_blocked_domains: getSettings().browser_blocked_domains,
+    browser_allowed_domains: getSettings().browser_allowed_domains,
   };
 }
 
@@ -102,34 +104,42 @@ export async function setCustomAppsPolicy(actor: AdminActor, body: unknown): Pro
   return { ok: true };
 }
 
-/**
- * Replace the agent browser's domain blocklist. The whole list is sent, so
- * there is no read-modify-write to race. Entries are normalised (lowercase,
- * punycode, `*.` and trailing dot dropped, a pasted URL reduced to its host);
- * any entry that is not a hostname or IP rejects the whole request and is
- * named back, so a typo is never silently dropped.
- */
-export async function setBrowserBlockedDomains(actor: AdminActor, body: unknown): Promise<ConfigResult> {
-  const domains = (body as { domains?: unknown } | null | undefined)?.domains;
-  if (!Array.isArray(domains) || domains.length > MAX_BLOCKED_DOMAINS || !domains.every((d) => typeof d === "string")) {
-    return { ok: false, status: 400, error: "invalid_body" };
-  }
+function normaliseList(v: unknown): { list: string[]; invalid: string[] } | null {
+  if (!Array.isArray(v) || v.length > MAX_BLOCKED_DOMAINS || !v.every((d) => typeof d === "string")) return null;
   const out = new Set<string>();
   const invalid: string[] = [];
-  for (const raw of domains as string[]) {
+  for (const raw of v as string[]) {
     if (!raw.trim()) continue;
     const n = normaliseBlockedDomain(raw);
     if (n) out.add(n);
     else invalid.push(raw.slice(0, 100));
   }
+  return { list: [...out].sort(), invalid };
+}
+
+/**
+ * Replace the agent browser's domain blocklist (`domains`) and, when sent, its
+ * allow exceptions (`allowed`; omitted = left as stored). Each list is sent
+ * whole, so there is no read-modify-write to race. Entries are normalised
+ * (lowercase, punycode, trailing dot dropped, a pasted URL reduced to its host;
+ * a leading `*.` is kept); any entry that is not a hostname or IP rejects the
+ * whole request and is named back, so a typo is never silently dropped.
+ */
+export async function setBrowserBlockedDomains(actor: AdminActor, body: unknown): Promise<ConfigResult> {
+  const b = body as { domains?: unknown; allowed?: unknown } | null | undefined;
+  const blocked = normaliseList(b?.domains);
+  const allowed = b?.allowed === undefined ? undefined : normaliseList(b.allowed);
+  if (!blocked || allowed === null) return { ok: false, status: 400, error: "invalid_body" };
+  const invalid = [...blocked.invalid, ...(allowed?.invalid ?? [])];
   if (invalid.length) return { ok: false, status: 400, error: "invalid_domains", invalid: invalid.slice(0, 20) };
 
-  const list = [...out].sort();
-  await saveSetting("browser_blocked_domains", list, actor.userId);
+  await saveSetting("browser_blocked_domains", blocked.list, actor.userId);
+  if (allowed) await saveSetting("browser_allowed_domains", allowed.list, actor.userId);
+  const allowCount = allowed ? allowed.list.length : getSettings().browser_allowed_domains.length;
   await auditLogger.log({
     user_id: actor.userId,
     action: "ADMIN_BROWSER_BLOCKLIST",
-    tool: `admin.config.browser-blocklist count=${list.length}`,
+    tool: `admin.config.browser-blocklist count=${blocked.list.length} allowed=${allowCount}`,
     success: true,
   });
   return { ok: true };
