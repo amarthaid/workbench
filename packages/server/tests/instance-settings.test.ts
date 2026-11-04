@@ -23,11 +23,12 @@ afterEach(() => {
 });
 
 describe("instance settings", () => {
-  it("defaults to nothing disabled and custom apps open to everyone", async () => {
+  it("defaults to nothing disabled, custom apps open to everyone, and no blocked domains", async () => {
     await loadSettings();
     expect(getSettings()).toEqual({
       disabled_integrations: [],
       custom_apps_policy: { mode: "all", user_ids: [] },
+      browser_blocked_domains: [],
     });
     expect(isIntegrationDisabled("acme")).toBe(false);
     expect(customAppsAllowedFor("u1")).toBe(true);

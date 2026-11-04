@@ -8,6 +8,7 @@ const api = vi.hoisted(() => ({
   fetchAdminUsers: vi.fn(),
   setAdminIntegrationEnabled: vi.fn(),
   setAdminCustomAppsPolicy: vi.fn(),
+  setAdminBrowserBlockedDomains: vi.fn(),
 }));
 vi.mock("../../api", async (orig) => ({ ...(await orig<typeof import("../../api")>()), ...api }));
 
@@ -17,6 +18,7 @@ const CONFIG = {
     { name: "demo-repo", display_name: "Demo Repo", enabled: false },
   ],
   custom_apps_policy: { mode: "all" as const, user_ids: [] as string[] },
+  browser_blocked_domains: ["blocked.example"],
 };
 
 beforeEach(() => {
@@ -31,6 +33,7 @@ beforeEach(() => {
   });
   api.setAdminIntegrationEnabled.mockResolvedValue(undefined);
   api.setAdminCustomAppsPolicy.mockResolvedValue(undefined);
+  api.setAdminBrowserBlockedDomains.mockResolvedValue(undefined);
 });
 
 describe("ConfigTab integrations", () => {
@@ -129,5 +132,29 @@ describe("ConfigTab custom-app policy", () => {
     fireEvent.change(await screen.findByLabelText("Who can add custom apps"), { target: { value: "none" } });
     fireEvent.click(screen.getByRole("button", { name: "Save policy" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("no longer exists");
+  });
+});
+
+describe("ConfigTab browser blocklist", () => {
+  it("shows the current list and saves the edited one, split on lines, spaces and commas", async () => {
+    renderWithClient(<ConfigTab />);
+    const box = (await screen.findByLabelText(/agent browser tabs may not load/i)) as HTMLTextAreaElement;
+    expect(box.value).toBe("blocked.example");
+    const save = screen.getByRole("button", { name: "Save blocklist" });
+    expect(save).toBeDisabled();
+    fireEvent.change(box, { target: { value: "blocked.example\nads.example, ads.example  other.example" } });
+    fireEvent.click(save);
+    await waitFor(() =>
+      expect(api.setAdminBrowserBlockedDomains).toHaveBeenCalledWith(["blocked.example", "ads.example", "other.example"])
+    );
+  });
+
+  it("shows the server's reason when an entry is refused", async () => {
+    api.setAdminBrowserBlockedDomains.mockRejectedValueOnce(new Error("Some entries are not valid domains: com"));
+    renderWithClient(<ConfigTab />);
+    const box = await screen.findByLabelText(/agent browser tabs may not load/i);
+    fireEvent.change(box, { target: { value: "com" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save blocklist" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("not valid domains: com");
   });
 });

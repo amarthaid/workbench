@@ -56,10 +56,11 @@ The **Users** tab lists every user with their connection and custom-app counts, 
 
 ## Instance config
 
-The **Config** tab holds two instance-wide settings:
+The **Config** tab holds three instance-wide settings:
 
 - **Integrations:** turn an integration off for every user. It disappears from tool search, schema lookup and execution, the REST endpoint and the connect flow. Existing connections are kept, and turning it back on restores everything.
 - **Custom apps:** choose who can add custom apps: everyone, no one, or selected users. Excluded users keep their existing apps, but agents stop seeing those apps' tools.
+- **Browser blocked domains:** domains that agent browser tabs may not load, one per line. A plain entry also blocks its subdomains; a `*.example.com` entry blocks only the subdomains, not `example.com` itself. Entries are normalised (lowercased, a trailing dot dropped, a pasted URL reduced to its host, international names to punycode), and an entry that is not a hostname or IP rejects the save and is named in the error. Every HTTP(S) request is checked, not just navigations; WebSocket connections are not. See [Browser](../integrations/browser.md).
 
 Changes apply at once in the process that handled the request. Other workers and pods pick them up within `INSTANCE_SETTINGS_POLL_SECONDS` (default 5), so allow that long before assuming a change is everywhere. OAuth client secrets are not editable here; they stay in environment variables.
 

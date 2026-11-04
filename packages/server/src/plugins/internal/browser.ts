@@ -3,6 +3,7 @@
 // browser-session. Keeping it internal also keeps that capability out of the
 // plugin ToolContext: a third-party plugin must never be able to drive the
 // user's logged-in capture browser (cookie/session exfiltration).
+import { isBrowserHostBlocked } from "../../settings/instance-settings";
 import { z } from "zod";
 import { isAgentNavigableUrl } from "../../auth/browser-url";
 import { Plugin, PluginTool } from "../registry";
@@ -91,6 +92,15 @@ const tools: PluginTool[] = [
       url: z.string().url().refine(
         (u) => /^https?:\/\//i.test(u) && isAgentNavigableUrl(u),
         { message: "Only http and https URLs to a non-loopback host are allowed" }
+      ).refine(
+        (u) => {
+          try {
+            return !isBrowserHostBlocked(new URL(u).hostname);
+          } catch {
+            return true; // not a URL: the checks above already reported it
+          }
+        },
+        { message: "This domain is blocked by the workbench administrator" }
       ),
     }),
     handler: async (ctx: any, args: any) => {
