@@ -16,6 +16,14 @@ Off by default. Every event also carries `user_email` now.
   the mode, redaction, binary stripping and caps. Credential-named keys are
   matched on *words* of the key (camelCase / snake / kebab split), because a
   substring regex redacted `footprint` (`otp`) and `spinner` (`pin`).
+- **Credentials inside strings** are invisible to the key check, so every string
+  also goes through `redactInlineSecrets`: URL userinfo (password redacted, user
+  kept; the userinfo runs to the *last* `@` before the host's path, so a raw `@`
+  in a password is covered; a colon-less userinfo of 16+ chars is a token and
+  goes whole, a short one like `git@` stays), credential-named query/form
+  parameters by the same word rule as keys, and inline `Bearer`/`Basic`
+  values. Error text gets the same treatment in the audit event and the
+  `"tool execute failed"` log line, since a driver error often quotes its DSN.
 - **Base64 detection** ignores line breaks only and needs mixed case: stripping
   all whitespace made long prose look like base64, and a run of one letter
   (`xxxx…`) matched the alphabet.

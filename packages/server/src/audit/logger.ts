@@ -1,6 +1,6 @@
 import { AuditEvent } from "@a-workbench/shared";
 import { AuditDestination, createDestination } from "./destinations";
-import { captureValue, payloadLimits, payloadMode } from "./payload";
+import { captureValue, payloadLimits, payloadMode, redactInlineSecrets } from "./payload";
 import { auditUserEmail } from "./user-email";
 import { currentAuditContext } from "./context";
 import { oauthClientName } from "./client-name";
@@ -42,6 +42,8 @@ export class AuditLogger {
     const { args, result, ...event } = input;
     const fullEvent: AuditEvent = {
       ...event,
+      // Error text can quote a connection string or a request URL.
+      ...(event.error ? { error: redactInlineSecrets(event.error) } : {}),
       user_email: await auditUserEmail(event.user_id),
       timestamp: new Date().toISOString(),
     };

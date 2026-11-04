@@ -162,10 +162,15 @@ also carries `user_email`.
   record arguments.
 - **Sanitised.** Any key naming a credential (`password`, `secret`, `token`,
   `apiKey`, `authorization`, `cookie`, `privateKey`, `otp`, `pin`, …), at any depth, is
-  replaced with `"[REDACTED]"`. Binary data, `data:` URIs and long base64 runs (screenshots,
-  file contents) become `"[binary N bytes]"`. A secret the agent typed into an ordinary
-  field (for example `browser_type` text) is **not** caught: the audit log holds what the
-  agent sent.
+  replaced with `"[REDACTED]"`. Inside every string, credentials in URLs are redacted
+  (`postgres://app:[REDACTED]@db…`; a long token-only userinfo such as
+  `https://<token>@github.com` goes whole, a short user such as `git@` stays), as are
+  credential-named query parameters (`?api_key=[REDACTED]`) and inline
+  `Bearer` / `Basic` values. The same applies to the error text of every audit event and
+  of the `"tool execute failed"` log line. Binary data, `data:` URIs and long base64 runs
+  (screenshots, file contents) become `"[binary N bytes]"`. Any other secret the agent
+  typed into an ordinary field (for example a bare password as `browser_type` text) is
+  **not** caught: the audit log holds what the agent sent.
 - **Limited.** Arguments and result each have a cap, in UTF-8 bytes of their JSON text:
   `AUDIT_PAYLOAD_ARGS_MAX_BYTES` and `AUDIT_PAYLOAD_RESULT_MAX_BYTES` (default 8192,
   256–262144). Past the cap the value is **cut, not dropped**: the first part is kept,

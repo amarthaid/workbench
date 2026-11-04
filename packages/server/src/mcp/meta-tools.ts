@@ -21,6 +21,7 @@ import { signCurlToken } from "../auth/curl-session";
 import { resolveVaultRefs, scrubVaultValues, scrubString, VaultRefError, VaultScrubError } from "../vault/interpolate";
 import { touchUsed } from "../vault/store";
 import { requestLogFields } from "../audit/context";
+import { redactInlineSecrets } from "../audit/payload";
 import { rememberSubstituted, recentSubstituted } from "../vault/recent";
 
 // `connect` and `get_auth_url` are the same tool under two names (kept for
@@ -563,7 +564,7 @@ export async function executeSingle(
           integration: targetTool.integration,
           tool: toolName,
           success: false,
-          error: err,
+          error: redactInlineSecrets(err),
           duration_ms,
         }));
         const durationS = duration_ms / 1000;
