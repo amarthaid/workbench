@@ -41,6 +41,11 @@ async function main() {
   });
   // Before any route: every handler runs with its request's audit context.
   installAuditContext(app);
+  if (config.CLIENT_IP_HEADER && config.TRUST_PROXY === undefined) {
+    app.log.warn(
+      `CLIENT_IP_HEADER=${config.CLIENT_IP_HEADER} is ignored: set TRUST_PROXY to the proxies allowed to send it`
+    );
+  }
 
   const { initDb } = await import("./db.js");
   await initDb();

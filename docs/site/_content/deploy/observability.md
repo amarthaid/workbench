@@ -121,10 +121,20 @@ it authenticated, when known:
 
 | Field | Value |
 |---|---|
-| `source_ip` | The client address. Behind a load balancer this is the balancer unless `TRUST_PROXY` trusts it (then `X-Forwarded-For`). With `INTERNAL_MCP_URL`, include the pod range so a call forwarded between replicas keeps the caller's address |
+| `source_ip` | The client address. Behind a load balancer this is the balancer unless `TRUST_PROXY` trusts it (then `X-Forwarded-For`). With `CLIENT_IP_HEADER` (e.g. `cf-connecting-ip`), that header wins when the connection comes from a trusted peer. With `INTERNAL_MCP_URL`, include the pod range so a call forwarded between replicas keeps the caller's address |
 | `user_agent` | The `User-Agent` header, first 512 characters |
 | `auth_method` | `api_key` (`x-workbench-api-key`), `oauth` (OAuth access token), `session` (portal sign-in, including every admin action) or `curl_token` (the curl proxy) |
 | `client_id`, `client_name` | The OAuth client, for `oauth`. The name is the one the client gave at dynamic registration, so it is self-declared, not verified |
+
+**Behind Cloudflare.** Set `CLIENT_IP_HEADER=cf-connecting-ip` and put in `TRUST_PROXY`
+whatever connects to the server directly: Cloudflare's published IP ranges
+(<https://www.cloudflare.com/ips/>) if Cloudflare reaches the server itself, or your
+ingress / load balancer range if Cloudflare reaches that first. Any client can send a
+`CF-Connecting-IP` header, so it is believed only from a trusted peer, and only when it
+is a single valid IP. If the ingress is also reachable without going through Cloudflare,
+lock it to Cloudflare's ranges first, or a caller hitting it directly can set the header.
+The header only feeds the audit log's `source_ip` (and the address handed to another
+replica); the request log's `remoteAddress` still follows `X-Forwarded-For`.
 
 Events written outside a request (background token refreshes and reconnects) carry
 none of these. The MCP `initialize` `clientInfo` is not recorded: `/mcp` is stateless,

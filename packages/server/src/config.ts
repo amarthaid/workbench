@@ -188,6 +188,18 @@ export const configSchema = z.object({
       if (/^\d+$/.test(s)) return Number(s);
       return s.split(",").map((x) => x.trim()).filter(Boolean);
     }),
+  // A single-value header a CDN puts the real client address in, e.g.
+  // cf-connecting-ip (Cloudflare), true-client-ip, x-real-ip. Believed only
+  // when the connection comes from a peer TRUST_PROXY trusts, and only when it
+  // is a valid IP; otherwise the X-Forwarded-For / socket address stands.
+  // Ignored without TRUST_PROXY (src/trust-proxy.ts).
+  CLIENT_IP_HEADER: z
+    .string()
+    .optional()
+    .transform((v) => v?.trim().toLowerCase() || undefined)
+    .refine((v) => v === undefined || /^[a-z0-9-]{1,64}$/.test(v), {
+      message: "CLIENT_IP_HEADER must be a header name, e.g. cf-connecting-ip",
+    }),
 });
 
 export const config = configSchema.parse(process.env);

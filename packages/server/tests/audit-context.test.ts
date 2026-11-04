@@ -7,8 +7,8 @@ import {
   noteRequestAuth,
   runWithAuditContext,
 } from "../src/audit/context";
-import { trustProxyOption } from "../src/trust-proxy";
-import { configSchema } from "../src/config";
+import { clientIp, trustProxyOption, trustsPeer } from "../src/trust-proxy";
+import { config, configSchema } from "../src/config";
 
 function appWith(opts: ReturnType<typeof trustProxyOption> = {}) {
   const app = Fastify({ ...opts });
@@ -140,5 +140,82 @@ describe("resolveMcpUser notes the credential", () => {
     const user = await run(ctx, () => resolveMcpUser(headers as Record<string, string>));
     expect(user).toBe("u1");
     expect(ctx).toEqual({ auth_method: method, client_id: clientId });
+  });
+});
+
+describe("trustsPeer", () => {
+  it.each([
+    [undefined, "10.0.0.1", false],
+    [true, "203.0.113.9", true],
+    [1, "203.0.113.9", true],
+    [0, "203.0.113.9", false],
+    [["10.0.0.0/8"], "10.1.2.3", true],
+    [["10.0.0.0/8"], "::ffff:10.1.2.3", true],
+    [["10.0.0.0/8"], "11.0.0.1", false],
+    [["173.245.48.0/20", "2400:cb00::/32"], "2400:cb00::1", true],
+    [["192.168.1.5"], "192.168.1.5", true],
+    [["loopback"], "127.0.0.1", true],
+    [["uniquelocal"], "172.20.0.4", true],
+    [["uniquelocal"], "8.8.8.8", false],
+  ] as const)("TRUST_PROXY=%j, peer %s → %s", (t, addr, want) => {
+    expect(trustsPeer(t as never, addr)).toBe(want);
+  });
+});
+
+describe("CLIENT_IP_HEADER (e.g. cf-connecting-ip)", () => {
+  const req = (peer: string, headers: Record<string, string> = {}, ip = peer) => ({
+    ip,
+    headers,
+    socket: { remoteAddress: peer },
+  });
+  const cf = { trust: ["173.245.48.0/20"], header: "cf-connecting-ip" };
+
+  it("from a trusted peer, the header is the client address", () => {
+    expect(clientIp(req("173.245.48.10", { "cf-connecting-ip": "203.0.113.9" }), cf)).toBe("203.0.113.9");
+    expect(clientIp(req("173.245.48.10", { "cf-connecting-ip": "2001:db8::7" }), cf)).toBe("2001:db8::7");
+  });
+
+  it("from an untrusted peer the header is ignored (no spoofing by sending it yourself)", () => {
+    expect(clientIp(req("198.51.100.66", { "cf-connecting-ip": "1.2.3.4" }), cf)).toBe("198.51.100.66");
+  });
+
+  it("without TRUST_PROXY the header is ignored", () => {
+    expect(clientIp(req("173.245.48.10", { "cf-connecting-ip": "1.2.3.4" }), { trust: undefined, header: "cf-connecting-ip" })).toBe("173.245.48.10");
+  });
+
+  it("a missing or non-IP header falls back to request.ip", () => {
+    expect(clientIp(req("173.245.48.10", {}, "10.9.9.9"), cf)).toBe("10.9.9.9");
+    expect(clientIp(req("173.245.48.10", { "cf-connecting-ip": "1.2.3.4, 5.6.7.8" }), cf)).toBe("173.245.48.10");
+    expect(clientIp(req("173.245.48.10", { "cf-connecting-ip": "<script>" }), cf)).toBe("173.245.48.10");
+  });
+
+  it("no header configured: request.ip (X-Forwarded-For per TRUST_PROXY)", () => {
+    expect(clientIp(req("173.245.48.10", { "cf-connecting-ip": "1.2.3.4" }, "10.9.9.9"), { trust: ["173.245.48.0/20"] })).toBe("10.9.9.9");
+  });
+
+  it("end to end through Fastify: the audit context records the header's address", async () => {
+    // The static import: an earlier block resets modules, and a dynamic import
+    // here would mutate a different config instance than clientIp reads.
+    const saved = { t: config.TRUST_PROXY, h: config.CLIENT_IP_HEADER };
+    config.TRUST_PROXY = ["127.0.0.1"];
+    config.CLIENT_IP_HEADER = "cf-connecting-ip";
+    try {
+      const app = appWith(trustProxyOption(config.TRUST_PROXY));
+      app.get("/ip", async () => currentAuditContext());
+      const res = await app.inject({
+        method: "GET",
+        url: "/ip",
+        headers: { "cf-connecting-ip": "203.0.113.9", "x-forwarded-for": "198.51.100.1" },
+      });
+      expect(JSON.parse(res.body).source_ip).toBe("203.0.113.9");
+    } finally {
+      config.TRUST_PROXY = saved.t;
+      config.CLIENT_IP_HEADER = saved.h;
+    }
+  });
+
+  it("config: normalises the name and rejects junk", () => {
+    expect(configSchema.parse({ CLIENT_IP_HEADER: " CF-Connecting-IP " }).CLIENT_IP_HEADER).toBe("cf-connecting-ip");
+    expect(configSchema.safeParse({ CLIENT_IP_HEADER: "bad header!" }).success).toBe(false);
   });
 });

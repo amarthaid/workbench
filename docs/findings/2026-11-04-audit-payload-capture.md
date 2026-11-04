@@ -55,6 +55,12 @@ Every event written during a request also records `source_ip`, `user_agent`,
   hop count, so a number becomes `(addr, i) => i < n`. The browser-affinity
   forward between replicas now passes `User-Agent` and `X-Forwarded-For`, which
   the owning replica believes only if `TRUST_PROXY` includes the pod range.
+- `CLIENT_IP_HEADER` (e.g. `cf-connecting-ip`) is read only when the *socket*
+  peer is trusted by `TRUST_PROXY` (checked with `node:net` `BlockList`, which
+  also needs proxy-addr's named ranges `loopback`/`linklocal`/`uniquelocal`
+  expanded, since Fastify accepts them) and the value is one valid IP;
+  otherwise `request.ip` stands. A header any client can send is otherwise a
+  free way to forge the audit log's address.
 - `client_name` is what the client sent at dynamic registration: self-declared.
   MCP `initialize` `clientInfo` is not recorded because `/mcp` is stateless.
 

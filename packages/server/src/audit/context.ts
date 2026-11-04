@@ -8,13 +8,15 @@
 // event. Events written outside any request (background reconnects) carry
 // none of these fields.
 //
-// The IP is Fastify's request.ip, so behind a load balancer it is the
-// balancer's address unless TRUST_PROXY names it (then X-Forwarded-For is
-// used). The client name is the one the client chose at dynamic registration:
+// The IP is clientIp() (src/trust-proxy.ts): CLIENT_IP_HEADER (e.g.
+// CF-Connecting-IP) from a trusted peer, else Fastify's request.ip, which is
+// the load balancer's address unless TRUST_PROXY names it (then
+// X-Forwarded-For is used). The client name is the one the client chose at dynamic registration:
 // self-declared, not verified.
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { FastifyInstance, FastifyRequest, RouteOptions } from "fastify";
+import { clientIp } from "../trust-proxy";
 
 export type AuthMethod = "api_key" | "oauth" | "session" | "curl_token";
 
@@ -51,7 +53,7 @@ export function auditContextFrom(request: FastifyRequest): AuditRequestContext {
   const ua = request.headers["user-agent"];
   const pre = preAuth.get(request);
   return {
-    source_ip: request.ip || undefined,
+    source_ip: clientIp(request),
     user_agent: typeof ua === "string" && ua ? ua.slice(0, USER_AGENT_MAX) : undefined,
     auth_method: pre?.method,
     client_id: pre?.clientId,
