@@ -107,6 +107,7 @@ export default function ConfigTab() {
       {data && (
         <BrowserBlocklist
           domains={data.browser_blocked_domains ?? []}
+          allowed={data.browser_allowed_domains ?? []}
           onSaved={() => {
             setError(null);
             refresh();
@@ -238,24 +239,60 @@ function parseDomains(text: string): string[] {
   return [...new Set(text.split(/[\s,]+/).map((d) => d.trim()).filter(Boolean))];
 }
 
+function DomainList({
+  id,
+  label,
+  placeholder,
+  value,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  placeholder: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <BoxRow>
+      <label htmlFor={id}>{label}</label>
+      <textarea
+        id={id}
+        className="ui-input"
+        rows={6}
+        style={{ fontFamily: "monospace", resize: "vertical" }}
+        autoComplete="off"
+        spellCheck={false}
+        placeholder={placeholder}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </BoxRow>
+  );
+}
+
 function BrowserBlocklist({
   domains,
+  allowed,
   onSaved,
   onError,
 }: {
   domains: string[];
+  allowed: string[];
   onSaved: () => void;
   onError: (e: unknown) => void;
 }) {
-  const current = domains.join("\n");
-  const [text, setText] = useState(current);
+  const currentBlock = domains.join("\n");
+  const currentAllow = allowed.join("\n");
+  const [blockText, setBlockText] = useState(currentBlock);
+  const [allowText, setAllowText] = useState(currentAllow);
   const [saved, setSaved] = useState(false);
 
   // Follow the server's (normalised) copy after a save or a refetch.
-  useEffect(() => setText(current), [current]);
+  useEffect(() => setBlockText(currentBlock), [currentBlock]);
+  useEffect(() => setAllowText(currentAllow), [currentAllow]);
 
   const save = useMutation({
-    mutationFn: (list: string[]) => setAdminBrowserBlockedDomains(list),
+    mutationFn: ({ block, allow }: { block: string[]; allow: string[] }) => setAdminBrowserBlockedDomains(block, allow),
     onSuccess: () => {
       setSaved(true);
       onSaved();
@@ -263,35 +300,45 @@ function BrowserBlocklist({
     onError,
   });
 
-  const next = parseDomains(text);
-  const changed = next.join("\n") !== current;
+  const nextBlock = parseDomains(blockText);
+  const nextAllow = parseDomains(allowText);
+  const changed = nextBlock.join("\n") !== currentBlock || nextAllow.join("\n") !== currentAllow;
 
   return (
     <Box title="Browser blocked domains">
+      <DomainList
+        id="admin-browser-blocklist"
+        label="Domains agent browser tabs may not load, one per line"
+        placeholder={"example.com\n*.prod.example.com"}
+        value={blockText}
+        onChange={(v) => {
+          setSaved(false);
+          setBlockText(v);
+        }}
+      />
+      <DomainList
+        id="admin-browser-allowlist"
+        label="Exceptions: domains to allow even though a block entry matches, one per line"
+        placeholder={"x.prod.example.com\nz.prod.example.com"}
+        value={allowText}
+        onChange={(v) => {
+          setSaved(false);
+          setAllowText(v);
+        }}
+      />
       <BoxRow>
-        <label htmlFor="admin-browser-blocklist">Domains agent browser tabs may not load, one per line</label>
-        <textarea
-          id="admin-browser-blocklist"
-          className="ui-input"
-          rows={6}
-          style={{ fontFamily: "monospace", resize: "vertical" }}
-          autoComplete="off"
-          spellCheck={false}
-          placeholder={"example.com\n*.ads.example.net"}
-          value={text}
-          onChange={(e) => {
-            setSaved(false);
-            setText(e.target.value);
-          }}
-        />
-      </BoxRow>
-      <BoxRow>
-        <Button disabled={!changed || save.isPending} onClick={() => save.mutate(next)}>
+        <Button disabled={!changed || save.isPending} onClick={() => save.mutate({ block: nextBlock, allow: nextAllow })}>
           Save blocklist
         </Button>
         {saved && !changed && <span role="status">Saved.</span>}
         <p className="ui-stat-note">
-          Each entry also blocks its subdomains; *.example.com blocks only the subdomains, not example.com itself. Every HTTP(S) request is checked, including redirects, iframes and scripts; WebSocket connections are not.
+          Each entry also covers its subdomains; *.example.com covers only the subdomains, not example.com itself. When
+          a block entry and an exception both match, the more specific one wins, and an exception wins a tie: block
+          *.prod.example.com with exception x.prod.example.com allows x.prod.example.com (and its subdomains) and blocks
+          every other prod host. Exceptions alone allow nothing extra, and never open loopback or the server itself.
+        </p>
+        <p className="ui-stat-note">
+          Every HTTP(S) request is checked, including redirects, iframes and scripts; WebSocket connections are not.
           Pages that are already open stay open. Other workers pick the change up within a few seconds.
         </p>
       </BoxRow>

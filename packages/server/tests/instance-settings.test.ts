@@ -29,6 +29,7 @@ describe("instance settings", () => {
       disabled_integrations: [],
       custom_apps_policy: { mode: "all", user_ids: [] },
       browser_blocked_domains: [],
+      browser_allowed_domains: [],
     });
     expect(isIntegrationDisabled("acme")).toBe(false);
     expect(customAppsAllowedFor("u1")).toBe(true);

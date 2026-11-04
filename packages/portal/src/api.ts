@@ -948,6 +948,7 @@ export interface AdminConfig {
   integrations: { name: string; display_name: string; enabled: boolean }[];
   custom_apps_policy: { mode: "all" | "none" | "allowlist"; user_ids: string[] };
   browser_blocked_domains: string[];
+  browser_allowed_domains: string[];
 }
 
 export const fetchAdminConfig = () => adminGet<AdminConfig>("/api/admin/config", "config");
@@ -958,5 +959,5 @@ export const setAdminIntegrationEnabled = (name: string, enabled: boolean) =>
 export const setAdminCustomAppsPolicy = (policy: AdminConfig["custom_apps_policy"]) =>
   adminPut("/api/admin/config/custom-apps", policy);
 
-export const setAdminBrowserBlockedDomains = (domains: string[]) =>
-  adminPut("/api/admin/config/browser-blocked-domains", { domains });
+export const setAdminBrowserBlockedDomains = (domains: string[], allowed?: string[]) =>
+  adminPut("/api/admin/config/browser-blocked-domains", allowed === undefined ? { domains } : { domains, allowed });

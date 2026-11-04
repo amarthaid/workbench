@@ -19,6 +19,7 @@ const CONFIG = {
   ],
   custom_apps_policy: { mode: "all" as const, user_ids: [] as string[] },
   browser_blocked_domains: ["blocked.example"],
+  browser_allowed_domains: [] as string[],
 };
 
 beforeEach(() => {
@@ -145,8 +146,34 @@ describe("ConfigTab browser blocklist", () => {
     fireEvent.change(box, { target: { value: "blocked.example\nads.example, ads.example  other.example" } });
     fireEvent.click(save);
     await waitFor(() =>
-      expect(api.setAdminBrowserBlockedDomains).toHaveBeenCalledWith(["blocked.example", "ads.example", "other.example"])
+      expect(api.setAdminBrowserBlockedDomains).toHaveBeenCalledWith(["blocked.example", "ads.example", "other.example"], [])
     );
+  });
+
+  it("saves allow exceptions alongside the blocklist", async () => {
+    renderWithClient(<ConfigTab />);
+    const block = await screen.findByLabelText(/agent browser tabs may not load/i);
+    const allow = screen.getByLabelText(/Exceptions/i);
+    fireEvent.change(block, { target: { value: "*.prod.example.com" } });
+    fireEvent.change(allow, { target: { value: "x.prod.example.com\nz.prod.example.com" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save blocklist" }));
+    await waitFor(() =>
+      expect(api.setAdminBrowserBlockedDomains).toHaveBeenCalledWith(
+        ["*.prod.example.com"],
+        ["x.prod.example.com", "z.prod.example.com"]
+      )
+    );
+  });
+
+  it("shows the stored exceptions, and editing only them enables Save", async () => {
+    api.fetchAdminConfig.mockResolvedValue({ ...CONFIG, browser_allowed_domains: ["x.prod.example.com"] });
+    renderWithClient(<ConfigTab />);
+    const allow = (await screen.findByLabelText(/Exceptions/i)) as HTMLTextAreaElement;
+    expect(allow.value).toBe("x.prod.example.com");
+    const save = screen.getByRole("button", { name: "Save blocklist" });
+    expect(save).toBeDisabled();
+    fireEvent.change(allow, { target: { value: "" } });
+    expect(save).toBeEnabled();
   });
 
   it("shows the server's reason when an entry is refused", async () => {
