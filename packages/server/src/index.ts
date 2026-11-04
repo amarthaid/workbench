@@ -30,6 +30,7 @@ import { db } from "./db.js";
 import "./telemetry/tracing";
 import { httpRequestsTotal, httpRequestDuration } from "./telemetry/metrics";
 import { registerMetricsRoute } from "./telemetry/metrics-route";
+import { flushAuditDestinations } from "./audit/destinations";
 
 async function main() {
   const app = Fastify({
@@ -138,6 +139,8 @@ function registerShutdown() {
   const shutdown = async (signal: string) => {
     console.log(`[shutdown] ${signal} received — draining connection pool`);
     await shutdownAllPulse().catch(() => undefined);
+    // Before the pool closes: the Kafka copy is best-effort, so it gets a short deadline.
+    await flushAuditDestinations(5000).catch(() => undefined);
     await db.close();
     process.exit(0);
   };

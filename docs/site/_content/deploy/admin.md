@@ -34,11 +34,11 @@ Every section is its own tab with its own URL (`/admin`, `/admin/activity`, `/ad
 
 The **Overview** tab holds:
 
-- **Headline numbers:** tool calls and error rate over the last 24 hours (with the change against the 24 hours before), users active in the last 7 days, connections that need a reconnect, and disabled users. Usage figures need `AUDIT_LOG_DEST=sqlite`; otherwise they show a dash and say why, while the user and connection counts still show.
+- **Headline numbers:** tool calls and error rate over the last 24 hours (with the change against the 24 hours before), users active in the last 7 days, connections that need a reconnect, and disabled users. Usage figures need the database among the audit destinations (`AUDIT_LOG_DEST` default `db`, or `db,kafka`); with `stdout` alone they show a dash and say why, while the user and connection counts still show.
 - **Top tools:** the most-called tools over 7 days with error counts and average time.
 - **Recent failures:** the last five failed calls, with the error text, linking to Activity.
 - **Instance:** version, database backend, cluster mode, audit-log destination, user count and the number of allowlisted admins (a number, never the list; it counts allowlist entries, whether or not they have signed in).
-- **Activity:** every user's tool calls, newest first, with the user's email. Filter by app, errors only, or a user's email. An unrecognised `status` filter is refused with a 400 rather than ignored. Shows tool names and error text, never arguments. With `AUDIT_LOG_DEST` other than `sqlite` the events are not in the database, and the card says so.
+- **Activity:** every user's tool calls, newest first, with the user's email. Filter by app, errors only, or a user's email. An unrecognised `status` filter is refused with a 400 rather than ignored. Shows tool names and error text, never arguments. It also shows `curl_session` mints (`CURL_SESSION`) and proxied curl requests (`CURL_REQUEST`, method and path only). With `AUDIT_LOG_DEST=stdout` alone the events are not in the database, and the card says so; a Kafka copy does not change this.
 - **Connections:** connected users per integration. "Needs reconnect" counts connections whose access token has expired and which have no refresh token; the server does not record refresh failures, so a connection that merely failed to refresh is not counted.
 - **Custom apps:** every user's custom apps with owner and URL. Credentials are never shown.
 - **Browser profiles:** disk used per user and whether the profile is live. "Live" means a use-marker file moved in the last hour. Workers and pods that share a profiles volume all show up here.

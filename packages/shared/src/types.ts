@@ -166,7 +166,9 @@ export interface AuditEvent {
     | "ADMIN_KEY_REVOKE"
     | "ADMIN_INTEGRATION_SET"
     | "ADMIN_CUSTOM_APPS_POLICY"
-    | "ADMIN_BROWSER_BLOCKLIST";
+    | "ADMIN_BROWSER_BLOCKLIST"
+    | "CURL_SESSION"
+    | "CURL_REQUEST";
   success: boolean;
   error?: string;
   duration_ms?: number;

@@ -95,26 +95,48 @@ One caveat when correlating: the resource's `service.version` is hardcoded to
 
 ## Audit log
 
-Every tool execution is recorded as an audit event with a timestamp, user, tool,
-integration, action, success flag, error message, and duration. `AUDIT_LOG_DEST`
-selects where it goes.
+Every tool execution (over `/mcp` or [`/rest`](../reference/rest-endpoint.md)),
+every `curl_session` mint (`CURL_SESSION`), every request through the curl proxy
+(`CURL_REQUEST`), and every admin change is recorded as an audit event with a
+timestamp, user, tool, integration, action, success flag, error message, and
+duration. `AUDIT_LOG_DEST` selects where events go: a comma-separated list.
 
 | Value | Behaviour |
 |---|---|
-| `sqlite` (default) | `INSERT` into the `audit_log` table through the shared database adapter |
+| `db` (default; `sqlite` is the old name) | `INSERT` into the `audit_log` table of the configured database |
 | `stdout` | One JSON line per event on stdout |
-| `kafka` | **Not implemented.** Logs "Kafka not implemented, falling back to stdout" to stderr and prints the JSON line |
+| `kafka` | A **copy** to a Kafka topic, always alongside `db` |
 
-Despite the name, `sqlite` writes to whichever backend `DATABASE_URL` selects —
-including PostgreSQL. The `success` column is bound as a real boolean, because
+`db` writes to whichever backend `DATABASE_URL` selects, SQLite or PostgreSQL.
+The admin Activity and Overview tabs read the database, so they work whenever
+`db` is in the list. `kafka` never replaces it: `AUDIT_LOG_DEST=kafka` means
+`db,kafka`. Only `stdout` alone leaves the table empty. The `success` column is bound as a real boolean, because
 PostgreSQL rejects `1`/`0` for `BOOLEAN`. `created_at` is unix seconds. Two
 indexes support querying: `(user_id, created_at)` and `(integration, created_at)`.
 
-> [!WARNING] Kafka is declared but not connected
-> `AUDIT_LOG_KAFKA_BROKERS` and `AUDIT_LOG_KAFKA_TOPIC` are declared in the config
-> schema — so setting them is accepted and validated — but no code anywhere reads
-> either variable, and the Kafka destination writes to stdout. If you need events
-> in Kafka, use `AUDIT_LOG_DEST=stdout` and ship them from your log pipeline.
+### Kafka copy
+
+Set `AUDIT_LOG_DEST=db,kafka` and `AUDIT_LOG_KAFKA_BROKERS`; the other
+`AUDIT_LOG_KAFKA_*` settings are in the [environment reference](../reference/environment.md#audit-and-telemetry).
+The server refuses to start when `kafka` is listed and no broker is set.
+
+- **Tool calls never wait on Kafka.** An event is written to the database as
+  before and appended to an in-memory queue; one background producer drains the
+  queue in order, in batches of up to 500, with `acks=all`. A broker outage
+  retries with backoff (0.5 s doubling to 30 s) and does not affect tool calls.
+- **The copy is bounded.** Past `AUDIT_LOG_KAFKA_QUEUE_MAX` (default 10000)
+  queued events, new events are dropped from the Kafka copy, never from the
+  database. Events still queued when the process exits are lost from the copy;
+  on `SIGTERM`/`SIGINT` the server spends up to 5 s sending what remains.
+- **At-least-once.** A send that timed out after the broker wrote it is
+  retried, so a consumer can see an event twice. Each message carries an
+  `event_id` to de-duplicate on.
+- **Message shape.** Key: `user_id` (one user's events stay ordered within a
+  partition). Value: the event as JSON, the same as the `stdout` line, plus
+  `event_id`. The topic is not auto-created; create it first.
+- **Metrics:** `workbench_audit_kafka_sent_total`,
+  `workbench_audit_kafka_dropped_total`, `workbench_audit_kafka_send_errors_total`
+  and the `workbench_audit_kafka_queue_depth` gauge. Alert on dropped > 0.
 
 For shipping to a log aggregator, `stdout` is the destination to use. Note that
 Fastify's own request log redacts `Authorization`, `x-workbench-api-key`,

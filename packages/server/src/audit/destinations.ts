@@ -1,12 +1,14 @@
 import { AuditEvent } from "@a-workbench/shared";
 import { config } from "../config";
 import { db } from "../db";
+import { createKafkajsSender, KafkaCopy, kafkaSettingsFromConfig } from "./kafka";
 
 export interface AuditDestination {
   log(event: AuditEvent): void | Promise<void>;
 }
 
-export class SqliteDestination implements AuditDestination {
+/** The `audit_log` table in the configured database (DATABASE_URL: SQLite or PostgreSQL). */
+export class DbDestination implements AuditDestination {
   async log(event: AuditEvent): Promise<void> {
     await db.run(
       `INSERT INTO audit_log (user_id, integration, tool, action, success, error, duration_ms, created_at)
@@ -27,27 +29,65 @@ export class SqliteDestination implements AuditDestination {
   }
 }
 
+/** @deprecated The old name; it always wrote the configured database, SQLite or not. */
+export const SqliteDestination = DbDestination;
+
 export class StdoutDestination implements AuditDestination {
   log(event: AuditEvent): void {
     console.log(JSON.stringify(event));
   }
 }
 
-export class KafkaDestination implements AuditDestination {
+export type AuditDestName = "db" | "stdout" | "kafka";
+
+/**
+ * The destinations AUDIT_LOG_DEST names, in a fixed order. `sqlite` is an
+ * alias for `db`. `kafka` is only ever a copy: listing it adds `db` too, so
+ * `kafka` alone means `db,kafka` and the admin Activity tab keeps working.
+ */
+export function parseAuditDest(raw: string | undefined): AuditDestName[] {
+  const names = new Set<AuditDestName>();
+  for (const part of (raw || "db").split(",")) {
+    const s = part.trim();
+    if (s === "db" || s === "sqlite") names.add("db");
+    else if (s === "stdout" || s === "kafka") names.add(s);
+  }
+  if (names.has("kafka")) names.add("db");
+  if (!names.size) names.add("db");
+  return (["db", "stdout", "kafka"] as const).filter((n) => names.has(n));
+}
+
+/**
+ * Fan an event out to several destinations. The Kafka copy and stdout are
+ * synchronous and never throw, so they run first; the database write is
+ * awaited last and its error, if any, still reaches the caller as before.
+ */
+export class FanOutDestination implements AuditDestination {
+  constructor(private readonly dests: AuditDestination[]) {}
   async log(event: AuditEvent): Promise<void> {
-    console.error("Kafka not implemented, falling back to stdout");
-    console.log(JSON.stringify(event));
+    const pending: Array<void | Promise<void>> = [];
+    for (const d of this.dests) pending.push(d.log(event));
+    await Promise.all(pending);
   }
 }
 
+let kafkaCopy: KafkaCopy | null = null;
+
 export function createDestination(): AuditDestination {
-  switch (config.AUDIT_LOG_DEST) {
-    case "stdout":
-      return new StdoutDestination();
-    case "kafka":
-      return new KafkaDestination();
-    case "sqlite":
-    default:
-      return new SqliteDestination();
+  const names = parseAuditDest(config.AUDIT_LOG_DEST);
+  const dests: AuditDestination[] = [];
+  // Kafka first: it only queues, so it never waits behind the database write.
+  if (names.includes("kafka")) {
+    const s = kafkaSettingsFromConfig(config);
+    kafkaCopy = new KafkaCopy({ topic: s.topic, queueMax: s.queueMax, sender: createKafkajsSender(s) });
+    dests.push(kafkaCopy);
   }
+  if (names.includes("stdout")) dests.push(new StdoutDestination());
+  if (names.includes("db")) dests.push(new DbDestination());
+  return dests.length === 1 ? dests[0] : new FanOutDestination(dests);
+}
+
+/** On shutdown: send what the Kafka copy still holds, within `timeoutMs`. No-op without Kafka. */
+export async function flushAuditDestinations(timeoutMs: number): Promise<void> {
+  await kafkaCopy?.flush(timeoutMs);
 }

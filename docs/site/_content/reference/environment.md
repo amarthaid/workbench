@@ -147,17 +147,19 @@ error** that crashes the boot, not a falsy value.
 
 | Variable | Type / validation | Default | Required | Purpose |
 |---|---|---|---|---|
-| `AUDIT_LOG_DEST` | `sqlite` \| `stdout` \| `kafka` | `sqlite` | no | Where audit events go |
-| `AUDIT_LOG_KAFKA_BROKERS` | string | — | no | **Declared but never read** |
-| `AUDIT_LOG_KAFKA_TOPIC` | string | `audit-log` | no | **Declared but never read** |
+| `AUDIT_LOG_DEST` | comma-separated `db` \| `sqlite` \| `stdout` \| `kafka` | `db` | no | Where audit events go. `kafka` is a copy and always implies `db` |
+| `AUDIT_LOG_KAFKA_BROKERS` | comma-separated `host:port` | — | when `kafka` is listed | Kafka bootstrap brokers |
+| `AUDIT_LOG_KAFKA_TOPIC` | string | `audit-log` | no | Topic for the copy; must already exist |
+| `AUDIT_LOG_KAFKA_CLIENT_ID` | string | `workbench` | no | Kafka client id |
+| `AUDIT_LOG_KAFKA_SSL` | `true` \| `false` \| `1` \| `0` | `false` | no | TLS to the brokers |
+| `AUDIT_LOG_KAFKA_SASL_MECHANISM` | `plain` \| `scram-sha-256` \| `scram-sha-512` | — | no | SASL; needs the two below |
+| `AUDIT_LOG_KAFKA_SASL_USERNAME` | string | — | with SASL | SASL user |
+| `AUDIT_LOG_KAFKA_SASL_PASSWORD` | string | — | with SASL | SASL password |
+| `AUDIT_LOG_KAFKA_QUEUE_MAX` | positive integer | `10000` | no | Events held in memory for Kafka; past it, new events skip the copy |
 
-`sqlite` writes to whatever backend `DATABASE_URL` selects, PostgreSQL included,
-despite the name.
-
-> [!WARNING] The `kafka` destination is not implemented
-> `AUDIT_LOG_KAFKA_BROKERS` and `AUDIT_LOG_KAFKA_TOPIC` pass validation and are then
-> read by nothing. Selecting `AUDIT_LOG_DEST=kafka` logs "Kafka not implemented,
-> falling back to stdout" and prints the event as a JSON line.
+`db` (and its old name `sqlite`) writes to whatever backend `DATABASE_URL` selects,
+PostgreSQL included. See [Audit log](../deploy/observability.md#audit-log) for how
+the Kafka copy behaves.
 
 There is no variable for tracing. OpenTelemetry instrumentation is registered but
 starts with no exporter configured, so spans are produced and nothing exports them by
@@ -211,7 +213,7 @@ Read only by the shipped scripts and by tests — never by the running server.
 > [!NOTE] `.env.example` is incomplete
 > It documents 11 of the 31 schema variables. Missing entirely: `NODE_ENV`,
 > `PORTAL_DIST_DIR`, `OAUTH_ACCESS_TOKEN_TTL_SECONDS`, every `BROWSER_*`, every
-> `JOTS_*`, both `PG_*`, both `AUDIT_LOG_KAFKA_*`, all three `KEYCLOAK_*`,
+> `JOTS_*`, both `PG_*`, all three `KEYCLOAK_*`,
 > `CLUSTER_ENABLED` (present only as a comment), every `CAPTURE_PROXY*`, and
 > `<PLUGIN>_ALLOWED_INSTANCES`. On the plugin side only the seven Google plugins
 > get real `_CLIENT_ID` / `_CLIENT_SECRET` placeholders: six more (`GITHUB`,

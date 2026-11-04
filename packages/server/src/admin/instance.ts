@@ -1,13 +1,15 @@
 import { config } from "../config";
 import { db } from "../db";
 import { auditStored } from "../audit/query";
+import { parseAuditDest } from "../audit/destinations";
 import { readVersion } from "../version";
 
 export interface InstanceInfo {
   version: string;
   db_backend: "sqlite" | "postgres";
   cluster_enabled: boolean;
-  audit_log_dest: "sqlite" | "stdout" | "kafka";
+  /** Normalised AUDIT_LOG_DEST, e.g. "db" or "db,kafka". */
+  audit_log_dest: string;
   audit_stored: boolean;
   user_count: number;
   admin_count: number;
@@ -21,7 +23,7 @@ export async function getInstanceInfo(): Promise<InstanceInfo> {
     version: VERSION,
     db_backend: db.dialect,
     cluster_enabled: !!config.CLUSTER_ENABLED,
-    audit_log_dest: config.AUDIT_LOG_DEST,
+    audit_log_dest: parseAuditDest(config.AUDIT_LOG_DEST).join(","),
     audit_stored: auditStored(),
     user_count: Number(row?.n ?? 0),
     // A count, not the list: the allowlist is not for display.

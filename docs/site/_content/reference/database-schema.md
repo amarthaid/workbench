@@ -187,9 +187,9 @@ Every tool execution, success or failure.
 Indexes: `idx_audit_user(user_id, created_at)` and
 `idx_audit_integration(integration, created_at)`.
 
-Rows are written by the audit logger when `AUDIT_LOG_DEST=sqlite` — which, despite the
-name, writes to whichever backend is configured. The other destinations write nothing
-here.
+Rows are written by the audit logger whenever `AUDIT_LOG_DEST` includes `db` (the
+default; `sqlite` is its old name, and `kafka` implies it). It writes to whichever backend
+is configured. With `stdout` alone nothing is written here.
 
 Nothing prunes this table. Plan retention yourself.
 

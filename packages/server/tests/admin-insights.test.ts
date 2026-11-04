@@ -153,9 +153,14 @@ describe("GET /api/admin/overview/top-tools", () => {
     ]);
   });
 
-  it("reports not stored for a non-sqlite audit destination", async () => {
-    config.AUDIT_LOG_DEST = "kafka";
+  it("reports not stored when audit events only go to stdout", async () => {
+    config.AUDIT_LOG_DEST = "stdout";
     expect(JSON.parse((await get("/api/admin/overview/top-tools")).body)).toEqual({ stored: false, tools: [] });
+  });
+
+  it("kafka is a copy alongside the database: still stored", async () => {
+    config.AUDIT_LOG_DEST = "kafka";
+    expect(JSON.parse((await get("/api/admin/overview/top-tools")).body).stored).toBe(true);
   });
 });
 
