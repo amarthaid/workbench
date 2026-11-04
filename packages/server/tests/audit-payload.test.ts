@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { randomBytes } from "node:crypto";
 import { captureValue, isSecretKey, sanitizeForAudit } from "../src/audit/payload";
 import { AuditLogger } from "../src/audit/logger";
 import { DbDestination } from "../src/audit/destinations";
@@ -39,7 +40,7 @@ describe("sanitizeForAudit", () => {
       short: "aGVsbG8=",
     }) as Record<string, unknown>;
     expect(out.buf).toBe("[binary 10 bytes]");
-    expect(out.img).toMatch(/^\[binary \d+ bytes\]$/);
+    expect(out.img).toBe("[binary 3000 bytes]");
     expect(out.raw).toBe("[binary 3000 bytes]");
     expect(out.content).toEqual([{ type: "image", data: "[binary 3000 bytes]" }]);
     expect(out.short).toBe("aGVsbG8=");
@@ -52,6 +53,30 @@ describe("sanitizeForAudit", () => {
   it("wrapped base64 (line breaks) is still caught", () => {
     const wrapped = Buffer.alloc(3000, 7).toString("base64").replace(/(.{76})/g, "$1\n");
     expect(sanitizeForAudit(wrapped)).toBe("[binary 3000 bytes]");
+  });
+  it("a browser_screenshot result keeps its shape, with the image reduced to its size", () => {
+    // The shape browserScreenshot returns (src/auth/browser-session.ts), with
+    // image-like bytes: a JPEG header followed by random data, as a real
+    // capture would be, so the base64 has the mixed case real images have.
+    const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), randomBytes(150_000)]);
+    const result = { _mcpImage: { data: jpeg.toString("base64"), mimeType: "image/jpeg" } };
+    expect(sanitizeForAudit(result)).toEqual({
+      _mcpImage: { data: `[binary ${jpeg.length} bytes]`, mimeType: "image/jpeg" },
+    });
+    // Recorded whole under the default result cap: the image never uses it up.
+    const c = captureValue(result, 8192)!;
+    expect(c.truncated).toBe(false);
+    expect(c.text).toBe(`{"_mcpImage":{"data":"[binary ${jpeg.length} bytes]","mimeType":"image/jpeg"}}`);
+  });
+  it("reports the exact decoded size, padding included", () => {
+    for (const n of [600, 601, 602]) {
+      const b64 = randomBytes(n).toString("base64");
+      expect(sanitizeForAudit(b64)).toBe(`[binary ${n} bytes]`);
+      expect(sanitizeForAudit(`data:image/png;base64,${b64}`)).toBe(`[binary ${n} bytes]`);
+    }
+  });
+  it("the screenshot \"pixels unchanged\" reply is kept as is", () => {
+    expect(sanitizeForAudit({ unchanged: true })).toEqual({ unchanged: true });
   });
   it("survives circular values and bigints", () => {
     const a: Record<string, unknown> = { n: 10n };

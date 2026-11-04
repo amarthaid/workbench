@@ -141,6 +141,15 @@ Events written outside a request (background token refreshes and reconnects) car
 none of these. The MCP `initialize` `clientInfo` is not recorded: `/mcp` is stateless,
 so it is not known on later calls; the `User-Agent` usually names the client instead.
 
+**In the application log too.** Each tool call also prints one JSON line to stdout,
+`"tool executed"` (level 30) or `"tool execute failed"` (level 50), with `user_id`,
+`integration`, `tool`, `success`, `duration_ms` and, on failure, `error`. It carries
+the same request-origin fields as the audit event (`user_email`, `source_ip`,
+`user_agent`, `auth_method`, `client_id`, `client_name`), but never the arguments or
+the result, whatever `AUDIT_PAYLOAD` says. The request log line (Fastify's, one per
+HTTP request) has `remoteAddress` (the client, resolved as above) and `peerAddress` (the
+directly connected proxy).
+
 ### Arguments and results (`AUDIT_PAYLOAD`)
 
 Off by default. `AUDIT_PAYLOAD=args` records the arguments of every tool call

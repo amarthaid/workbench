@@ -54,6 +54,20 @@ export function isSecretKey(key: string): boolean {
 const BASE64_RUN = /^[A-Za-z0-9+/_-]{512,}={0,2}$/;
 const MAX_DEPTH = 32;
 
+/** Decoded size of base64 text: 3 bytes per 4 characters, less the `=` padding. */
+function base64Bytes(b64: string): number {
+  const padding = b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((b64.length * 3) / 4) - padding);
+}
+
+/** Size of a `data:` URI's payload: decoded base64, or the raw text otherwise. */
+function dataUriBytes(uri: string): number {
+  const comma = uri.indexOf(",");
+  const meta = uri.slice(0, comma);
+  const body = uri.slice(comma + 1);
+  return /;base64$/i.test(meta) ? base64Bytes(body.replace(/\s+/g, "")) : Buffer.byteLength(body);
+}
+
 function binaryNote(bytes: number): string {
   return `[binary ${bytes} bytes]`;
 }
@@ -64,14 +78,14 @@ export function sanitizeForAudit(value: unknown): unknown {
   const walk = (v: unknown, depth: number): unknown => {
     if (v === null || v === undefined) return v ?? null;
     if (typeof v === "string") {
-      if (v.startsWith("data:") && v.length > 64) return binaryNote(Math.floor((v.length - v.indexOf(",") - 1) * 0.75));
+      if (v.startsWith("data:") && v.length > 64 && v.includes(",")) return binaryNote(dataUriBytes(v));
       // Base64 is often wrapped at 64/76 columns: ignore line breaks only, so
       // prose (which has spaces) never qualifies. Mixed case is required so a
       // long run of one letter or a lowercase identifier is not mistaken for it.
       if (v.length >= 512) {
         const compact = v.replace(/[\r\n]+/g, "");
         if (BASE64_RUN.test(compact) && /[A-Z]/.test(compact) && /[a-z]/.test(compact)) {
-          return binaryNote(Math.floor(compact.length * 0.75));
+          return binaryNote(base64Bytes(compact));
         }
       }
       return v;

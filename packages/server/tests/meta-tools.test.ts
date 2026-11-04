@@ -275,6 +275,31 @@ describe("meta-tools", () => {
       expect(row).not.toHaveProperty("result");
     });
 
+    it("the tool log line carries the request origin, never arguments or results", async () => {
+      const { executeSingle } = await import("../src/mcp/meta-tools");
+      const { runWithAuditContext } = await import("../src/audit/context");
+      const t = { ...mockTool, inputSchema: { safeParse: (a: unknown) => ({ success: true, data: a }) }, handler: vi.fn(async () => ({ secret_result: "res-xyz" })) };
+      vi.spyOn(registry, "getTool").mockReturnValue(t as any);
+      const lines: string[] = [];
+      const spy = vi.spyOn(console, "log").mockImplementation((m: unknown) => void lines.push(String(m)));
+      await runWithAuditContext(
+        { source_ip: "203.0.113.9", user_agent: "claude-code/2.0", auth_method: "api_key" },
+        () => executeSingle("user-1", "test_tool", { q: "arg-xyz" })
+      );
+      spy.mockRestore();
+      const line = lines.map((l) => { try { return JSON.parse(l); } catch { return null; } }).find((l) => l?.msg === "tool executed");
+      expect(line).toMatchObject({
+        level: 30,
+        user_id: "user-1",
+        source_ip: "203.0.113.9",
+        user_agent: "claude-code/2.0",
+        auth_method: "api_key",
+        tool: "test_tool",
+        success: true,
+      });
+      expect(JSON.stringify(line)).not.toMatch(/arg-xyz|res-xyz/);
+    });
+
     it("never passes the vault tools' arguments", async () => {
       const { executeSingle } = await import("../src/mcp/meta-tools");
       const t = { ...mockTool, name: "vault_set", inputSchema: { safeParse: (a: unknown) => ({ success: true, data: a }) }, handler: vi.fn(async () => ({ ok: true })) };

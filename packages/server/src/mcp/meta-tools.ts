@@ -20,6 +20,7 @@ import { signConnectToken } from "../auth/connect-token";
 import { signCurlToken } from "../auth/curl-session";
 import { resolveVaultRefs, scrubVaultValues, scrubString, VaultRefError, VaultScrubError } from "../vault/interpolate";
 import { touchUsed } from "../vault/store";
+import { requestLogFields } from "../audit/context";
 import { rememberSubstituted, recentSubstituted } from "../vault/recent";
 
 // `connect` and `get_auth_url` are the same tool under two names (kept for
@@ -495,6 +496,7 @@ export async function executeSingle(
           level: 30,
           msg: "tool executed",
           user_id: userId,
+          ...(await requestLogFields(userId)),
           integration: targetTool.integration,
           tool: toolName,
           success: true,
@@ -529,6 +531,7 @@ export async function executeSingle(
             level: 50,
             msg: "tool execute failed",
             user_id: userId,
+            ...(await requestLogFields(userId)),
             integration: targetTool.integration,
             tool: toolName,
             success: false,
@@ -556,6 +559,7 @@ export async function executeSingle(
           level: 50,
           msg: "tool execute failed",
           user_id: userId,
+          ...(await requestLogFields(userId)),
           integration: targetTool.integration,
           tool: toolName,
           success: false,
