@@ -293,6 +293,10 @@ export async function executeSingle(
   rawArgs: Record<string, unknown>,
   preSubstituted?: Map<string, string>
 ): Promise<ExecResult> {
+  // What the audit log may record of the arguments (AUDIT_PAYLOAD): the ones
+  // the agent sent, `{{vault:…}}` references unresolved. Never for the vault's
+  // own tools, whose arguments are the secrets themselves.
+  const auditArgs = toolName.startsWith("vault_") ? undefined : rawArgs;
   const targetTool = registry.getTool(toolName);
   if (!targetTool) {
     const appTool = await getToolForUser(userId, toolName);
@@ -308,6 +312,7 @@ export async function executeSingle(
           user_id: userId,
           tool: toolName,
           action: "EXECUTE",
+          args: auditArgs,
           success: false,
           error: "Tool not found",
           duration_ms: Date.now() - start,
@@ -329,6 +334,7 @@ export async function executeSingle(
           integration: targetTool.integration,
           tool: toolName,
           action: "EXECUTE",
+          args: auditArgs,
           success: false,
           error: "NOT_CONNECTED",
           duration_ms: Date.now() - start,
@@ -365,6 +371,7 @@ export async function executeSingle(
               integration: targetTool.integration,
               tool: toolName,
               action: "EXECUTE",
+              args: auditArgs,
               success: false,
               error: e.code,
               duration_ms: Date.now() - start,
@@ -439,6 +446,7 @@ export async function executeSingle(
             integration: targetTool.integration,
             tool: toolName,
             action: "EXECUTE",
+            args: auditArgs,
             success: false,
             error: "INVALID_ARGS",
             duration_ms: Date.now() - start,
@@ -458,6 +466,7 @@ export async function executeSingle(
           integration: targetTool.integration,
           tool: toolName,
           action: "EXECUTE",
+          args: auditArgs,
           success: false,
           error: `SAFEPARSE_ERROR: ${err}`,
           duration_ms: Date.now() - start,
@@ -477,7 +486,9 @@ export async function executeSingle(
           integration: targetTool.integration,
           tool: toolName,
           action: "EXECUTE",
+          args: auditArgs,
           success: true,
+          result,
           duration_ms,
         });
         console.log(JSON.stringify({
@@ -504,6 +515,7 @@ export async function executeSingle(
             integration: targetTool.integration,
             tool: toolName,
             action: "EXECUTE",
+            args: auditArgs,
             success: false,
             error: e.code,
             duration_ms,
@@ -535,6 +547,7 @@ export async function executeSingle(
           integration: targetTool.integration,
           tool: toolName,
           action: "EXECUTE",
+          args: auditArgs,
           success: false,
           error: err,
           duration_ms,
@@ -572,6 +585,8 @@ export async function executeCustomAppSingle(
   rawArgs: Record<string, unknown>,
   preSubstituted?: Map<string, string>
 ): Promise<ExecResult> {
+  // Arguments as the agent sent them (vault references unresolved), for AUDIT_PAYLOAD.
+  const auditArgs: Record<string, unknown> = rawArgs;
   return withSpan(
     "execute_custom_app",
     async () => {
@@ -592,6 +607,7 @@ export async function executeCustomAppSingle(
           integration: tool.integration,
           tool: tool.name,
           action: "EXECUTE",
+          args: auditArgs,
           success: false,
           error: message,
           duration_ms: Date.now() - start,
@@ -651,6 +667,7 @@ export async function executeCustomAppSingle(
             integration: tool.integration,
             tool: tool.name,
             action: "EXECUTE",
+            args: auditArgs,
             success: false,
             error: errText,
             duration_ms,
@@ -666,7 +683,9 @@ export async function executeCustomAppSingle(
           integration: tool.integration,
           tool: tool.name,
           action: "EXECUTE",
+          args: auditArgs,
           success: true,
+          result,
           duration_ms,
         });
         const durationS = duration_ms / 1000;
@@ -685,6 +704,7 @@ export async function executeCustomAppSingle(
           integration: tool.integration,
           tool: tool.name,
           action: "EXECUTE",
+          args: auditArgs,
           success: false,
           error: err,
           duration_ms,

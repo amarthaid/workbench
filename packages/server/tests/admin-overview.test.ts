@@ -97,7 +97,7 @@ async function seedApp(o: { id: string; userId: string; name: string; url: strin
 
 beforeEach(async () => {
   prof.dir = mkdtempSync(join(tmpdir(), "overview-profiles-"));
-  for (const t of ["audit_log", "connections", "custom_apps", "users"]) {
+  for (const t of ["audit_payload", "audit_log", "connections", "custom_apps", "users"]) {
     await db.exec(`DELETE FROM ${t}`);
   }
   config.ADMIN_EMAILS = ["admin@example.com"];
@@ -192,6 +192,28 @@ describe("GET /api/admin/overview/activity", () => {
     expect(body.events).toHaveLength(1);
     expect(body.events[0].user_id).toBe("user-ghost");
     expect(body.events[0].user_email).toBeNull();
+  });
+
+  it("falls back to the email recorded with the event when the user row is gone", async () => {
+    await db.run("INSERT INTO audit_log (user_id, user_email, action, success, created_at) VALUES (?, ?, ?, ?, ?)", [
+      "user-gone", "gone@example.com", "EXECUTE", true, NOW,
+    ]);
+    const body = JSON.parse((await get("/api/admin/overview/activity")).body);
+    expect(body.events[0].user_email).toBe("gone@example.com");
+    const filtered = JSON.parse((await get("/api/admin/overview/activity?email=gone@example.com")).body);
+    expect(filtered.events).toHaveLength(1);
+  });
+
+  it("flags events that have captured arguments / result", async () => {
+    await seedEvent({ userId: "user-dev", tool: "plain" });
+    await db.run("INSERT INTO audit_log (user_id, tool, action, success, created_at) VALUES (?, ?, ?, ?, ?)", [
+      "user-dev", "with_payload", "EXECUTE", true, NOW + 1,
+    ]);
+    const id = (await db.get<{ id: number }>("SELECT id FROM audit_log WHERE tool = ?", ["with_payload"]))!.id;
+    await db.run("INSERT INTO audit_payload (audit_id, args) VALUES (?, ?)", [id, '{"q":1}']);
+    const body = JSON.parse((await get("/api/admin/overview/activity")).body);
+    const byTool = Object.fromEntries(body.events.map((e: { tool: string; has_payload: boolean }) => [e.tool, e.has_payload]));
+    expect(byTool).toEqual({ with_payload: true, plain: false });
   });
 
   it("filters by user email, case-insensitively", async () => {
@@ -334,5 +356,52 @@ describe("GET /api/admin/overview/browser-profiles", () => {
     config.CLUSTER_ENABLED = true;
     const body = JSON.parse((await get("/api/admin/overview/browser-profiles")).body);
     expect(body).toEqual({ profiles: [] });
+  });
+});
+
+describe("GET /api/admin/overview/activity/:id/payload", () => {
+  async function seedPayload() {
+    await db.run("INSERT INTO audit_log (user_id, tool, action, success, created_at) VALUES (?, ?, ?, ?, ?)", [
+      "user-dev", "t", "EXECUTE", true, NOW,
+    ]);
+    const id = Number((await db.get<{ id: number }>("SELECT id FROM audit_log WHERE tool = ?", ["t"]))!.id);
+    await db.run(
+      "INSERT INTO audit_payload (audit_id, args, args_truncated, args_bytes, result, result_truncated, result_bytes) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      [id, '{"q":1}', false, 7, '{"body":"abc', true, 90000]
+    );
+    return id;
+  }
+
+  it("401/403 for non-admins", async () => {
+    const id = await seedPayload();
+    expect((await get(`/api/admin/overview/activity/${id}/payload`, {})).statusCode).toBe(401);
+    expect((await get(`/api/admin/overview/activity/${id}/payload`, DEV)).statusCode).toBe(403);
+  });
+
+  it("returns the captured values with truncation flags and sizes, and audits the view", async () => {
+    await seedUser("user-admin", "admin@example.com");
+    const id = await seedPayload();
+    const res = await get(`/api/admin/overview/activity/${id}/payload`);
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({
+      audit_id: id,
+      args: '{"q":1}',
+      args_truncated: false,
+      args_bytes: 7,
+      result: '{"body":"abc',
+      result_truncated: true,
+      result_bytes: 90000,
+    });
+    const views = await db.all<{ action: string; tool: string; user_email: string }>(
+      "SELECT action, tool, user_email FROM audit_log WHERE action = 'ADMIN_AUDIT_PAYLOAD_VIEW'"
+    );
+    expect(views).toEqual([
+      { action: "ADMIN_AUDIT_PAYLOAD_VIEW", tool: `admin.activity.payload id=${id}`, user_email: "admin@example.com" },
+    ]);
+  });
+
+  it("404 when nothing was captured, 400 for a non-numeric id", async () => {
+    expect((await get("/api/admin/overview/activity/999999/payload")).statusCode).toBe(404);
+    expect((await get("/api/admin/overview/activity/abc/payload")).statusCode).toBe(400);
   });
 });

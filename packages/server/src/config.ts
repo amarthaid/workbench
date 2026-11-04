@@ -32,6 +32,16 @@ export const configSchema = z.object({
         && v.split(",").map((s) => s.trim()).filter(Boolean).every((s) => ["db", "sqlite", "stdout", "kafka"].includes(s)),
       { message: "AUDIT_LOG_DEST must be a comma-separated list of db, sqlite, stdout, kafka" }
     ),
+  // Tool-call arguments / results in the audit log (src/audit/payload.ts):
+  // off (default), args, or full (args + result). Sanitised and capped per
+  // value (arguments and result each have their own cap, in UTF-8 bytes of the
+  // JSON text); stored in `audit_payload` and carried in the Kafka / stdout
+  // events. Curl proxy bodies are never recorded.
+  AUDIT_PAYLOAD: z.enum(["off", "args", "full"]).default("off"),
+  // At most 256 KiB each, so an event carrying both stays under Kafka's
+  // default 1 MB message limit (message.max.bytes).
+  AUDIT_PAYLOAD_ARGS_MAX_BYTES: z.coerce.number().int().min(256).max(262_144).default(8192),
+  AUDIT_PAYLOAD_RESULT_MAX_BYTES: z.coerce.number().int().min(256).max(262_144).default(8192),
   // Kafka copy of the audit log (only read when AUDIT_LOG_DEST lists kafka).
   AUDIT_LOG_KAFKA_BROKERS: z.string().optional(), // comma-separated host:port
   AUDIT_LOG_KAFKA_TOPIC: z.string().default("audit-log"),

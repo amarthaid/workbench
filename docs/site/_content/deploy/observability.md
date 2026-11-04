@@ -114,6 +114,41 @@ The admin Activity and Overview tabs read the database, so they work whenever
 PostgreSQL rejects `1`/`0` for `BOOLEAN`. `created_at` is unix seconds. Two
 indexes support querying: `(user_id, created_at)` and `(integration, created_at)`.
 
+### Arguments and results (`AUDIT_PAYLOAD`)
+
+Off by default. `AUDIT_PAYLOAD=args` records the arguments of every tool call
+(over `/mcp` and `/rest`); `full` also records the result. Every event, payload or not,
+also carries `user_email`.
+
+- **What is recorded.** Arguments as the agent *sent* them, before
+  `{{vault:NAME}}` references are resolved, so vault secrets stay placeholders. The
+  result as the agent received it, already vault-scrubbed. The vault's own tools never
+  record arguments.
+- **Sanitised.** Any key naming a credential (`password`, `secret`, `token`,
+  `apiKey`, `authorization`, `cookie`, `privateKey`, `otp`, `pin`, …), at any depth, is
+  replaced with `"[REDACTED]"`. Binary data, `data:` URIs and long base64 runs (screenshots,
+  file contents) become `"[binary N bytes]"`. A secret the agent typed into an ordinary
+  field (for example `browser_type` text) is **not** caught: the audit log holds what the
+  agent sent.
+- **Limited.** Arguments and result each have a cap, in UTF-8 bytes of their JSON text:
+  `AUDIT_PAYLOAD_ARGS_MAX_BYTES` and `AUDIT_PAYLOAD_RESULT_MAX_BYTES` (default 8192,
+  256–262144). Past the cap the value is **cut, not dropped**: the first part is kept,
+  `args_truncated` / `result_truncated` is `true`, and `args_bytes` / `result_bytes`
+  hold the full size. The event itself is always written. A cut value is no longer valid
+  JSON. The 256 KiB maximum keeps an event carrying both under Kafka's default 1 MB
+  message limit.
+- **Where it goes.** In the database, the separate `audit_payload` table (one row per
+  event that has a payload); in Kafka and stdout, the `args`, `args_truncated`,
+  `args_bytes`, `result`, `result_truncated`, `result_bytes` fields of the event.
+- **Who can read it.** Admins, per event, from Admin → Activity → **Details**. Every
+  such read writes its own `ADMIN_AUDIT_PAYLOAD_VIEW` event. Users do not see payloads on
+  their own Activity page.
+- **Not for curl.** `CURL_REQUEST` rows never carry bodies, headers or query strings,
+  whatever `AUDIT_PAYLOAD` says.
+- **Growth.** Up to the two caps per tool call, and nothing prunes it. On SQLite the
+  table lives in the same file as the stored credentials; size the volume, or prune
+  `audit_payload` yourself.
+
 ### Kafka copy
 
 Set `AUDIT_LOG_DEST=db,kafka` and `AUDIT_LOG_KAFKA_BROKERS`; the other
@@ -132,7 +167,8 @@ The server refuses to start when `kafka` is listed and no broker is set.
   retried, so a consumer can see an event twice. Each message carries an
   `event_id` to de-duplicate on.
 - **Message shape.** Key: `user_id` (one user's events stay ordered within a
-  partition). Value: the event as JSON, the same as the `stdout` line, plus
+  partition). Value: the event as JSON, the same as the `stdout` line (including
+  `user_email` and, with `AUDIT_PAYLOAD`, the captured arguments and result), plus
   `event_id`. The topic is not auto-created; create it first.
 - **Metrics:** `workbench_audit_kafka_sent_total`,
   `workbench_audit_kafka_dropped_total`, `workbench_audit_kafka_send_errors_total`

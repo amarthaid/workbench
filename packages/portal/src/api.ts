@@ -772,7 +772,23 @@ export interface AdminInstance {
 export interface AdminActivityEvent extends ActivityEvent {
   user_id: string;
   user_email: string | null;
+  /** Arguments / result were captured for this event (AUDIT_PAYLOAD). */
+  has_payload?: boolean;
 }
+
+export interface AdminAuditPayload {
+  audit_id: number;
+  args: string | null;
+  args_truncated: boolean;
+  args_bytes: number | null;
+  result: string | null;
+  result_truncated: boolean;
+  result_bytes: number | null;
+}
+
+/** One event's captured arguments / result. The server audits every read. */
+export const fetchAdminActivityPayload = (id: number) =>
+  adminGet<AdminAuditPayload>(`/api/admin/overview/activity/${encodeURIComponent(String(id))}/payload`, "payload");
 
 export interface AdminActivityPage {
   /** False when audit events are routed somewhere other than the database. */

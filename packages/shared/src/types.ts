@@ -168,9 +168,22 @@ export interface AuditEvent {
     | "ADMIN_CUSTOM_APPS_POLICY"
     | "ADMIN_BROWSER_BLOCKLIST"
     | "CURL_SESSION"
-    | "CURL_REQUEST";
+    | "CURL_REQUEST"
+    | "ADMIN_AUDIT_PAYLOAD_VIEW";
   success: boolean;
   error?: string;
+  /** The user's email when the event was written (null if unknown). */
+  user_email?: string | null;
+  /** AUDIT_PAYLOAD: sanitised JSON text of the arguments the agent sent, capped. */
+  args?: string;
+  args_truncated?: boolean;
+  /** Size of the full sanitised arguments before any cut (UTF-8 bytes). */
+  args_bytes?: number;
+  /** AUDIT_PAYLOAD=full: sanitised JSON text of the result, capped. */
+  result?: string;
+  result_truncated?: boolean;
+  /** Size of the full sanitised result before any cut (UTF-8 bytes). */
+  result_bytes?: number;
   duration_ms?: number;
   timestamp: string;
 }

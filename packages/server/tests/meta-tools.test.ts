@@ -244,6 +244,50 @@ describe("meta-tools", () => {
     });
   });
 
+  describe("audit payload hand-off", () => {
+    beforeEach(async () => {
+      const { getToken } = await import("../src/auth/tokens");
+      vi.mocked(getToken).mockResolvedValue({ accessToken: "tok", scopes: "" });
+      vi.spyOn(registry, "getIntegration").mockReturnValue(mockOauthInteg as any);
+      const { auditLogger } = await import("../src/audit/logger");
+      vi.mocked(auditLogger.log).mockClear();
+    });
+
+    it("passes the sent arguments and the result to the audit logger", async () => {
+      const { executeSingle } = await import("../src/mcp/meta-tools");
+      const t = { ...mockTool, inputSchema: { safeParse: (a: unknown) => ({ success: true, data: a }) }, handler: vi.fn(async () => ({ done: true })) };
+      vi.spyOn(registry, "getTool").mockReturnValue(t as any);
+      await executeSingle("user-1", "test_tool", { x: 1 });
+      const { auditLogger } = await import("../src/audit/logger");
+      expect(auditLogger.log).toHaveBeenCalledWith(
+        expect.objectContaining({ action: "EXECUTE", success: true, args: { x: 1 }, result: { done: true } })
+      );
+    });
+
+    it("passes the arguments on a failure too, with no result", async () => {
+      const { executeSingle } = await import("../src/mcp/meta-tools");
+      const t = { ...mockTool, inputSchema: { safeParse: (a: unknown) => ({ success: true, data: a }) }, handler: vi.fn(async () => { throw new Error("boom"); }) };
+      vi.spyOn(registry, "getTool").mockReturnValue(t as any);
+      await executeSingle("user-1", "test_tool", { x: 2 });
+      const { auditLogger } = await import("../src/audit/logger");
+      const row = vi.mocked(auditLogger.log).mock.calls[0][0];
+      expect(row).toMatchObject({ success: false, args: { x: 2 } });
+      expect(row).not.toHaveProperty("result");
+    });
+
+    it("never passes the vault tools' arguments", async () => {
+      const { executeSingle } = await import("../src/mcp/meta-tools");
+      const t = { ...mockTool, name: "vault_set", inputSchema: { safeParse: (a: unknown) => ({ success: true, data: a }) }, handler: vi.fn(async () => ({ ok: true })) };
+      vi.spyOn(registry, "getTool").mockReturnValue(t as any);
+      await executeSingle("user-1", "vault_set", { name: "db", value: "s3cret-fake" });
+      const { auditLogger } = await import("../src/audit/logger");
+      for (const [row] of vi.mocked(auditLogger.log).mock.calls) {
+        expect(row.args).toBeUndefined();
+        expect(JSON.stringify(row)).not.toContain("s3cret-fake");
+      }
+    });
+  });
+
   describe("vault interpolation in executeSingle", () => {
     const runOne = (tool: any, exec: { tool: string; args: Record<string, unknown> }) =>
       tool.handler({ userId: "user-1" }, { executions: [exec] }).then((r: any) => r.results[0]);
