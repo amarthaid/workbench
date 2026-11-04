@@ -8,9 +8,30 @@ import { auditLogger } from "../audit/logger";
 const AUDIT_PATH_MAX = 300;
 
 /**
- * One CURL_REQUEST audit row per proxied call: method and path only. The query
- * string is dropped (search terms, filters, sometimes tokens) and so are the
- * headers and body. An audit failure is logged, never turned into a failed
+ * A fixed, body-free reason for a failed proxied call. Raw error messages are
+ * never recorded: some carry upstream response text (a failed token refresh
+ * throws `Refresh failed <status>: <response body>`), and an undici error can
+ * name the full URL with its query string. Only the status, a network error
+ * code, and a category from this list reach the audit row.
+ */
+export function curlFailureReason(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  const refresh = /^Refresh failed (\d{3})/.exec(msg);
+  if (refresh) return `token refresh failed (HTTP ${refresh[1]})`;
+  if (/^NOT_CONNECTED$|^Not connected$/.test(msg)) return "not connected";
+  if (/^Token expired/.test(msg)) return "token expired";
+  if (/not in declared (allowedHosts|cookieDomains)$/.test(msg)) return "target host not allowed";
+  const code = (err as { cause?: { code?: unknown } } | null)?.cause?.code;
+  if (typeof code === "string" && /^[A-Z0-9_]{2,40}$/.test(code)) return `upstream request failed (${code})`;
+  return "upstream request failed";
+}
+
+/**
+ * One CURL_REQUEST audit row per proxied call: who, which integration, and
+ * `METHOD /path`, plus success, the upstream status or a fixed failure reason
+ * (curlFailureReason), and duration. Never recorded: the query string (search
+ * terms, filters, sometimes tokens), request or response headers, and request
+ * or response bodies. An audit failure is logged, never turned into a failed
  * proxy response.
  */
 async function auditCurl(
@@ -139,7 +160,7 @@ export async function registerCurlProxy(app: FastifyInstance): Promise<void> {
           base = await resolveProxyBaseUrl(integ.proxy, ctx, integration);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          await audit({ status: 502, error: `cannot resolve proxy base URL: ${msg}` });
+          await audit({ status: 502, error: "cannot resolve proxy base URL" });
           return reply.code(502).send({ error: `Cannot resolve proxy base URL: ${msg}` });
         }
 
@@ -175,7 +196,7 @@ export async function registerCurlProxy(app: FastifyInstance): Promise<void> {
           });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          await audit({ status: 502, error: `upstream request failed: ${msg}` });
+          await audit({ status: 502, error: curlFailureReason(err) });
           return reply.code(502).send({ error: `Upstream request failed: ${msg}` });
         }
 

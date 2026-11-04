@@ -13,7 +13,7 @@ vi.mock("../src/plugins/context", () => ({
 }));
 vi.mock("../src/audit/logger", () => ({ auditLogger: { log: vi.fn(async () => {}) } }));
 
-import { registerCurlProxy } from "../src/api/curl-proxy";
+import { registerCurlProxy, curlFailureReason } from "../src/api/curl-proxy";
 import { registry } from "../src/plugins/registry";
 import { auditLogger } from "../src/audit/logger";
 
@@ -57,13 +57,40 @@ describe("curl proxy audit", () => {
     );
   });
 
-  it("an upstream network error is recorded", async () => {
-    http.mockRejectedValue(new Error("ECONNRESET"));
+  it("an upstream network error is recorded by its code, not its message", async () => {
+    http.mockRejectedValue(
+      Object.assign(new Error("fetch failed for https://api.example.com/x?q=secret-term"), { cause: { code: "ECONNRESET" } })
+    );
     const res = await call("GET", "/c/acme/x");
     expect(res.statusCode).toBe(502);
-    expect(auditLogger.log).toHaveBeenCalledWith(
-      expect.objectContaining({ success: false, error: expect.stringContaining("ECONNRESET") })
-    );
+    const row = vi.mocked(auditLogger.log).mock.calls[0][0];
+    expect(row).toMatchObject({ success: false, error: "upstream request failed (ECONNRESET)" });
+    expect(JSON.stringify(row)).not.toContain("secret-term");
+  });
+
+  it("a failed token refresh keeps the status and drops the response body", async () => {
+    http.mockRejectedValue(new Error('Refresh failed 400: {"error":"invalid_grant","error_description":"secret-detail"}'));
+    await call("GET", "/c/acme/x");
+    const row = vi.mocked(auditLogger.log).mock.calls[0][0];
+    expect(row.error).toBe("token refresh failed (HTTP 400)");
+    expect(JSON.stringify(row)).not.toContain("secret-detail");
+  });
+
+  it("never records request or response bodies or headers", async () => {
+    http.mockResolvedValue(new Response("response-body-secret", { status: 500, headers: { "x-upstream": "hdr-secret" } }));
+    const app = Fastify();
+    await registerCurlProxy(app);
+    await app.inject({
+      method: "POST",
+      url: "/c/acme/things",
+      headers: { authorization: "Bearer curl-jwt", "content-type": "application/json", "x-client": "req-hdr-secret" },
+      payload: { password: "request-body-secret" },
+    });
+    const row = JSON.stringify(vi.mocked(auditLogger.log).mock.calls[0][0]);
+    for (const leak of ["request-body-secret", "response-body-secret", "req-hdr-secret", "hdr-secret", "curl-jwt"]) {
+      expect(row).not.toContain(leak);
+    }
+    expect(vi.mocked(auditLogger.log).mock.calls[0][0]).toMatchObject({ tool: "POST /things", error: "HTTP 500" });
   });
 
   it("a request for an integration outside the session is recorded as refused", async () => {
@@ -85,5 +112,20 @@ describe("curl proxy audit", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     http.mockResolvedValue(new Response("ok", { status: 200 }));
     expect((await call("GET", "/c/acme/x")).statusCode).toBe(200);
+  });
+});
+
+describe("curlFailureReason", () => {
+  it.each([
+    [new Error("NOT_CONNECTED"), "not connected"],
+    [new Error("Not connected"), "not connected"],
+    [new Error("Token expired and no refresh_token stored"), "token expired"],
+    [new Error("Cookie auth: URL host evil.example not in declared cookieDomains"), "target host not allowed"],
+    [new Error("API-key auth: URL host evil.example not in declared allowedHosts"), "target host not allowed"],
+    [new Error("something with a body: {...}"), "upstream request failed"],
+    [Object.assign(new Error("x"), { cause: { code: "not a code; drop it" } }), "upstream request failed"],
+    ["a string", "upstream request failed"],
+  ])("%s → %s", (err, want) => {
+    expect(curlFailureReason(err)).toBe(want);
   });
 });

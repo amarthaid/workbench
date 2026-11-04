@@ -214,9 +214,15 @@ credential store. Two things follow:
 - Every mint writes a `CURL_SESSION` audit row: the integrations and the lifetime,
   refused mints included with the reason. The token itself is never logged.
 - Every proxied request writes a `CURL_REQUEST` audit row: user, integration,
-  `METHOD /path`, success (upstream status below 400), `HTTP <status>` or the
-  failure as the error, and duration. The query string, headers and body are not
-  recorded, so a row tells you *which* endpoint was hit, not with what. Requests
+  `METHOD /path`, success (upstream status below 400), and duration. The error is
+  `HTTP <status>` or one fixed reason (`not connected`, `token expired`,
+  `token refresh failed (HTTP <status>)`, `target host not allowed`,
+  `upstream request failed (<network error code>)`, `cannot resolve proxy base URL`);
+  the raw error message is never recorded, because a failed token refresh carries
+  the token endpoint's response text. The query string, request and response
+  headers, and request and response bodies are not recorded either, so a row tells
+  you *which* endpoint was hit, not with what. (The Fastify request log, separate from
+  the audit log, does print the full URL with its query string.) Requests
   refused by the proxy (integration not in the session, proxy not enabled) are
   recorded too; a request with an invalid token has no user and writes nothing.
   The path is recorded as sent, so an ID or email in a path segment is kept.

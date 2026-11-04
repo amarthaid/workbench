@@ -34,8 +34,12 @@
   `event_id`.
 - `CURL_SESSION` row per mint (integrations + TTL, refusals with reason, never
   the token); `CURL_REQUEST` row per proxied call with `METHOD /path` — the
-  query string, headers and body are deliberately not recorded. An audit write
-  failure is logged, not turned into a failed proxy response.
+  query string, headers and bodies are deliberately not recorded. The error
+  column is never the raw error message: `ctx.http` throws
+  `Refresh failed <status>: <first 200 chars of the token response>`, and an
+  undici error can name the full URL, so `curlFailureReason()` maps every
+  failure to a fixed reason (plus the status or a network error code). An
+  audit write failure is logged, not turned into a failed proxy response.
 
 ## Gotchas
 
