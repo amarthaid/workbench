@@ -133,8 +133,9 @@ ingress / load balancer range if Cloudflare reaches that first. Any client can s
 `CF-Connecting-IP` header, so it is believed only from a trusted peer, and only when it
 is a single valid IP. If the ingress is also reachable without going through Cloudflare,
 lock it to Cloudflare's ranges first, or a caller hitting it directly can set the header.
-The header only feeds the audit log's `source_ip` (and the address handed to another
-replica); the request log's `remoteAddress` still follows `X-Forwarded-For`.
+The same address is used everywhere: the audit log's `source_ip`, the request
+log's `remoteAddress` (next to `peerAddress`, the directly connected proxy), and the
+address handed to another replica.
 
 Events written outside a request (background token refreshes and reconnects) carry
 none of these. The MCP `initialize` `clientInfo` is not recorded: `/mcp` is stateless,

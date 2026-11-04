@@ -172,7 +172,7 @@ export const configSchema = z.object({
   // Leave unset for single-replica or local-dev deployments.
   INTERNAL_MCP_URL: z.string().url().optional(),
   // Which proxies in front of the server to trust for X-Forwarded-For, so
-  // request.ip (the audit log's source_ip, the request log's remoteAddress)
+  // request.ip (and so the audit log's source_ip and the request log's remoteAddress)
   // is the client and not the load balancer. Unset = trust none (the direct
   // peer is the address). "true" = trust every hop (only when nothing can
   // reach the server except through your proxy); a number = that many hops;
