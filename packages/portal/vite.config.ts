@@ -40,6 +40,11 @@ export default defineConfig({
       // Curl-proxy paths are always /c/<integration>/..., so "/c/" is exact
       // enough.
       "/c/": "http://localhost:3001",
+      // Spaces: the server owns the SDK, the upload endpoint and each Space's
+      // files; /s/<name> itself is the portal's shell route and stays here.
+      "/s/_sdk/": "http://localhost:3001",
+      "/s/upload/": "http://localhost:3001",
+      "^/s/[^/]+/app/": "http://localhost:3001",
     },
   },
 });
