@@ -30,6 +30,7 @@ Credentials are per user. As the operator, you register one OAuth app per integr
 | `httpbin-cookie` | Cookie | 3 | — (cookie-auth reference plugin) |
 | `browser` | None (internal) | 9 | [Browser](browser.md) |
 | `jots` | None (internal) | 3 | [Jots](jots.md) |
+| `spaces` | None (internal) | 5 | [Spaces](spaces.md) |
 
 `httpbin-cookie` is a demo plugin that exercises the cookie-auth path against `httpbin.org`. It ships with no logo on purpose, to exercise the portal's fallback icon.
 
@@ -47,6 +48,7 @@ Credentials are per user. As the operator, you register one OAuth app per integr
 - [Google tools](google-tools.md) — Gmail, Drive, Docs, Sheets, Slides, Calendar, Gemini.
 - [Browser](browser.md) — The built-in headless browser your agent drives directly.
 - [Jots](jots.md) — Built-in static hosting for artifacts the agent produces.
+- [Spaces](spaces.md): live apps that call integrations as whoever opens them.
 :::
 
 ## How connecting works
