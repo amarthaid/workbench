@@ -68,6 +68,7 @@ export const createIssue = {
   description:
     "Create a Jira issue and return its { id, key, self }. description is plain text (wrapped in ADF automatically); issueType defaults to \"Task\". Find a valid projectKey with jira_list_projects first. Pass fields to include additional or required custom fields (e.g. { \"customfield_10016\": { \"id\": \"123\" } }) — keys in fields are merged in, with named args taking precedence on conflict.",
   integration: "atlassian-jira",
+  effect: "write",
   inputSchema: z.object({
     projectKey: z.string(),
     summary: z.string(),
@@ -97,6 +98,7 @@ export const searchIssues = {
   description:
     "Search Jira issues with a JQL query; returns slim rows { key, id, summary, status, assignee, priority, updated } plus nextPageToken for paging (maxResults defaults to 10). Pass fields to request other fields (returned raw under each row's fields). Use jira_get_issue for one issue's full detail including description.",
   integration: "atlassian-jira",
+  effect: "read",
   inputSchema: z.object({
     jql: z.string(),
     maxResults: z.number().default(10),
@@ -127,6 +129,7 @@ export const getIssue = {
   description:
     "Get one Jira issue by key as { key, id, summary, status, assignee, reporter, priority, issueType, created, updated, description (plain text extracted from ADF), labels, parent, url }. Pass fields to additionally get specific raw fields (e.g. customfield_*) under fields. Use jira_search_issues to find issues by JQL first.",
   integration: "atlassian-jira",
+  effect: "read",
   inputSchema: z.object({
     issueKey: z.string(),
     fields: z.array(z.string()).optional(),
@@ -163,6 +166,7 @@ export const searchUsers = {
   description:
     "Search Jira users by name or email; returns slim rows { accountId, displayName, emailAddress, active } (maxResults defaults to 10). Use the accountId with jira_update_issue's assigneeAccountId to assign issues.",
   integration: "atlassian-jira",
+  effect: "read",
   inputSchema: z.object({
     query: z.string(),
     maxResults: z.number().default(10),
@@ -187,6 +191,7 @@ export const getBoards = {
   description:
     "List Jira agile boards as { boards: [{ id, name, type, projectKey }], total, isLast }; optionally filter by projectKey (maxResults defaults to 50). Requires the read:board-scope:jira-software scope — reconnect Jira if this returns 401.",
   integration: "atlassian-jira",
+  effect: "read",
   inputSchema: z.object({
     projectKey: z.string().optional(),
     maxResults: z.number().default(50),
@@ -217,6 +222,7 @@ export const getProjectTypes = {
   description:
     "List the Jira project types available on this site as slim rows { key, formattedKey, type } (icons stripped). Rarely needed — use jira_list_projects to discover actual projects and their keys.",
   integration: "atlassian-jira",
+  effect: "read",
   inputSchema: z.object({}),
   handler: async (ctx: any, _args: any) => {
     const res = await ctx.http(`${BASE}/project/type`);
@@ -234,6 +240,7 @@ export const updateIssue = {
   description:
     "Update a Jira issue's summary, description (plain text, wrapped in ADF), assignee (assigneeAccountId from jira_search_users), and/or labels — only the args you pass are changed; returns { success: true }. To change status use jira_transition_issue instead (status is not a field). Pass fields to set additional custom fields (e.g. { \"customfield_10016\": { \"id\": \"123\" } }) — named args take precedence on conflict.",
   integration: "atlassian-jira",
+  effect: "write",
   inputSchema: z.object({
     issueKey: z.string(),
     summary: z.string().optional(),
@@ -263,6 +270,7 @@ export const getTransitions = {
   description:
     "List the status transitions currently available for an issue as [{ id, name, toStatus }] — transitions depend on the issue's current status and workflow. Call this first to get the id required by jira_transition_issue.",
   integration: "atlassian-jira",
+  effect: "read",
   inputSchema: z.object({
     issueKey: z.string(),
   }),
@@ -282,6 +290,7 @@ export const transitionIssue = {
   description:
     "Move a Jira issue to another status by applying a workflow transition; returns { success: true }. transitionId must come from jira_get_transitions for the same issue (ids vary per workflow and current status).",
   integration: "atlassian-jira",
+  effect: "destructive",
   inputSchema: z.object({
     issueKey: z.string(),
     transitionId: z.string(),
@@ -302,6 +311,7 @@ export const addComment = {
   description:
     "Add a comment to a Jira issue; body is plain text (wrapped in ADF automatically). Returns { id, created } of the new comment — use jira_get_comments to read the thread.",
   integration: "atlassian-jira",
+  effect: "write",
   inputSchema: z.object({
     issueKey: z.string(),
     body: z.string(),
@@ -322,6 +332,7 @@ export const getComments = {
   description:
     "Read the comments on a Jira issue as slim rows { id, author, body (plain text extracted from ADF), created }, oldest first (maxResults defaults to 10). Use jira_add_comment to reply.",
   integration: "atlassian-jira",
+  effect: "read",
   inputSchema: z.object({
     issueKey: z.string(),
     maxResults: z.number().default(10),
@@ -345,6 +356,7 @@ export const listProjects = {
   description:
     "List the Jira projects you can see as slim rows { key, id, name, projectTypeKey } (maxResults defaults to 25); pass query to filter by name/key. The standard way to discover a projectKey for jira_create_issue or JQL.",
   integration: "atlassian-jira",
+  effect: "read",
   inputSchema: z.object({
     query: z.string().optional(),
     maxResults: z.number().default(25),
@@ -373,6 +385,7 @@ export const getCreateMeta = {
   description:
     "Return the fields required (and allowed) when creating a Jira issue. Pass projectKey and optionally issueType to scope the result. Each field entry includes { fieldId, name, required, schema, allowedValues } — use the fieldId as the key and an allowedValues entry's id/value as the value in jira_create_issue's fields arg.",
   integration: "atlassian-jira",
+  effect: "read",
   inputSchema: z.object({
     projectKey: z.string(),
     issueType: z.string().optional(),

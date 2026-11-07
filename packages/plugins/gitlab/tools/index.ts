@@ -45,6 +45,7 @@ export const listProjects = {
   description:
     "List the authenticated user's GitLab projects as slim rows { id, path_with_namespace, visibility, default_branch, last_activity_at, description }. Pass `search` to filter by name. Use the id or path_with_namespace as `project` in other tools. Defaults: membership projects, 20 per page, ordered by last activity.",
   integration: INTEGRATION,
+  effect: "read",
   inputSchema: z.object({
     search: z.string().optional(),
     perPage: z.number().default(20),
@@ -77,6 +78,7 @@ export const getProject = {
   description:
     "Get one GitLab project's metadata (visibility, default branch, topics, star/fork counts, http clone URL) with link bloat stripped. Use gitlab_list_projects to discover the id or path_with_namespace first.",
   integration: INTEGRATION,
+  effect: "read",
   inputSchema: z.object({
     project: z.string().describe("Project id or URL path, e.g. 'group/repo'"),
   }),
@@ -107,6 +109,7 @@ export const listBranches = {
   description:
     "List branches in a GitLab project as slim rows { name, default, protected, merged }. Use gitlab_list_commits to see history on a branch. Defaults: 20 per page.",
   integration: INTEGRATION,
+  effect: "read",
   inputSchema: z.object({
     project: z.string(),
     perPage: z.number().default(20),
@@ -133,6 +136,7 @@ export const listCommits = {
   description:
     "List commits in a GitLab project as slim rows { id (12 chars), title, author, date }, newest first. Pass `ref` to start from a branch/tag/commit. Defaults: 20 per page.",
   integration: INTEGRATION,
+  effect: "read",
   inputSchema: z.object({
     project: z.string(),
     ref: z.string().optional().describe("Branch, tag, or commit SHA to list from"),
@@ -161,6 +165,7 @@ export const listReleases = {
   description:
     "List releases for a GitLab project as slim rows { tag_name, name, released_at, upcoming }, newest first. Defaults: 20 per page.",
   integration: INTEGRATION,
+  effect: "read",
   inputSchema: z.object({
     project: z.string(),
     perPage: z.number().default(20),
@@ -187,6 +192,7 @@ export const getFile = {
   description:
     "Read a file's raw text content from a GitLab project at a ref (branch/tag/commit). `ref` is required. Useful for seeing code an MR diff doesn't show. Returns the file contents as plain text.",
   integration: INTEGRATION,
+  effect: "read",
   inputSchema: z.object({
     project: z.string(),
     path: z.string().describe("File path within the repository"),
@@ -208,6 +214,7 @@ export const createOrUpdateFile = {
   description:
     "Create or update a single file in a GitLab project with a commit message (content is plain text). Auto-detects create vs update by checking whether the file already exists on `branch`. Defaults: branch=main.",
   integration: INTEGRATION,
+  effect: "destructive",
   inputSchema: z.object({
     project: z.string(),
     path: z.string(),
@@ -245,6 +252,7 @@ export const createIssue = {
   description:
     "Create a GitLab issue with optional description and labels. Returns the created issue (note its `iid` — the per-project number used by other issue tools). Use gitlab_list_issues first to avoid duplicates.",
   integration: INTEGRATION,
+  effect: "write",
   inputSchema: z.object({
     project: z.string(),
     title: z.string(),
@@ -271,6 +279,7 @@ export const listIssues = {
   description:
     "List issues in a GitLab project as slim rows { iid, title, state, author, labels, assignees, user_notes_count, updated_at }. Defaults: state=opened, 20 per page. Use gitlab_get_issue for one issue's full description.",
   integration: INTEGRATION,
+  effect: "read",
   inputSchema: z.object({
     project: z.string(),
     state: z.enum(["opened", "closed", "all"]).default("opened"),
@@ -305,6 +314,7 @@ export const getIssue = {
   description:
     "Get one GitLab issue: { iid, title, description (truncated to 2000 chars), state, author, labels, assignees, user_notes_count, web_url }. Reply with gitlab_add_issue_comment.",
   integration: INTEGRATION,
+  effect: "read",
   inputSchema: z.object({
     project: z.string(),
     issueIid: z.number(),
@@ -332,6 +342,7 @@ export const updateIssue = {
   description:
     "Update a GitLab issue — set any of title, description, labels, and close/reopen it. Pass state='closed' to close or state='opened' to reopen. Only fields you pass change. Returns the updated issue's iid/state/title.",
   integration: INTEGRATION,
+  effect: "destructive",
   inputSchema: z.object({
     project: z.string(),
     issueIid: z.number(),
@@ -362,6 +373,7 @@ export const addIssueComment = {
   description:
     "Add a comment (note) to a GitLab issue. Returns { id, created_at }. Use gitlab_get_issue to read the issue first.",
   integration: INTEGRATION,
+  effect: "write",
   inputSchema: z.object({
     project: z.string(),
     issueIid: z.number(),
@@ -388,6 +400,7 @@ export const createMR = {
   description:
     "Open a GitLab merge request from sourceBranch into targetBranch (default 'main' — confirm with gitlab_get_project if unsure). Returns the new MR's iid, state, branches, and web URL. Follow up with gitlab_get_mr / gitlab_get_mr_diff to review and gitlab_merge_mr to land it.",
   integration: INTEGRATION,
+  effect: "write",
   inputSchema: z.object({
     project: z.string(),
     title: z.string(),
@@ -425,6 +438,7 @@ export const listMRs = {
   description:
     "List merge requests in a GitLab project as slim rows { iid, title, state, author, source_branch, target_branch, draft, updated_at }. state defaults to opened; pass merged/closed/all for history. Use gitlab_get_mr for full detail. Defaults: 20 per page.",
   integration: INTEGRATION,
+  effect: "read",
   inputSchema: z.object({
     project: z.string(),
     state: z.enum(["opened", "closed", "merged", "all"]).default("opened"),
@@ -457,6 +471,7 @@ export const getMR = {
   description:
     "Get one merge request: iid, title, description (truncated to 2000 chars), state, merge_status, author, source/target branches, draft, upvotes/downvotes, user_notes_count, web_url. Check this (state, merge_status, approvals) before gitlab_merge_mr. For the code changes use gitlab_get_mr_diff.",
   integration: INTEGRATION,
+  effect: "read",
   inputSchema: z.object({
     project: z.string(),
     mrIid: z.number(),
@@ -488,6 +503,7 @@ export const getMRDiff = {
   description:
     "Read a merge request's changes. With diffstat=true (recommended first for big MRs) returns one slim row per file { old_path, new_path, new_file, deleted_file, renamed_file }; with diffstat=false (default) returns the full unified diff text, which can be large.",
   integration: INTEGRATION,
+  effect: "read",
   inputSchema: z.object({
     project: z.string(),
     mrIid: z.number(),
@@ -525,6 +541,7 @@ export const listMRCommits = {
   description:
     "List the commits in a merge request as slim rows { id (12 chars), title, author, date }. Cheaper than the diff for understanding an MR's shape.",
   integration: INTEGRATION,
+  effect: "read",
   inputSchema: z.object({
     project: z.string(),
     mrIid: z.number(),
@@ -549,6 +566,7 @@ export const listMRComments = {
   description:
     "List comments (notes) on a merge request as slim rows { id, author, body, system, resolvable, created_at }. system notes are GitLab's auto-events (label changes etc.). Defaults: 20 per page. Use before replying with gitlab_add_mr_comment.",
   integration: INTEGRATION,
+  effect: "read",
   inputSchema: z.object({
     project: z.string(),
     mrIid: z.number(),
@@ -580,6 +598,7 @@ export const addMRComment = {
   description:
     "Comment on a merge request. Plain `body` posts a general note. Also pass `inline` { path, line } to anchor it to a line of a changed file as a review discussion (paths from gitlab_get_mr_diff); the diff refs are resolved automatically. Returns { id }.",
   integration: INTEGRATION,
+  effect: "write",
   inputSchema: z.object({
     project: z.string(),
     mrIid: z.number(),
@@ -633,6 +652,7 @@ export const approveMR = {
   description:
     "Approve a merge request as the connected user. Non-destructive and revocable. Review the changes with gitlab_get_mr_diff first. Returns { approved: true, approvals_left }. (Approvals are a GitLab Premium feature on some instances; on those this 404s.)",
   integration: INTEGRATION,
+  effect: "destructive",
   inputSchema: z.object({
     project: z.string(),
     mrIid: z.number(),
@@ -653,6 +673,7 @@ export const mergeMR = {
   description:
     "Merge a merge request into its target branch. IRREVERSIBLE: this lands the commits — check state and merge_status with gitlab_get_mr first, and only merge when explicitly asked. Optional: merge_commit_message, squash, remove_source_branch. Returns the merged MR's iid and state.",
   integration: INTEGRATION,
+  effect: "destructive",
   inputSchema: z.object({
     project: z.string(),
     mrIid: z.number(),
@@ -684,6 +705,7 @@ export const closeMR = {
   description:
     "Close (reject) a merge request without merging. The author must reopen it to resurrect it. Prefer leaving review feedback via gitlab_add_mr_comment if you only want revisions. Returns { iid, state }.",
   integration: INTEGRATION,
+  effect: "destructive",
   inputSchema: z.object({
     project: z.string(),
     mrIid: z.number(),
@@ -709,6 +731,7 @@ export const listPipelines = {
   description:
     "List CI pipelines for a GitLab project as slim rows { id, status, ref, sha (12 chars), source, updated_at, web_url }, newest first. Optional `ref` and `status` (e.g. success, failed, running) filters. Defaults: 20 per page.",
   integration: INTEGRATION,
+  effect: "read",
   inputSchema: z.object({
     project: z.string(),
     ref: z.string().optional(),
@@ -755,6 +778,7 @@ export const triggerPipeline = {
   description:
     "Trigger a new CI pipeline for a GitLab project on a branch or tag (`ref`). Optional `variables` are passed as CI/CD variables for the run. Returns a slim pipeline { id, status, ref, sha, source, web_url, created_at, updated_at } — poll gitlab_get_pipeline with the id for status. The project must have a .gitlab-ci.yml on that ref or GitLab returns 400.",
   integration: INTEGRATION,
+  effect: "destructive",
   inputSchema: z.object({
     project: z.string(),
     ref: z.string().describe("Branch or tag to run the pipeline on"),
@@ -781,6 +805,7 @@ export const getPipeline = {
   description:
     "Get a single GitLab CI pipeline by id as a slim object { id, status, ref, sha, source, web_url, created_at, updated_at }. Use to poll a pipeline you triggered (status: created | pending | running | success | failed | canceled).",
   integration: INTEGRATION,
+  effect: "read",
   inputSchema: z.object({
     project: z.string(),
     pipelineId: z.number(),
@@ -800,6 +825,7 @@ export const retryPipeline = {
   description:
     "Retry the failed and canceled jobs in a GitLab pipeline by id. Returns the slim pipeline; on failure returns GitLab's error body.",
   integration: INTEGRATION,
+  effect: "write",
   inputSchema: z.object({
     project: z.string(),
     pipelineId: z.number(),
@@ -820,6 +846,7 @@ export const cancelPipeline = {
   description:
     "Cancel a running GitLab pipeline by id (cancels its running/pending jobs). Returns the slim pipeline; on failure returns GitLab's error body.",
   integration: INTEGRATION,
+  effect: "destructive",
   inputSchema: z.object({
     project: z.string(),
     pipelineId: z.number(),
@@ -844,6 +871,7 @@ export const searchProjects = {
   description:
     "Search projects across the GitLab instance by name/path as slim rows { id, path_with_namespace, visibility, default_branch, description }. Default 10 results. Use the id or path_with_namespace as `project` in other tools.",
   integration: INTEGRATION,
+  effect: "read",
   inputSchema: z.object({
     q: z.string(),
     perPage: z.number().default(10),
@@ -873,6 +901,7 @@ export const searchCode = {
   description:
     "Search code (blobs) across the GitLab instance as slim rows { path, project_id, ref, startline, data }. Scope to a project with `project` (faster and works on all tiers — global blob search needs Advanced Search/Elasticsearch on self-hosted). Default 10 results. Follow up with gitlab_get_file to read a match.",
   integration: INTEGRATION,
+  effect: "read",
   inputSchema: z.object({
     q: z.string(),
     project: z.string().optional().describe("Limit to one project (id or path); recommended"),
@@ -906,6 +935,7 @@ export const searchIssues = {
   description:
     "Search issues across the GitLab instance (or one project if `project` is set) as slim rows { iid, project_id, title, state, author, labels, updated_at }. Default 10 results. For one known project, gitlab_list_issues is cheaper.",
   integration: INTEGRATION,
+  effect: "read",
   inputSchema: z.object({
     q: z.string(),
     project: z.string().optional(),
@@ -945,6 +975,7 @@ export const getCloneUrl = {
   description:
     "Mint a temporary authenticated HTTPS git URL for a project (https://oauth2:<token>@host/path.git), usable for clone/pull/push (the `api` scope covers push). The embedded OAuth token is short-lived and the URL dies with it — re-call this right before a push rather than storing the URL. Do NOT persist it in .git/config or scripts: anyone holding the URL holds the token until expiry. `project` must be the path_with_namespace (e.g. 'group/repo'), not the numeric id.",
   integration: INTEGRATION,
+  effect: "read",
   inputSchema: z.object({
     project: z.string().describe("path_with_namespace, e.g. 'group/repo'"),
   }),

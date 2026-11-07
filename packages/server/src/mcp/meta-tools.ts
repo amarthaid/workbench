@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { effectOf, type ToolEffect } from "@a-workbench/shared";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { registry } from "../plugins/registry";
 import { createContext } from "../plugins/context";
@@ -759,6 +760,15 @@ const CURL_TTL_MIN_SECONDS = 60;
 const CURL_TTL_MAX_SECONDS = 3600;
 const CURL_TTL_DEFAULT_SECONDS = 900;
 
+// `effect` plus the MCP-style hints derived from it, appended to
+// get_tool_schema output so agents can tell a read from a destructive call.
+function effectFields(effect: ToolEffect) {
+  return {
+    effect,
+    annotations: { readOnlyHint: effect === "read", destructiveHint: effect === "destructive" },
+  };
+}
+
 const SEARCH_LIMIT_DEFAULT = 10;
 const SEARCH_LIMIT_MAX = 50;
 const SEARCH_DESCRIPTION =
@@ -777,7 +787,7 @@ export const metaTools = [
     handler: async (ctx: { userId: string }, args: { query: string; limit?: number }) => {
       // Built-in and custom-app tools are ranked as one corpus, so a word's
       // rarity (IDF) is measured across everything the agent can call.
-      const all: Array<{ name: string; description: string; integration: string }> = [
+      const all: Array<{ name: string; description: string; integration: string; effect?: ToolEffect }> = [
         ...registry.listTools(),
         ...(await ensureIndex(ctx.userId)),
       ];
@@ -788,6 +798,7 @@ export const metaTools = [
           description: tool.description,
           integration: tool.integration,
           score,
+          effect: effectOf(tool),
         })),
       };
     },
@@ -805,11 +816,13 @@ export const metaTools = [
           t.inputSchema instanceof z.ZodType
             ? zodToJsonSchema(t.inputSchema as z.ZodTypeAny)
             : t.inputSchema;
-        return { schema };
+        return { schema, ...effectFields(effectOf(t)) };
       }
       const ct = await getToolForUser(ctx.userId, args.tool);
       if (!ct) return { error: "Tool not found" };
-      return { schema: ct.inputSchema };
+      // Custom-app tools carry no workbench label, so effectOf treats them as
+      // destructive; their remote annotations are not trusted for this.
+      return { schema: ct.inputSchema, ...effectFields(effectOf({})) };
     },
   },
   {

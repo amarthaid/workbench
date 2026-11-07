@@ -36,9 +36,11 @@ appear in `tools/list`, so this is how an agent learns that `jira_create_issue` 
 | `query` | string | yes | — | What you want to do, in words |
 | `limit` | integer | no | 10 | Maximum number of tools to return (1–50) |
 
-Returns `{ tools: [{ name, description, integration, score }] }`, best first. The
+Returns `{ tools: [{ name, description, integration, score, effect }] }`, best first. The
 entry's `integration` is the owning plugin. Pass it to `connect` if execution later
-reports `NOT_CONNECTED`. How matching and ranking work: [Discovering tools](../guides/discovering-tools.md#how-matching-works).
+reports `NOT_CONNECTED`. `effect` is the tool's side-effect label: `"read"`, `"write"`
+or `"destructive"` (see [Label the side effect](../plugins/writing-a-plugin.md#label-the-side-effect));
+a tool with no label, including every custom-app tool, reports `"destructive"`. How matching and ranking work: [Discovering tools](../guides/discovering-tools.md#how-matching-works).
 
 ```json
 { "name": "search_tools", "arguments": { "query": "create jira issue" } }
@@ -56,8 +58,10 @@ through unchanged.
 |---|---|---|---|---|
 | `tool` | string | yes | — | Tool name |
 
-Returns `{ schema: <JSON Schema> }`, or `{ error: "Tool not found" }` for an
-unknown name.
+Returns `{ schema: <JSON Schema>, effect, annotations: { readOnlyHint, destructiveHint } }`,
+or `{ error: "Tool not found" }` for an unknown name. `effect` is the same label
+`search_tools` reports; `readOnlyHint` is true only for `"read"` and `destructiveHint`
+only for `"destructive"`.
 
 ```json
 { "name": "get_tool_schema", "arguments": { "tool": "github_create_pr" } }

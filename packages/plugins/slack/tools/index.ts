@@ -18,6 +18,7 @@ export const sendMessage = {
   description:
     "Send a message to a Slack channel (pass threadTs to reply in a thread). Returns the Slack response including ts — keep that ts if you may later edit (slack_update_message) or delete (slack_delete_message) the message.",
   integration: "slack",
+  effect: "destructive",
   inputSchema: z.object({
     channel: z.string(),
     text: z.string(),
@@ -44,6 +45,7 @@ export const updateMessage = {
   description:
     "Edit the text of an existing Slack message — useful for updating an in-progress status message instead of posting a new one. Needs the channel and the ts returned by slack_send_message (or found in channel history). Replaces the whole text. Returns { ok, ts } on success; on failure returns Slack's {ok:false, error} body.",
   integration: "slack",
+  effect: "destructive",
   inputSchema: z.object({
     channel: z.string(),
     ts: z.string(),
@@ -70,6 +72,7 @@ export const deleteMessage = {
   description:
     "DESTRUCTIVE: permanently delete a Slack message — this is irreversible, so be certain you have the right message. Needs the channel and the message ts (from the slack_send_message response or slack_get_channel_history). You can normally only delete messages you posted. Returns { ok, ts } on success; on failure returns Slack's {ok:false, error} body. To change a message's text instead, use slack_update_message.",
   integration: "slack",
+  effect: "destructive",
   inputSchema: z.object({
     channel: z.string(),
     ts: z.string(),
@@ -93,6 +96,7 @@ export const listChannels = {
   name: "slack_list_channels",
   description: "List Slack channels",
   integration: "slack",
+  effect: "read",
   inputSchema: z.object({
     limit: z.number().default(100),
     types: z.string().default("public_channel"),
@@ -110,6 +114,7 @@ export const getChannelHistory = {
   name: "slack_get_channel_history",
   description: "Get message history from a Slack channel",
   integration: "slack",
+  effect: "read",
   inputSchema: z.object({
     channel: z.string(),
     limit: z.number().default(100),
@@ -127,6 +132,7 @@ export const uploadFile = {
   name: "slack_upload_file",
   description: "Upload a file to a Slack channel",
   integration: "slack",
+  effect: "destructive",
   inputSchema: z.object({
     channel: z.string(),
     content: z.string(),
@@ -170,6 +176,7 @@ export const addReaction = {
   name: "slack_add_reaction",
   description: "Add a reaction emoji to a Slack message",
   integration: "slack",
+  effect: "write",
   inputSchema: z.object({
     channel: z.string(),
     timestamp: z.string(),
@@ -193,6 +200,7 @@ export const getThreadReplies = {
   name: "slack_get_thread_replies",
   description: "Get replies in a Slack thread",
   integration: "slack",
+  effect: "read",
   inputSchema: z.object({
     channel: z.string(),
     threadTs: z.string(),
@@ -213,6 +221,7 @@ export const lookupUser = {
   description:
     "Look up a Slack user by exact email address. Returns a slim user: { id, name, real_name, email, is_bot, deleted } — use the id as the user/channel for slack_send_dm. If you only have a display name (or aren't sure of the email), use slack_find_users instead. Not-found comes back as {ok:false, error:'users_not_found'}.",
   integration: "slack",
+  effect: "read",
   inputSchema: z.object({
     email: z.string().email(),
   }),
@@ -230,6 +239,7 @@ export const sendDM = {
   name: "slack_send_dm",
   description: "Send a direct message to a Slack user",
   integration: "slack",
+  effect: "destructive",
   inputSchema: z.object({
     user: z.string(),
     text: z.string(),
@@ -251,6 +261,7 @@ export const searchAll = {
   name: "slack_search_all",
   description: "Search messages and files across Slack",
   integration: "slack",
+  effect: "read",
   inputSchema: z.object({
     query: z.string(),
     count: z.number().default(20),
@@ -271,6 +282,7 @@ export const listUsers = {
   description:
     "List users in the Slack workspace as slim rows: { id, name, real_name, email, is_bot, deleted } (default 100 per page; pass the returned next_cursor to page). Includes bots and deactivated accounts — filter on is_bot/deleted. If you're looking for one specific person, prefer slack_find_users (by name) or slack_lookup_user (by email) over paging through this.",
   integration: "slack",
+  effect: "read",
   inputSchema: z.object({
     limit: z.number().default(100),
     cursor: z.string().optional(),
@@ -305,6 +317,7 @@ export const downloadFile = {
   description:
     "Download a Slack file (attachment) by its private URL. Pass the url_private_download (preferred) or url_private from a file object in slack_get_channel_history / slack_get_thread_replies / slack_search_all. Returns { ok, filename, mimetype, size, base64 } — the raw bytes base64-encoded. Requires the files:read scope. Slack auth-walls these URLs, so a plain fetch without the token returns the login HTML, not the file.",
   integration: "slack",
+  effect: "read",
   inputSchema: z.object({
     url: z.string().url(),
     filename: z.string().optional(),
@@ -371,6 +384,7 @@ export const getFileInfo = {
   description:
     "Get metadata for a Slack file by its id (files.info): name, mimetype, size, and the url_private_download you can pass to slack_download_file. Requires the files:read scope. Returns Slack's body; not-found / no-access comes back as {ok:false, error}.",
   integration: "slack",
+  effect: "read",
   inputSchema: z.object({
     file: z.string(),
   }),
@@ -387,6 +401,7 @@ export const removeReaction = {
   description:
     "Remove a reaction emoji you added to a Slack message (reactions.remove). Needs the channel and the message timestamp, plus the emoji name (no colons). Mirror of slack_add_reaction. Returns Slack's body; {ok:false, error:'no_reaction'} if it wasn't there.",
   integration: "slack",
+  effect: "write",
   inputSchema: z.object({
     channel: z.string(),
     timestamp: z.string(),
@@ -411,6 +426,7 @@ export const getPermalink = {
   description:
     "Get the shareable permalink URL for a Slack message (chat.getPermalink). Needs the channel and the message ts (from slack_send_message or channel history). Returns { ok, permalink } — use it to cite or link a message in a reply. On failure returns Slack's {ok:false, error} body.",
   integration: "slack",
+  effect: "read",
   inputSchema: z.object({
     channel: z.string(),
     ts: z.string(),
@@ -431,6 +447,7 @@ export const joinChannel = {
   description:
     "Join a public Slack channel (conversations.join) so you can read its full history / post — reading a channel you're not in often returns not_in_channel. Needs the channel id (from slack_list_channels). Idempotent: joining a channel you're already in succeeds. Returns Slack's body; private channels and DMs can't be joined this way.",
   integration: "slack",
+  effect: "write",
   inputSchema: z.object({
     channel: z.string(),
   }),
@@ -449,6 +466,7 @@ export const findUsers = {
   description:
     "Find Slack users by name or email. Email-shaped queries try an exact lookup first, then fall back to a case-insensitive substring match on username/real name. Returns slim rows: { id, name, real_name, email, is_bot, deleted } — use the id for slack_send_dm. Searches the first 200 workspace users; use slack_list_users with cursors for an exhaustive sweep.",
   integration: "slack",
+  effect: "read",
   inputSchema: z.object({
     query: z.string(),
   }),

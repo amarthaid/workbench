@@ -5,6 +5,7 @@ export const readSheet = {
   description:
     "Read cell values from a Google Sheet range (e.g. \"Sheet1!A1:C10\"). Returns { range, values } where values is a 2D array of strings — no formatting/metadata. Use google_sheets_search first if you only know the spreadsheet's name, not its ID.",
   integration: "google-sheets",
+  effect: "read",
   inputSchema: z.object({
     spreadsheetId: z.string(),
     range: z.string(),
@@ -23,6 +24,7 @@ export const writeSheet = {
   description:
     "OVERWRITE cell values in an exact range of a Google Sheet (PUT semantics — existing cells in the range are replaced). To add new rows to the end of a log/table WITHOUT touching existing data, use google_sheets_append instead. Returns { updatedRange, updatedCells }.",
   integration: "google-sheets",
+  effect: "destructive",
   inputSchema: z.object({
     spreadsheetId: z.string(),
     range: z.string(),
@@ -47,6 +49,7 @@ export const appendSheet = {
   description:
     "Append rows to the end of a table/log in a Google Sheet — THIS is the tool for adding new rows (Sheets finds the table in `range`, e.g. \"Sheet1!A:C\", and inserts after the last row; existing data is never overwritten). Use google_sheets_write only when you want to OVERWRITE an exact range. Values are parsed as if typed by a user (USER_ENTERED: numbers, dates, formulas). Returns { updatedRange, updatedRows }.",
   integration: "google-sheets",
+  effect: "write",
   inputSchema: z.object({
     spreadsheetId: z.string(),
     range: z.string(),
@@ -74,6 +77,7 @@ export const createSpreadsheet = {
   description:
     "Create a new (empty) Google Spreadsheet with the given title, optionally with named tabs (`sheets`, defaults to one \"Sheet1\" tab). Use google_sheets_write or google_sheets_append afterwards to put data in it.",
   integration: "google-sheets",
+  effect: "write",
   inputSchema: z.object({
     title: z.string(),
     sheets: z.array(z.string()).optional(),
@@ -97,6 +101,7 @@ export const searchSheets = {
   description:
     "Find Google Sheets by name (Drive name-contains match). Returns up to pageSize (default 10) rows of { id, name, modifiedTime } plus nextPageToken — use the id with google_sheets_read/write/append. For full-text or non-spreadsheet search use google_drive_search.",
   integration: "google-sheets",
+  effect: "read",
   inputSchema: z.object({
     query: z.string(),
     pageSize: z.number().default(10),

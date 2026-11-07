@@ -39,6 +39,7 @@ export const listEvents = {
   description:
     "List events on a calendar (default \"primary\", max default 10). Returns slim rows { id, summary, start, end, location, status, organizer, attendees (count), htmlLink } plus nextPageToken for paging — use google_calendar_get_event for description and per-attendee status. Pass timeMin (ISO 8601) to skip past events.",
   integration: "google-calendar",
+  effect: "read",
   inputSchema: z.object({
     calendarId: z.string().default("primary"),
     maxResults: z.number().default(10),
@@ -64,6 +65,7 @@ export const createEvent = {
   description:
     "Create an event on a calendar (default \"primary\"). Check availability with google_calendar_freebusy BEFORE creating to avoid double-booking. start/end take { dateTime } in ISO 8601 with offset (e.g. \"2026-06-12T15:00:00+07:00\"). Returns the created event in slim form ({ id, summary, start, end, ... }).",
   integration: "google-calendar",
+  effect: "write",
   inputSchema: z.object({
     calendarId: z.string().default("primary"),
     summary: z.string(),
@@ -91,6 +93,7 @@ export const getEvent = {
   description:
     "Get one calendar event by id. Returns the slim detail shape: { id, summary, start, end, location, status, organizer, htmlLink, description (truncated to 1000 chars), attendees: [{ email, responseStatus }] }. Get event ids from google_calendar_list_events.",
   integration: "google-calendar",
+  effect: "read",
   inputSchema: z.object({
     calendarId: z.string().default("primary"),
     eventId: z.string(),
@@ -108,6 +111,7 @@ export const updateEvent = {
   description:
     "Update fields of an existing event (PATCH — only the fields you pass change). Returns the updated event in the same slim shape as google_calendar_get_event. To remove an event entirely use google_calendar_delete_event.",
   integration: "google-calendar",
+  effect: "write",
   inputSchema: z.object({
     calendarId: z.string().default("primary"),
     eventId: z.string(),
@@ -135,6 +139,7 @@ export const deleteEvent = {
   description:
     "Delete a calendar event permanently (attendees are notified per calendar settings). Returns { success: true } on success. To merely change time/details, use google_calendar_update_event instead.",
   integration: "google-calendar",
+  effect: "destructive",
   inputSchema: z.object({
     calendarId: z.string().default("primary"),
     eventId: z.string(),
@@ -154,6 +159,7 @@ export const listCalendars = {
   description:
     "List the user's calendars (default 10). Returns slim rows { id, summary, primary, accessRole, timeZone } — use the id as calendarId in the other calendar tools (\"primary\" also works for the main calendar).",
   integration: "google-calendar",
+  effect: "read",
   inputSchema: z.object({
     maxResults: z.number().default(10),
   }),
@@ -179,6 +185,7 @@ export const freeBusy = {
   description:
     "Check when calendars are busy between timeMin and timeMax (ISO 8601) — use this BEFORE google_calendar_create_event to pick a free slot and avoid double-booking. calendarIds defaults to [\"primary\"]. Returns { calendars: { <id>: [{ start, end }, ...] } } where each array is the busy intervals (empty array = fully free).",
   integration: "google-calendar",
+  effect: "read",
   inputSchema: z.object({
     timeMin: z.string(),
     timeMax: z.string(),

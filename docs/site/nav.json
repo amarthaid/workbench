@@ -110,6 +110,10 @@
               "label": "Jots file store"
             },
             {
+              "path": "guides/spaces",
+              "label": "Building a Space"
+            },
+            {
               "path": "guides/troubleshooting",
               "label": "Troubleshooting"
             }
@@ -226,6 +230,11 @@
             {
               "path": "integrations/jots",
               "label": "Jots",
+              "layout": "wide"
+            },
+            {
+              "path": "integrations/spaces",
+              "label": "Spaces",
               "layout": "wide"
             }
           ]

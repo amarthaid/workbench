@@ -138,11 +138,29 @@ export interface NoneConfig {
   type: "none";
 }
 
+// Side-effect label for a tool, used to decide whether a call can run silently
+// or needs user confirmation:
+//   read        changes nothing (list, get, search, download, query).
+//   write       creates or edits in a recoverable or additive way (create an
+//               issue, comment, upload, create a draft, update a field).
+//   destructive deletes, trashes, overwrites wholesale, merges, closes,
+//               cancels, sends or posts on the user's behalf, changes sharing
+//               or permissions, or is otherwise irreversible or outward-facing.
+export type ToolEffect = "read" | "write" | "destructive";
+
 export interface ToolDefinition {
   name: string;
   description: string;
   integration: string;
   inputSchema: unknown;
+  // Optional for backward compatibility with third-party plugins. An
+  // unlabelled tool is treated as "destructive" (see effectOf).
+  effect?: ToolEffect;
+}
+
+/** A tool's effective side-effect label: unlabelled tools count as destructive. */
+export function effectOf(tool: { effect?: ToolEffect }): ToolEffect {
+  return tool.effect ?? "destructive";
 }
 
 export interface Connection {

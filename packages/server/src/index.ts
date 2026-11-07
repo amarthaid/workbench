@@ -8,6 +8,9 @@ import { registerOAuthRedirectRoute } from "./api/oauth-redirect";
 import { registerPortal } from "./portal";
 import { registerRobots } from "./robots";
 import { registerJotRoutes } from "./jots/routes";
+import { registerSpaceRoutes } from "./spaces/routes";
+import { registerSpaceApiRoutes } from "./spaces/api";
+import { startSpaceUploadReaper } from "./spaces/pending";
 import { registerCurlProxy } from "./api/curl-proxy";
 import { registerRestRoutes } from "./api/rest-routes";
 import { registerWorkspaceRoutes } from "./workspace/routes";
@@ -102,6 +105,11 @@ async function main() {
   await registerVaultRoutes(app);
   await registerJotRoutes(app);
   startUploadReaper();
+  // Spaces: the server owns only /s/_sdk/*, /s/upload/:token and
+  // /s/:name/app/:sig/*; /s/:name itself falls through to the portal SPA.
+  await registerSpaceRoutes(app);
+  await registerSpaceApiRoutes(app);
+  startSpaceUploadReaper();
   startVaultReaper();
   startRecentReaper();
 

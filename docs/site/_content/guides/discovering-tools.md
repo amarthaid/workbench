@@ -74,13 +74,15 @@ best-matching tools first, each with its description, owning integration and a r
       "name": "github_create_pr",
       "description": "Open a GitHub pull request from head branch into base branch. …",
       "integration": "github",
-      "score": 24.5
+      "score": 24.5,
+      "effect": "write"
     },
     {
       "name": "bitbucket_create_pr",
       "description": "Create a Bitbucket pull request from sourceBranch into destinationBranch …",
       "integration": "atlassian-bitbucket",
-      "score": 23.74
+      "score": 23.74,
+      "effect": "write"
     }
   ]
 }
@@ -141,9 +143,16 @@ Takes one required `tool` name and returns that tool's argument schema.
     "required": ["owner", "repo"],
     "additionalProperties": false,
     "$schema": "http://json-schema.org/draft-07/schema#"
-  }
+  },
+  "effect": "read",
+  "annotations": { "readOnlyHint": true, "destructiveHint": false }
 }
 ```
+
+`effect` says what the call does: `"read"` changes nothing, `"write"` creates or edits
+something recoverably, and `"destructive"` deletes, overwrites, sends or posts on the
+user's behalf, or is otherwise irreversible. A tool without a label reports
+`"destructive"`. `annotations` carries the same information as MCP tool hints.
 
 Plugins define their schemas in Zod. This tool converts them to portable JSON Schema so
 a client needs no Zod knowledge. Defaults survive the conversion, and they are real —

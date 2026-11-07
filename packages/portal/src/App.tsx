@@ -19,6 +19,8 @@ import Activity from "./pages/Activity";
 import Settings from "./pages/Settings";
 import Admin from "./pages/Admin";
 import RequireAdmin from "./components/RequireAdmin";
+import Spaces from "./pages/Spaces";
+import SpaceShell from "./pages/SpaceShell";
 
 function Boot({ label = "Loading" }: { label?: string }) {
   return (
@@ -63,6 +65,10 @@ function AppRoutes() {
           here with a status, and the cookie flow navigates here itself. */}
       <Route path="/connected/:integration" element={<RequireAuth><ConnectResult /></RequireAuth>} />
       <Route path="/browser" element={<RequireAuth><BrowserView /></RequireAuth>} />
+      {/* A running Space: full screen, its own thin top bar, no sidebar. The
+          server owns only /s/_sdk, /s/upload and /s/:name/app, so /s/:name
+          falls through to here. */}
+      <Route path="/s/:name" element={<RequireAuth><SpaceShell /></RequireAuth>} />
 
       <Route
         element={
@@ -77,6 +83,7 @@ function AppRoutes() {
         <Route path="/apps" element={<Apps />} />
         <Route path="/apps/:name" element={<AppDetail />} />
         <Route path="/agents" element={<Agents />} />
+        <Route path="/spaces" element={<Spaces />} />
         <Route path="/files" element={<Files />} />
         <Route path="/vault" element={<Vault />} />
         <Route path="/vault/new" element={<VaultSecretForm />} />

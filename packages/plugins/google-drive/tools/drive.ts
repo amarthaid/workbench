@@ -67,6 +67,7 @@ export const listFiles = {
   description:
     "List files in Google Drive, optionally filtered by a raw Drive query string (`query`, Drive q syntax, e.g. \"mimeType='application/pdf'\"). Returns up to pageSize (default 10) slim rows { id, name, mimeType, modifiedTime, size? } plus nextPageToken for paging. For keyword/full-text lookups prefer google_drive_search (it escapes the query for you).",
   integration: "google-drive",
+  effect: "read",
   inputSchema: z.object({
     pageSize: z.number().default(10),
     query: z.string().optional(),
@@ -91,6 +92,7 @@ export const createFolder = {
   name: "google_drive_create_folder",
   description: "Create a folder in Google Drive",
   integration: "google-drive",
+  effect: "write",
   inputSchema: z.object({
     name: z.string(),
     parentId: z.string().optional(),
@@ -114,6 +116,7 @@ export const searchFiles = {
   description:
     "Search Google Drive by keyword — matches file names AND document contents (full text), with the query safely escaped. Returns up to pageSize (default 10) slim rows { id, name, mimeType, modifiedTime, size? } plus nextPageToken. Use google_drive_list with a raw Drive q expression for structured filters (mimeType, folder, date).",
   integration: "google-drive",
+  effect: "read",
   inputSchema: z.object({
     query: z.string(),
     pageSize: z.number().default(10),
@@ -141,6 +144,7 @@ export const uploadFile = {
   name: "google_drive_upload",
   description: "Upload a file to Google Drive",
   integration: "google-drive",
+  effect: "write",
   inputSchema: z.object({
     name: z.string(),
     content: z.string(),
@@ -180,6 +184,7 @@ export const uploadFromUrl = {
   description:
     "Fetch a file from a signed or pre-authenticated URL (e.g. S3, GCS, CDN) and upload it directly to Google Drive — no need to pass file content inline. MIME type is auto-detected from the response Content-Type header when not specified. Returns the created Drive file { id, name, mimeType }.",
   integration: "google-drive",
+  effect: "write",
   inputSchema: z.object({
     url: z.string().url(),
     name: z.string(),
@@ -231,6 +236,7 @@ export const downloadFile = {
   name: "google_drive_download",
   description: "Download a file from Google Drive",
   integration: "google-drive",
+  effect: "read",
   inputSchema: z.object({
     fileId: z.string(),
   }),
@@ -244,6 +250,7 @@ export const trashFile = {
   name: "google_drive_trash",
   description: "Move a file to trash in Google Drive",
   integration: "google-drive",
+  effect: "destructive",
   inputSchema: z.object({
     fileId: z.string(),
   }),
@@ -261,6 +268,7 @@ export const updatePermissions = {
   name: "google_drive_permissions",
   description: "Update permissions for a Google Drive file",
   integration: "google-drive",
+  effect: "destructive",
   inputSchema: z.object({
     fileId: z.string(),
     email: z.string().email(),

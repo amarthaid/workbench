@@ -1227,3 +1227,164 @@ body {
 /* Muted label for a deleted custom app — still shows in audit history, but
    clearly not a live app. */
 .wb-app-deleted { color: var(--text-4); font-style: italic; }
+
+/* ── Spaces ──────────────────────────────────────────────────────────────
+   The gallery reuses the app grid. The shell (/s/:name) is full screen and
+   outside the app shell: a thin bar the Space cannot draw over, then the
+   sandboxed frame filling the rest. */
+.space-gallery-cell { align-items: flex-start; }
+.space-gallery-link { align-items: flex-start; }
+.space-gallery-desc {
+  font-size: 13px;
+  color: var(--text-2);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.space-gallery-badges { display: flex; gap: var(--s-4); }
+.space-example-prompt {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-2);
+  background: var(--bg-sunk);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--s-8) var(--s-12);
+  max-width: 60ch;
+}
+
+.space-muted { font-size: 13px; color: var(--text-3); }
+
+.space-card {
+  display: grid;
+  gap: var(--s-12);
+  width: 100%;
+  max-width: 440px;
+  padding: var(--s-32) var(--s-24);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  text-align: center;
+}
+.space-card-title { font-size: 18px; font-weight: 600; color: var(--text); }
+
+.space-consent {
+  display: grid;
+  gap: var(--s-12);
+  width: 100%;
+  max-width: 640px;
+  padding: var(--s-24);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.space-consent-title { font-size: 20px; font-weight: 700; color: var(--text); }
+.space-consent-desc { font-size: 14px; color: var(--text-2); }
+.space-consent-explain { font-size: 13px; color: var(--text-2); }
+.space-consent-actions { display: flex; justify-content: flex-end; gap: var(--s-8); flex-wrap: wrap; }
+.space-card .space-consent-actions { justify-content: center; }
+
+.space-tool-groups { display: grid; gap: var(--s-8); }
+.space-tool-groups .ui-box + .ui-box { margin-top: 0; }
+.space-tool-row { justify-content: space-between; }
+.space-tool-text { display: grid; gap: var(--s-2); min-width: 0; }
+.space-tool-desc { font-size: 12px; color: var(--text-3); }
+.space-tool-tags { display: flex; gap: var(--s-4); flex: none; }
+
+.space-shell {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.space-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-12);
+  height: 40px;
+  padding: 0 var(--s-12);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 13px;
+}
+.space-bar-title { display: flex; align-items: baseline; gap: var(--s-8); min-width: 0; }
+.space-bar-back { color: var(--text-3); text-decoration: none; }
+.space-bar-back:hover { color: var(--text); }
+.space-bar-name {
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.space-bar-owner { color: var(--text-3); white-space: nowrap; }
+.space-bar-right { display: flex; align-items: center; gap: var(--s-12); flex: none; }
+.space-bar-as { color: var(--ok); font-size: 12px; }
+
+.space-menu { position: relative; }
+.space-menu-list {
+  position: absolute;
+  right: 0;
+  top: calc(100% + var(--s-4));
+  z-index: 20;
+  min-width: 160px;
+  display: grid;
+  padding: var(--s-4);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+.space-menu-item {
+  text-align: left;
+  padding: var(--s-4) var(--s-8);
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.space-menu-item:hover { background: var(--bg-sunk); }
+
+.space-banners { flex: none; display: grid; }
+.space-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--s-12);
+  padding: var(--s-8) var(--s-12);
+  background: var(--warn-soft);
+  border-bottom: 1px solid var(--warn-line);
+  color: var(--warn);
+  font-size: 13px;
+}
+.space-banner a { color: var(--accent); font-weight: 500; }
+.space-banner button { margin-left: auto; }
+
+.space-frame {
+  flex: 1;
+  width: 100%;
+  border: none;
+  background: var(--surface);
+}
+
+.space-confirm { display: grid; gap: var(--s-12); }
+.space-confirm-args {
+  display: grid;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.space-confirm-arg {
+  display: flex;
+  gap: var(--s-12);
+  padding: var(--s-4) var(--s-8);
+  font-size: 13px;
+}
+.space-confirm-arg + .space-confirm-arg { border-top: 1px solid var(--border); }
+.space-confirm-arg dt { flex: none; width: 120px; color: var(--text-3); font-family: var(--mono); font-size: 12px; }
+.space-confirm-arg dd { color: var(--text); word-break: break-word; min-width: 0; }
+.space-confirm-raw summary { cursor: pointer; font-size: 13px; color: var(--text-2); }
+.space-confirm-raw pre { margin-top: var(--s-8); max-height: 240px; overflow: auto; }

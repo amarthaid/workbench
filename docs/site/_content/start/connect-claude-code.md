@@ -32,6 +32,7 @@ Put `.mcp.json` at the project root.
 {
   "mcpServers": {
     "workbench": {
+      "type": "http",
       "url": "https://your-workbench.example.com/mcp"
     }
   }
@@ -41,6 +42,7 @@ Put `.mcp.json` at the project root.
 {
   "mcpServers": {
     "workbench": {
+      "type": "http",
       "url": "https://your-workbench.example.com/mcp",
       "headers": { "x-workbench-api-key": "YOUR_API_KEY" }
     }

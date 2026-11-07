@@ -79,6 +79,7 @@ export const listRepos = {
   description:
     "List repositories in a Bitbucket workspace as slim rows (slug, name, full_name, is_private, main branch, updated_on, description) — no links/avatars/clone noise. `workspace` is optional and defaults to the user's first workspace; pass it explicitly if the account belongs to several. Returns { repos, hasMore }; page forward with `page` (pagelen defaults to 10). Use bitbucket_get_repo for clone URL and full detail on one repo.",
   integration: "atlassian-bitbucket",
+  effect: "read",
   inputSchema: z.object({
     workspace: z.string().optional().describe("Workspace slug; defaults to the user's first workspace"),
     page: z.number().default(1),
@@ -104,6 +105,7 @@ export const getRepo = {
   description:
     "Get one Bitbucket repository: slug, name, full_name, privacy, main branch, last update, description, and the https clone URL. Use after bitbucket_list_repos when you need the clone URL or to confirm the main branch before creating a PR.",
   integration: "atlassian-bitbucket",
+  effect: "read",
   inputSchema: z.object({
     workspace: z.string(),
     repoSlug: z.string(),
@@ -123,6 +125,7 @@ export const createPR = {
   description:
     "Create a Bitbucket pull request from sourceBranch into destinationBranch (default \"main\" — check the repo's actual main branch with bitbucket_get_repo first if unsure). UPSERT BEHAVIOR: If an open PR already exists from the same sourceBranch, this tool updates that PR instead of creating a duplicate — use this to add reviewers to an existing PR. Optionally pass `reviewers` (array of user UUIDs) to add reviewers at creation time — get UUIDs from bitbucket_search_users (search by name) or bitbucket_list_default_reviewers (repo's configured defaults). NOTE: The PR author cannot be added as a reviewer — Bitbucket rejects the entire request silently if the author's UUID is included. The tool automatically filters out the PR author from the reviewers list. Returns the new PR's id, state, branches, reviewers, and html URL. Follow up with bitbucket_get_pr / bitbucket_get_pr_diff to review it.",
   integration: "atlassian-bitbucket",
+  effect: "write",
   inputSchema: z.object({
     workspace: z.string(),
     repoSlug: z.string(),
@@ -184,6 +187,7 @@ export const listPRs = {
   description:
     "List pull requests in a repository as slim rows (id, title, state, author, source/destination branch, updated_on). `state` defaults to OPEN; pass MERGED/DECLINED/SUPERSEDED for history. Returns { prs, hasMore }; page forward with `page`. Use bitbucket_get_pr for reviewers, counts, and the PR URL.",
   integration: "atlassian-bitbucket",
+  effect: "read",
   inputSchema: z.object({
     workspace: z.string(),
     repoSlug: z.string(),
@@ -212,6 +216,7 @@ export const getPR = {
   description:
     "Get one pull request: title, description, state, author, source/destination branches, reviewers with approval status, comment/task counts, timestamps, and html URL. Always check this (state, approvals, open tasks) before bitbucket_merge_pr. For the code changes use bitbucket_get_pr_diff.",
   integration: "atlassian-bitbucket",
+  effect: "read",
   inputSchema: z.object({
     workspace: z.string(),
     repoSlug: z.string(),
@@ -231,6 +236,7 @@ export const getPRDiff = {
   description:
     "Get the changes in a pull request. With diffstat=true (recommended first for big PRs) returns one slim row per file: { status, old, new, lines_added, lines_removed } — far cheaper than the full diff. With diffstat=false (default) returns the raw unified diff text of the whole PR, which can be very large. Typical flow: diffstat first, then full diff only if you need to read the actual code.",
   integration: "atlassian-bitbucket",
+  effect: "read",
   inputSchema: z.object({
     workspace: z.string(),
     repoSlug: z.string(),
@@ -266,6 +272,7 @@ export const listPRComments = {
   description:
     "List comments on a pull request as slim rows: { id, author, text, inline: { path, line } for code comments (absent for general comments), created_on }. pagelen defaults to 20. Returns { comments, hasMore }. Use before replying with bitbucket_add_pr_comment to see existing review feedback.",
   integration: "atlassian-bitbucket",
+  effect: "read",
   inputSchema: z.object({
     workspace: z.string(),
     repoSlug: z.string(),
@@ -297,6 +304,7 @@ export const addPRComment = {
   description:
     "Add a comment to a pull request. Plain `text` posts a general comment; also pass `inline` { path, line } to attach it to a specific line of a changed file (get paths/lines from bitbucket_get_pr_diff). Returns { id, created_on }.",
   integration: "atlassian-bitbucket",
+  effect: "write",
   inputSchema: z.object({
     workspace: z.string(),
     repoSlug: z.string(),
@@ -330,6 +338,7 @@ export const approvePR = {
   description:
     "Approve a pull request as the connected user (the green checkmark reviewers see). Non-destructive and revocable in the Bitbucket UI. Review the changes with bitbucket_get_pr_diff before approving. Returns { approved: true }.",
   integration: "atlassian-bitbucket",
+  effect: "destructive",
   inputSchema: z.object({
     workspace: z.string(),
     repoSlug: z.string(),
@@ -350,6 +359,7 @@ export const requestChanges = {
   description:
     "Mark a pull request as \"changes requested\" by the connected user — signals the author to revise before merge. Pair with bitbucket_add_pr_comment to explain what needs changing. Returns { requested: true }.",
   integration: "atlassian-bitbucket",
+  effect: "write",
   inputSchema: z.object({
     workspace: z.string(),
     repoSlug: z.string(),
@@ -370,6 +380,7 @@ export const mergePR = {
   description:
     "Merge a pull request into its destination branch. IRREVERSIBLE: this lands the commits on the destination branch — check state, approvals, and open tasks with bitbucket_get_pr first, and only merge when explicitly asked to. Optional: `message` (merge commit message), `merge_strategy` (merge_commit | squash | fast_forward), `close_source_branch`. Returns the merged PR's id and state.",
   integration: "atlassian-bitbucket",
+  effect: "destructive",
   inputSchema: z.object({
     workspace: z.string(),
     repoSlug: z.string(),
@@ -401,6 +412,7 @@ export const declinePR = {
   description:
     "Decline (reject) a pull request. WARNING: this closes the PR without merging — the author must open a new PR to resurrect it. Prefer bitbucket_request_changes if you only want revisions. Returns the PR's id and state.",
   integration: "atlassian-bitbucket",
+  effect: "destructive",
   inputSchema: z.object({
     workspace: z.string(),
     repoSlug: z.string(),
@@ -421,6 +433,7 @@ export const getFile = {
   description:
     "Read a file's raw text content from a repository at a specific ref. `ref` is required and must be a real branch name or commit hash (e.g. \"main\" or a 40-char SHA — \"HEAD\" is NOT valid on this API). Useful for seeing surrounding code that a PR diff doesn't show. Returns the file contents as plain text.",
   integration: "atlassian-bitbucket",
+  effect: "read",
   inputSchema: z.object({
     workspace: z.string(),
     repoSlug: z.string(),
@@ -444,6 +457,7 @@ export const listPRCommits = {
   description:
     "List the commits in a pull request as slim rows: { hash (12 chars), message (first line only), author, date }. Cheaper than the diff for understanding the shape/history of a PR. Returns { commits, hasMore }.",
   integration: "atlassian-bitbucket",
+  effect: "read",
   inputSchema: z.object({
     workspace: z.string(),
     repoSlug: z.string(),
@@ -485,6 +499,7 @@ export const triggerPipeline = {
   description:
     "Trigger a Bitbucket Pipelines run on a branch (`ref`). Optional `custom` runs a custom pipeline defined under `pipelines.custom.<name>` in bitbucket-pipelines.yml; omit it to run the branch's default pipeline. Optional `variables` ({KEY: value}) are passed to the run — custom pipelines that declare `variables:` read them here; pass `secured` (list of variable names) to mark those secured/masked. Returns a slim pipeline { uuid, build_number, state, result, ref_name, created_on, completed_on } — poll bitbucket_get_pipeline with the uuid. Requires the pipeline scope and Pipelines enabled on the repo. workspace defaults to the user's first workspace.",
   integration: "atlassian-bitbucket",
+  effect: "destructive",
   inputSchema: z.object({
     workspace: z.string().optional(),
     repoSlug: z.string(),
@@ -534,6 +549,7 @@ export const getPipeline = {
   description:
     "Get a single Bitbucket pipeline by uuid (or build number) as a slim object { uuid, build_number, state, result, ref_name, created_on, completed_on }. Use to poll a pipeline you triggered (state: PENDING | IN_PROGRESS | COMPLETED; result: SUCCESSFUL | FAILED | STOPPED). workspace defaults to the user's first workspace.",
   integration: "atlassian-bitbucket",
+  effect: "read",
   inputSchema: z.object({
     workspace: z.string().optional(),
     repoSlug: z.string(),
@@ -555,6 +571,7 @@ export const stopPipeline = {
   description:
     "Stop a running Bitbucket pipeline by uuid. Returns { ok: true } on success (204 No Content); on failure returns Bitbucket's { ok:false, status, error } body. workspace defaults to the user's first workspace.",
   integration: "atlassian-bitbucket",
+  effect: "destructive",
   inputSchema: z.object({
     workspace: z.string().optional(),
     repoSlug: z.string(),
@@ -576,6 +593,7 @@ export const getCloneUrl = {
   description:
     "Mint a temporary authenticated HTTPS git URL for a repo (https://x-token-auth:<token>@bitbucket.org/ws/slug.git), usable for clone/pull/push. The embedded OAuth token expires (typically ≤2h) and the URL dies with it — re-call this right before a push rather than storing the URL. Do NOT persist it in .git/config or scripts: anyone holding the URL holds the token until expiry. Push requires the repository:write scope on the connection (reconnect if it was added after connecting). workspace defaults to the user's first workspace.",
   integration: "atlassian-bitbucket",
+  effect: "read",
   inputSchema: z.object({
     workspace: z.string().optional(),
     repoSlug: z.string(),
@@ -595,6 +613,7 @@ export const listDefaultReviewers = {
   description:
     'List the default reviewers that will auto-attach to new pull requests on a repository. Returns slim rows { display_name, uuid, reviewer_type: "project"|"repository" } — project ones are inherited from the workspace project, repository ones were set on this repo (requires repository:admin to add). Bitbucket auto-adds these to every new PR even without passing them to bitbucket_create_pr — use this to see who will review by default, or pass a returned uuid into bitbucket_create_pr reviewers explicitly. workspace defaults to the first workspace.',
   integration: "atlassian-bitbucket",
+  effect: "read",
   inputSchema: z.object({
     workspace: z.string().optional(),
     repoSlug: z.string(),
@@ -620,6 +639,7 @@ export const searchUsers = {
   description:
     "Search Bitbucket workspace members by name or username to resolve user UUIDs for use with bitbucket_create_pr reviewers. Substring match against display_name OR nickname (case-insensitive) — 'alex' matches 'Jane Alexander' and 'alexp'. Only finds workspace members, not external repo-only collaborators. Email filtering not supported (Bitbucket gates that behind admin scope). Returns { users: [{ display_name, nickname, uuid }], hasMore } — page forward with page. workspace defaults to the first workspace.",
   integration: "atlassian-bitbucket",
+  effect: "read",
   inputSchema: z.object({
     workspace: z.string().optional(),
     query: z
