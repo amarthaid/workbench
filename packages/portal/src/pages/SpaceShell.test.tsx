@@ -143,7 +143,7 @@ describe("SpaceShell", () => {
       fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
       const iframe = await frame();
       expect(grantSpaceConsent).toHaveBeenCalledWith("pr-timeline");
-      expect(iframe.getAttribute("sandbox")).toBe("allow-scripts");
+      expect(iframe.getAttribute("sandbox")).toBe("allow-scripts allow-forms");
       expect(iframe.getAttribute("allow")).toBe("");
       expect(iframe.getAttribute("referrerpolicy")).toBe("no-referrer");
       expect(iframe.getAttribute("src")).toBe("/s/pr-timeline/app/sig-abc/");
@@ -242,7 +242,7 @@ describe("SpaceShell", () => {
       const r = await send("call", { integration: "bitbucket", tool: "list_prs" });
       expect(r.error).toMatchObject({ code: "NOT_CONNECTED", integration: "bitbucket" });
       const link = await screen.findByRole("link", { name: "Connect Bitbucket" });
-      expect(link).toHaveAttribute("href", "/connect/bitbucket");
+      expect(link).toHaveAttribute("href", "/apps/bitbucket");
       expect(link).toHaveAttribute("target", "_blank");
       expect(link).toHaveAttribute("rel", "noopener");
       // Non-blocking: the Space keeps running.

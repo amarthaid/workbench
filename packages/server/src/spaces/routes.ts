@@ -42,7 +42,7 @@ export function spaceOrigins(): string[] {
 export function spaceCsp(origins: readonly string[] = spaceOrigins()): string {
   const o = origins.join(" ");
   return [
-    "sandbox allow-scripts",
+    "sandbox allow-scripts allow-forms",
     "default-src 'none'",
     `script-src 'self' ${o} 'unsafe-inline' 'unsafe-eval'`,
     `style-src 'self' ${o} 'unsafe-inline'`,

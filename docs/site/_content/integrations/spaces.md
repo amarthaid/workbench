@@ -72,7 +72,7 @@ Each tool declares `effect: "read" | "write" | "destructive"`. An unlabelled too
 Author files are served from `/s/<name>/app/<sig>/`. The sandboxed iframe sends no cookie or token, so the `sig` path segment carries access: an HMAC over the Space name, the viewer and an expiry about 12 hours out, minted when the viewer opens the Space. A bad or expired `sig` is a 404. Every response carries:
 
 ```
-Content-Security-Policy: sandbox allow-scripts; default-src 'none';
+Content-Security-Policy: sandbox allow-scripts allow-forms; default-src 'none';
   script-src 'self' <origins> 'unsafe-inline' 'unsafe-eval';
   style-src 'self' <origins> 'unsafe-inline';
   img-src 'self' <origins> data: blob:; font-src 'self' <origins> data:;

@@ -19,7 +19,7 @@ import { resetSpacesDb, tarball, writeSpaceFiles } from "./helpers";
 let app: FastifyInstance;
 function cspFor(origins: string): string {
   return (
-    "sandbox allow-scripts; default-src 'none'; " +
+    "sandbox allow-scripts allow-forms; default-src 'none'; " +
     `script-src 'self' ${origins} 'unsafe-inline' 'unsafe-eval'; ` +
     `style-src 'self' ${origins} 'unsafe-inline'; ` +
     `img-src 'self' ${origins} data: blob:; ` +

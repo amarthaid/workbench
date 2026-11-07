@@ -8,7 +8,7 @@ things were not obvious.
 
 ## 1. An opaque-origin document needs `Cross-Origin-Resource-Policy: cross-origin`
 
-The page is served with `Content-Security-Policy: sandbox allow-scripts` and
+The page is served with `Content-Security-Policy: sandbox allow-scripts allow-forms` and
 framed with `sandbox="allow-scripts allow-forms"`, so its origin is opaque
 (`null`). Every subresource it loads, including its own `<script src="./app.js">`,
 its CSS, its images and `/s/_sdk/workbench.js`, is therefore a cross-origin
@@ -86,3 +86,16 @@ cannot draw over or click, which only exists outside the iframe.
 
 Calls are audited with `client_name = "space:<name>"` (an override on the
 request's audit context), so the Activity page shows which Space acted.
+
+## Keep `allow-forms`, block navigation with `form-action`
+
+An earlier review dropped `allow-forms` from the sandbox as "pointless with
+`form-action 'none'`". It is not pointless. In a sandbox without `allow-forms`
+the browser aborts form submission before it fires the `submit` event, so the
+most common page pattern, a `<form>` whose `submit` listener calls
+`preventDefault()` and then `workbench.call(...)`, silently does nothing. A
+local end-to-end run caught it: an agent-built Drive page's "Save note" button
+produced no tool call at all. `allow-forms` is back on both the iframe and the
+CSP `sandbox` directive. `form-action 'none'` still blocks a real form
+submission from navigating anywhere, so this opens no exfiltration path.
+

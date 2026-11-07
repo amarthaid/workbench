@@ -41,8 +41,8 @@ it calls *their* connections and shows *their* PRs.
  │  - viewer's portal JWT (localStorage)       │  POST /api/spaces/:name/consent
  │  - consent screen, confirm modal, banners   │  POST /api/spaces/:name/call ──► executeSingle
  │  ┌───────────────────────────────────────┐  │  GET/PUT/DELETE /api/spaces/:name/kv/:key
- │  │ iframe sandbox="allow-scripts"        │  │
- │  │                                       │  │  GET  /s/:name/app/<sig>/*  (author files,
+ │  │ iframe sandbox="allow-scripts         │  │
+ │  │   allow-forms"                        │  │  GET  /s/:name/app/<sig>/*  (author files,
  │  │ src=/s/<name>/app/<sig>/              │  │        strict CSP, opaque origin)
  │  │ Space code + /s/_sdk/workbench.js     │  │  GET  /s/_sdk/workbench.js
  │  └──────────── postMessage ──────────────┘  │
@@ -74,7 +74,7 @@ minted `sig` before it expires; it only exposes the Space's own files, never dat
 Every response carries:
 
 ```
-Content-Security-Policy: sandbox allow-scripts;
+Content-Security-Policy: sandbox allow-scripts allow-forms;
   default-src 'none';
   script-src 'self' <origins> 'unsafe-inline' 'unsafe-eval';
   style-src 'self' <origins> 'unsafe-inline';
@@ -104,8 +104,11 @@ every dependency.
 `Cross-Origin-Resource-Policy` is `cross-origin` on purpose: the document is
 opaque-origin, so every subresource load (its own `<script src>`, images, CSS)
 is cross-origin no-cors, and `same-origin` would block them. The `sig` in the
-path is the access control. `allow-forms` is left out because `form-action
-'none'` makes it useless and it is one more navigation primitive.
+path is the access control. `allow-forms` stays: without it the browser
+cancels form submission before the `submit` event fires, so the ordinary
+`<form>` plus `addEventListener("submit", e => e.preventDefault() ...)` pattern
+never runs (found in the local end-to-end run). `form-action 'none'` is what
+blocks a real form navigation, so keeping `allow-forms` opens no exit.
 
 No server route is registered for `/s/:name` or `/s/:name/` (unlike jots'
 `/j/:name` redirect): those paths fall through to the portal SPA, which owns
@@ -357,7 +360,7 @@ Full-screen, inside `RequireAuth`, outside the main layout.
    connected and missing tools. Approve calls `POST consent`, then mounts.
 3. Thin top bar: title, "by ownerEmail", "Running as you", menu: View tools,
    Revoke access (DELETE consent, back to the consent screen).
-4. Iframe: `sandbox="allow-scripts"`, `allow=""`,
+4. Iframe: `sandbox="allow-scripts allow-forms"`, `allow=""`,
    `referrerpolicy="no-referrer"`, `src=appUrl`.
 5. Bridge: handles messages per the protocol. The shell decides the effect
    from its own `GET /api/spaces/:name` data; a tool marked `missing` or with
@@ -366,7 +369,7 @@ Full-screen, inside `RequireAuth`, outside the main layout.
    More than 5 confirmation requests in 10 s pauses the Space with a notice.
    A 428 from the server (the shell's view was stale) is handled the same way:
    modal, then retry with `confirmed`. 409 adds a non-blocking
-   "Connect <Integration>" banner linking to `/connect/:integration` in a new
+   "Connect <Integration>" banner linking to `/apps/:integration` in a new
    tab. 403 `CONSENT_REQUIRED` mid-session (the author changed the tool list)
    unmounts the frame and returns to the consent screen. 401 from the API:
    redirect to login with return path.

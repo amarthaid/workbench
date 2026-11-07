@@ -203,7 +203,7 @@ function SpaceRunner({
           {banners.map((b) => (
             <div key={b.integration} className="space-banner" role="status">
               <span>{b.name} is not connected, so this Space cannot use it.</span>
-              <a href={`/connect/${encodeURIComponent(b.integration)}`} target="_blank" rel="noopener">
+              <a href={`/apps/${encodeURIComponent(b.integration)}`} target="_blank" rel="noopener">
                 Connect {b.name}
               </a>
               <button
@@ -223,7 +223,7 @@ function SpaceRunner({
         className="space-frame"
         title={space.title}
         src={src}
-        sandbox="allow-scripts"
+        sandbox="allow-scripts allow-forms"
         allow=""
         referrerPolicy="no-referrer"
       />
