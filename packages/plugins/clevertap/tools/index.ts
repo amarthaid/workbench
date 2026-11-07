@@ -147,6 +147,7 @@ export const listProjects = {
   name: "clevertap_list_projects",
   description: "List all configured CleverTap projects (name, account ID, region).",
   integration: "clevertap",
+  effect: "read",
   inputSchema: z.object({}),
   handler: async (ctx: any) => {
     const projects = await loadProjects(ctx);
@@ -162,6 +163,7 @@ export const setProjects = {
   name: "clevertap_set_projects",
   description: "Set all CleverTap projects at once via JSON. Overwrites existing. Use for multi-account bulk config. Input is JSON array: [{\"name\":\"prod\",\"accountId\":\"XXX\",\"passcode\":\"YYY\",\"region\":\"us1\"}]. Local store only, not a CleverTap API write.",
   integration: "clevertap",
+  effect: "destructive",
   inputSchema: z.object({
     projects: z
       .array(
@@ -211,6 +213,7 @@ export const getEvents = {
   name: "clevertap_get_events",
   description: `Query event data for an event within a date range. ${YYYYMMDD_DESC} ${SYSTEM_EVENTS_INFO} ${CQL_INFO} Returns cursor for paginated results — use clevertap_get_events_cursor for next pages.`,
   integration: "clevertap",
+  effect: "read",
   inputSchema: z.object({
     project: z.string().optional().describe("Project name; defaults to first configured project."),
     event_name: z.string().describe("Name of the event to query"),
@@ -231,6 +234,7 @@ export const getEventsCursor = {
   name: "clevertap_get_events_cursor",
   description: "Fetch next page of event results using cursor from clevertap_get_events.",
   integration: "clevertap",
+  effect: "read",
   inputSchema: z.object({
     project: z.string().optional().describe("Project name; defaults to first configured project."),
     cursor: z.string().describe("Cursor from previous events query"),
@@ -245,6 +249,7 @@ export const getEventCount = {
   name: "clevertap_get_event_count",
   description: `Count users who performed an event within date range. ${YYYYMMDD_DESC} ${SYSTEM_EVENTS_INFO} ${CQL_INFO} Supports property filters (event_properties, session_properties, common_profile_properties, advanced_query). Auto-polls if async.`,
   integration: "clevertap",
+  effect: "read",
   inputSchema: z.object({
     project: z.string().optional().describe("Project name; defaults to first configured project."),
     event_name: z.string(),
@@ -265,6 +270,7 @@ export const getProfile = {
   name: "clevertap_get_profile",
   description: `Retrieve a user profile by identity, email, or objectId (GUID). Provide at least one. ${PREDEFINED_PROFILE_INFO}`, 
   integration: "clevertap",
+  effect: "read",
   inputSchema: z.object({
     project: z.string().optional().describe("Project name; defaults to first configured project."),
     identity: z.string().optional(),
@@ -286,6 +292,7 @@ export const getProfilesByEvent = {
   name: "clevertap_get_profiles_by_event",
   description: `Get profiles of users who performed an event within date range. ${YYYYMMDD_DESC} ${SYSTEM_EVENTS_INFO} ${PREDEFINED_PROFILE_INFO} ${CQL_INFO} Returns cursor — use clevertap_get_profiles_cursor for next pages.`,
   integration: "clevertap",
+  effect: "read",
   inputSchema: z.object({
     project: z.string().optional().describe("Project name; defaults to first configured project."),
     event_name: z.string(),
@@ -306,6 +313,7 @@ export const getProfilesCursor = {
   name: "clevertap_get_profiles_cursor",
   description: "Fetch next page of profiles using cursor from clevertap_get_profiles_by_event.",
   integration: "clevertap",
+  effect: "read",
   inputSchema: z.object({
     project: z.string().optional().describe("Project name; defaults to first configured project."),
     cursor: z.string(),
@@ -320,6 +328,7 @@ export const getProfileCount = {
   name: "clevertap_get_profile_count",
   description: `Count profiles who performed an event within date range. ${YYYYMMDD_DESC} ${SYSTEM_EVENTS_INFO} ${CQL_INFO} Supports property filters (event_properties, session_properties, common_profile_properties, advanced_query). Auto-polls if async.`, 
   integration: "clevertap",
+  effect: "read",
   inputSchema: z.object({
     project: z.string().optional().describe("Project name; defaults to first configured project."),
     event_name: z.string(),
@@ -340,6 +349,7 @@ export const getCampaigns = {
   name: "clevertap_get_campaigns",
   description: `List campaigns within date range (id, name, scheduled_on, status). ${YYYYMMDD_DESC}`,
   integration: "clevertap",
+  effect: "read",
   inputSchema: z.object({
     project: z.string().optional().describe("Project name; defaults to first configured project."),
     from: z.string().describe(YYYYMMDD_DESC),
@@ -355,6 +365,7 @@ export const getCampaignReport = {
   name: "clevertap_get_campaign_report",
   description: "Get delivery and engagement report for a campaign by numeric ID.",
   integration: "clevertap",
+  effect: "read",
   inputSchema: z.object({
     project: z.string().optional().describe("Project name; defaults to first configured project."),
     id: z.number().int().describe("Campaign ID"),
@@ -369,6 +380,7 @@ export const getMessageReport = {
   name: "clevertap_get_message_report",
   description: `Get delivery/engagement report (sent, delivered, opened, clicked) filtered by channel, delivery type, status, label. ${YYYYMMDD_DESC}`,
   integration: "clevertap",
+  effect: "read",
   inputSchema: z.object({
     project: z.string().optional().describe("Project name; defaults to first configured project."),
     from: z.string().describe(YYYYMMDD_DESC),
@@ -398,6 +410,7 @@ export const getTopPropertyCount = {
   name: "clevertap_get_top_property_count",
   description: `Get top property value counts for an event (e.g. top product categories). ${YYYYMMDD_DESC} ${SYSTEM_EVENTS_INFO} ${CQL_INFO} Auto-polls if async.`, 
   integration: "clevertap",
+  effect: "read",
   inputSchema: z.object({
     project: z.string().optional().describe("Project name; defaults to first configured project."),
     event_name: z.string(),
@@ -420,6 +433,7 @@ export const getEventTrend = {
   name: "clevertap_get_event_trend",
   description: `Get daily/weekly/monthly trend for an event. Supports unique count and sum of numeric property. ${YYYYMMDD_DESC} ${SYSTEM_EVENTS_INFO} ${CQL_INFO} Auto-polls if async.`, 
   integration: "clevertap",
+  effect: "read",
   inputSchema: z.object({
     project: z.string().optional().describe("Project name; defaults to first configured project."),
     event_name: z.string(),
@@ -447,6 +461,7 @@ export const getDau = {
   name: "clevertap_get_dau",
   description: `Get Daily Active Users trend (unique App Launched) for date range. ${YYYYMMDD_DESC}`,
   integration: "clevertap",
+  effect: "read",
   inputSchema: z.object({
     project: z.string().optional().describe("Project name; defaults to first configured project."),
     from: z.string().describe(YYYYMMDD_DESC),
@@ -468,6 +483,7 @@ export const getUninstallReport = {
   name: "clevertap_get_uninstall_report",
   description: `Get uninstall count trend for date range. ${YYYYMMDD_DESC}`,
   integration: "clevertap",
+  effect: "read",
   inputSchema: z.object({
     project: z.string().optional().describe("Project name; defaults to first configured project."),
     from: z.string().describe(YYYYMMDD_DESC),
@@ -489,6 +505,7 @@ export const getRealTimeCounts = {
   name: "clevertap_get_real_time_counts",
   description: "Get count of users active right now (last 5 minutes). Optionally breakdown by user type.",
   integration: "clevertap",
+  effect: "read",
   inputSchema: z.object({
     project: z.string().optional().describe("Project name; defaults to first configured project."),
     user_type: z.boolean().optional().describe("Include breakdown by user type"),
@@ -503,6 +520,7 @@ export const request = {
   name: "clevertap_request",
   description: `Make any CleverTap API read request with full control over path, method, body, params. Supports full CQL (event_properties, session_properties, common_profile_properties, advanced_query, likelihood). See https://developer.clevertap.com/docs/clevertap-query-language. Prefer specific tools when available. For async partial responses use clevertap_poll. Note: dates in body must be YYYYMMDD integers, not YYYY-MM-DD strings.`,
   integration: "clevertap",
+  effect: "destructive",
   inputSchema: z.object({
     project: z.string().optional().describe("Project name; defaults to first configured project."),
     path: z.string().describe('API path without base (e.g. "/counts/trends.json", "/profile.json")'),
@@ -538,6 +556,7 @@ export const poll = {
   name: "clevertap_poll",
   description: "Poll async CleverTap result via req_id until success/fail.",
   integration: "clevertap",
+  effect: "read",
   inputSchema: z.object({
     project: z.string().optional().describe("Project name; defaults to first configured project."),
     path: z.string().describe('Same path as original request (e.g. "/counts/trends.json")'),

@@ -36,6 +36,7 @@ export const sendEmail = {
     "inReplyTo sets the In-Reply-To/References MIME headers so recipients' clients thread it too. " +
     "Omit both to start a new conversation. Returns the sent message's {id, threadId, labelIds}.",
   integration: "google-gmail",
+  effect: "destructive",
   inputSchema: z.object({
     to: z.string().email(),
     subject: z.string(),
@@ -84,6 +85,7 @@ export const listEmails = {
     "Returns rows of {id, threadId, from, subject, date, snippet, labelIds} plus nextPageToken. " +
     "maxResults defaults to 10 and is capped at 25, because each row costs one metadata fetch.",
   integration: "google-gmail",
+  effect: "read",
   inputSchema: z.object({
     maxResults: z.number().default(10).describe("Max messages to return (default 10, capped at 25)"),
     query: z.string().optional().describe("Gmail search query, e.g. \"is:unread from:alice newer_than:7d\""),
@@ -128,6 +130,7 @@ export const getEmail = {
     "body falls back to the snippet when no text/plain part exists. Set raw=true only if you need the " +
     "unshaped Gmail API payload (large; includes the full MIME tree).",
   integration: "google-gmail",
+  effect: "read",
   inputSchema: z.object({
     id: z.string(),
     raw: z.boolean().default(false).describe("Return the raw Gmail API message payload instead of the shaped summary"),
@@ -161,6 +164,7 @@ export const modifyEmail = {
     "after the change. Use after processing mail from google_gmail_list so the same messages don't " +
     "show up as unread next scan.",
   integration: "google-gmail",
+  effect: "destructive",
   inputSchema: z.object({
     messageId: z.string(),
     addLabelIds: z.array(z.string()).optional().describe("Label IDs to add (see google_gmail_labels)"),
@@ -190,6 +194,7 @@ export const getProfile = {
     "Get the connected account's profile: {emailAddress, messagesTotal, threadsTotal, historyId}. " +
     "Use to confirm which mailbox you're acting on before sending or modifying mail.",
   integration: "google-gmail",
+  effect: "read",
   inputSchema: z.object({}),
   handler: async (ctx: any, _args: any) => {
     const res = await ctx.http(`${BASE}/profile`);
@@ -203,6 +208,7 @@ export const listLabels = {
     "List all label IDs and names (system labels like INBOX/UNREAD/STARRED plus user labels). " +
     "Use to find label IDs for google_gmail_modify or `label:` clauses in google_gmail_list queries.",
   integration: "google-gmail",
+  effect: "read",
   inputSchema: z.object({}),
   handler: async (ctx: any, _args: any) => {
     const res = await ctx.http(`${BASE}/labels`);
@@ -218,6 +224,7 @@ export const listThreads = {
     "message list. Supports Gmail search syntax via `query`; maxResults defaults to 10. Pass a thread " +
     "id as threadId to google_gmail_send to reply into the conversation.",
   integration: "google-gmail",
+  effect: "read",
   inputSchema: z.object({
     maxResults: z.number().default(10).describe("Max threads to return (default 10)"),
     query: z.string().optional().describe("Gmail search query, e.g. \"is:unread from:alice\""),
@@ -243,6 +250,7 @@ export const createDraft = {
     "Create a draft (saved to the Drafts folder, NOT sent — use google_gmail_send to actually send). " +
     "Use when the user should review/edit before sending. Returns the draft's {id, message}.",
   integration: "google-gmail",
+  effect: "write",
   inputSchema: z.object({
     to: z.string().email(),
     subject: z.string(),

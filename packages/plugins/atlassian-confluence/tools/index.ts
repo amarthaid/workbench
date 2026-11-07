@@ -121,6 +121,7 @@ export const createPage = {
   description:
     "Create a Confluence page in a space. body is Confluence storage format (XHTML) — plain text works for simple pages. Pass parentId to nest under an existing page. spaceKey is resolved to the numeric spaceId internally; pass spaceId directly to skip the lookup. Returns the new page's id, title, spaceKey, version, and url.",
   integration: "atlassian-confluence",
+  effect: "write",
   inputSchema: z.object({
     spaceKey: z.string(),
     title: z.string(),
@@ -156,6 +157,7 @@ export const searchPages = {
   description:
     "Search Confluence pages. Pass `query` for plain full-text, or `cql` for a raw CQL expression (space/label/date/title filters, boolean logic, ORDER BY) — e.g. `space = ENG AND label = \"adr\" ORDER BY lastmodified DESC`. Exactly one of the two is required; `cql` wins if both are given. A malformed CQL string returns an upstream error, not an empty list. Returns up to `limit` (default 10, max 100) slim rows: id, title, spaceKey, version, url. Results are truncated at `limit`: when `hasMore` is true the response also carries `nextCursor` — call again with the same query and `cursor` set to it to get the following page. Use confluence_get_page with an id to read content.",
   integration: "atlassian-confluence",
+  effect: "read",
   inputSchema: z.object({
     query: z.string().optional(),
     // Raw CQL, passed through untouched. Mirrors how jira_search_issues fronts
@@ -241,6 +243,7 @@ export const getPage = {
   description:
     "Get a Confluence page by ID, including its body (storage XHTML), version number, and space. Returns { id, title, spaceKey, version, body, url, attachments }. `attachments` lists files embedded in or attached to the page (diagrams, images) — these never appear in the body, so a section that is only a diagram looks empty without them; each has a downloadUrl. It is omitted entirely if the attachment lookup failed, as opposed to [] for a page with none. The version number is required by confluence_update_page.",
   integration: "atlassian-confluence",
+  effect: "read",
   inputSchema: z.object({
     // v2 ids are 64-bit — long numeric strings; don't assume 9 digits.
     pageId: z.string().regex(/^\d+$/, "pageId must be numeric"),
@@ -267,6 +270,7 @@ export const listSpaces = {
   description:
     "List Confluence spaces (up to `limit`, default 25). Returns slim rows: key, name, id, url. Results are truncated at `limit`: when `hasMore` is true the response also carries `nextCursor` — call again with `cursor` set to it for the following page. Space keys are needed by confluence_create_page.",
   integration: "atlassian-confluence",
+  effect: "read",
   inputSchema: z.object({
     // 250 is the v2 /spaces ceiling. Rejecting out-of-range here costs a
     // round-trip less than an opaque upstream 400 and names the bad field.
@@ -304,6 +308,7 @@ export const updatePage = {
   description:
     "Update a Confluence page's title and body. `version` must be the page's CURRENT version number (from confluence_get_page) — the API stores version+1 and rejects stale numbers. Optional `message` annotates the version history.",
   integration: "atlassian-confluence",
+  effect: "destructive",
   inputSchema: z.object({
     pageId: z.string(),
     title: z.string(),
@@ -334,6 +339,7 @@ export const deletePage = {
   name: "confluence_delete_page",
   description: "Delete a Confluence page by ID (moves it to space trash). Irreversible via this API.",
   integration: "atlassian-confluence",
+  effect: "destructive",
   inputSchema: z.object({
     pageId: z.string(),
   }),

@@ -4,6 +4,7 @@ export const getPresentation = {
   name: "google_slides_get",
   description: "Get a Google Slides presentation by ID",
   integration: "google-slides",
+  effect: "read",
   inputSchema: z.object({
     presentationId: z.string(),
   }),
@@ -19,6 +20,7 @@ export const createPresentation = {
   name: "google_slides_create",
   description: "Create a new Google Slides presentation",
   integration: "google-slides",
+  effect: "write",
   inputSchema: z.object({
     title: z.string(),
   }),
@@ -36,6 +38,7 @@ export const batchUpdate = {
   name: "google_slides_batch_update",
   description: "Apply batch updates to a Google Slides presentation (insert text, create/delete slides, etc.)",
   integration: "google-slides",
+  effect: "destructive",
   inputSchema: z.object({
     presentationId: z.string(),
     requests: z.array(z.record(z.any())),
@@ -57,6 +60,7 @@ export const searchSlides = {
   name: "google_slides_search",
   description: "Search for Google Slides presentations in Drive",
   integration: "google-slides",
+  effect: "read",
   inputSchema: z.object({
     query: z.string().optional(),
     pageSize: z.number().default(10),
@@ -84,6 +88,7 @@ export const createFromMarkdown = {
   name: "google_slides_create_from_markdown",
   description: "Create a Google Slides presentation from Markdown text. Use '---' to separate slides. Supports tables, bullets, quotes, and two-column layouts with '|||'.",
   integration: "google-slides",
+  effect: "write",
   inputSchema: z.object({
     title: z.string(),
     markdownText: z.string(),

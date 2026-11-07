@@ -27,6 +27,7 @@ export const createTask = {
   description:
     "Create a new Asana task in a project. Returns the created task including its gid — keep the gid to update, complete (asana_update_task with completed:true), or comment on it later. dueOn is YYYY-MM-DD; assignee is a user gid (find one with asana_search_users).",
   integration: "asana",
+  effect: "write",
   inputSchema: z.object({
     projectId: z.string(),
     name: z.string(),
@@ -59,6 +60,7 @@ export const getTask = {
   description:
     "Read a single Asana task by gid — name, notes (truncated to 2000 chars), completed flag, assignee, due date, project names, and permalink URL. Use this to check current state before asana_update_task, or to follow up on a task created earlier. Cheaper and more complete than re-listing the whole project.",
   integration: "asana",
+  effect: "read",
   inputSchema: z.object({
     taskGid: z.string(),
   }),
@@ -76,6 +78,7 @@ export const updateTask = {
   description:
     "Update an Asana task — and the way to COMPLETE one: pass completed:true to mark it done (completed:false reopens it). Only the fields you provide are changed; omitted fields are left untouched. due_on is YYYY-MM-DD, assigneeGid is a user gid (asana_search_users). Returns the updated task in the same slim shape as asana_get_task.",
   integration: "asana",
+  effect: "destructive",
   inputSchema: z.object({
     taskGid: z.string(),
     name: z.string().optional(),
@@ -111,6 +114,7 @@ export const addComment = {
   description:
     "Add a comment (story) to an Asana task. Plain text only. Returns { gid, created_at } of the new comment. Use this for status updates or context on an existing task — to change task fields themselves use asana_update_task instead.",
   integration: "asana",
+  effect: "write",
   inputSchema: z.object({
     taskGid: z.string(),
     text: z.string(),
@@ -131,6 +135,7 @@ export const listTasks = {
   description:
     "List tasks in an Asana project as slim rows: { gid, name, completed, due_on, assignee } (default 10, set limit for more). Use asana_get_task on a gid when you need notes or the permalink. Find project gids with asana_list_projects.",
   integration: "asana",
+  effect: "read",
   inputSchema: z.object({
     projectId: z.string(),
     limit: z.number().default(10),
@@ -160,6 +165,7 @@ export const listProjects = {
   description:
     "List Asana projects as slim rows: { gid, name } (default 10, set limit for more). Scope to one workspace via workspaceId, otherwise all workspaces you can see. Use the gid with asana_list_tasks / asana_create_task.",
   integration: "asana",
+  effect: "read",
   inputSchema: z.object({
     workspaceId: z.string().optional(),
     limit: z.number().default(10),
@@ -180,6 +186,7 @@ export const listTeams = {
   description:
     "List teams in an Asana organization as slim rows: { gid, name } (default 10, set limit for more). organizationId is the workspace gid of an organization.",
   integration: "asana",
+  effect: "read",
   inputSchema: z.object({
     organizationId: z.string(),
     limit: z.number().default(10),
@@ -200,6 +207,7 @@ export const searchUsers = {
   description:
     "Search Asana users in a workspace as slim rows: { gid, name, email } (default 10, set limit for more). Omit query to list everyone. Use the gid as assignee / assigneeGid in asana_create_task and asana_update_task.",
   integration: "asana",
+  effect: "read",
   inputSchema: z.object({
     workspaceId: z.string(),
     query: z.string().optional(),

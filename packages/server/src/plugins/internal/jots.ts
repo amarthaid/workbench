@@ -18,6 +18,7 @@ const tools: PluginTool[] = [
     description:
       "Begin deploying a static web artifact to /j/<name>/. Returns an upload URL and a single-use token (valid ~5 min). Package your site directory as a gzip tarball and upload it, e.g.: `tar czf - -C <dir> . | curl --data-binary @- -H 'Content-Type: application/gzip' <uploadUrl>`. The archive's root must contain an index.html (served at /j/<name>/) — an upload without one is rejected (NO_INDEX). The archive is extracted server-side and published wholesale, replacing any previous deploy. `access` is 'public' or 'password' (password jots require `password`). Set `cors: true` on a public jot to let its own scripts (and other sites) fetch its files — jot pages are sandboxed onto an opaque origin, so without it a page cannot even fetch its own JSON. Names are global and creator-locked: a name owned by another user returns JOT_NAME_TAKEN. Limits: <=5 MiB decompressed, <=1000 files. Jot pages are sandboxed (opaque origin) and must be self-contained.",
     integration: JOTS_INTEGRATION_NAME,
+    effect: "write",
     inputSchema: z.object({
       name: z.string(),
       access: z.enum(["public", "password"]),
@@ -50,6 +51,7 @@ const tools: PluginTool[] = [
     description:
       "Begin a partial update of a jot you already own: the archive you upload is overlaid onto the live site instead of replacing it, so files you don't mention are left alone. Use this to refresh one data file (e.g. a weekly data.json) without re-uploading the whole site. Returns an upload URL and a single-use token (valid ~5 min); upload the same way as deploy_jot, e.g.: `tar czf - -C <dir> data.json | curl --data-binary @- -H 'Content-Type: application/gzip' <uploadUrl>`. Pass `delete` to remove paths (a directory removes its contents); a path that is both deleted and uploaded keeps the uploaded version. Call list_jot_files first if you need to see the current tree. `access` ('public' or 'password'), `password`, and `cors` change the live jot's settings immediately — they do NOT wait for an upload, so call update_jot with just a name and the settings to lock, unlock, or re-password a jot without touching its files; the response echoes them back under `applied`. Passing `password` alone implies access 'password'; switching to 'password' on a jot that is already gated keeps the current password unless you pass a new one, and any change to the password signs out everyone already unlocked. The merged tree still has to fit the <=5 MiB / <=1000 file limits.",
     integration: JOTS_INTEGRATION_NAME,
+    effect: "destructive",
     inputSchema: z.object({
       name: z.string(),
       delete: z.array(z.string()).optional(),
@@ -107,6 +109,7 @@ const tools: PluginTool[] = [
     description:
       "List the files inside a jot you own (path, bytes, updatedAt), so you can see the current structure before making a partial update with update_jot. Returns FORBIDDEN if another user owns it, NOT_FOUND if it doesn't exist.",
     integration: JOTS_INTEGRATION_NAME,
+    effect: "read",
     inputSchema: z.object({ name: z.string() }),
     handler: async (ctx: any, args: any) => listJotFiles(args.name, ctx.userId),
   },
@@ -114,6 +117,7 @@ const tools: PluginTool[] = [
     name: "list_jots",
     description: "List the jots you have deployed (name, access, url, updatedAt). Only your own jots are returned.",
     integration: JOTS_INTEGRATION_NAME,
+    effect: "read",
     inputSchema: z.object({}),
     handler: async (ctx: any) => ({ jots: listJots(ctx.userId) }),
   },
@@ -121,6 +125,7 @@ const tools: PluginTool[] = [
     name: "delete_jot",
     description: "Delete a jot you own by name. Returns FORBIDDEN if another user owns it, NOT_FOUND if it doesn't exist.",
     integration: JOTS_INTEGRATION_NAME,
+    effect: "destructive",
     inputSchema: z.object({ name: z.string() }),
     handler: async (ctx: any, args: any) => deleteJot(args.name, ctx.userId),
   },

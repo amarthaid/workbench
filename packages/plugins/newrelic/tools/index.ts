@@ -68,6 +68,7 @@ export const runNrql = {
   description:
     "Run an arbitrary NRQL query against an account and return the raw result rows (actor.account.nrql). Use for any read — metrics, events, counts, facets. Example: \"SELECT count(*) FROM Transaction SINCE 1 hour ago\".",
   integration: "newrelic",
+  effect: "read",
   inputSchema: z.object({
     accountId: z.number().optional().describe("Account ID; falls back to the connection's Default Account ID if omitted."),
     nrql: z.string().describe("The NRQL query to execute."),
@@ -92,6 +93,7 @@ export const searchEntities = {
   description:
     "Find New Relic entities (apps, hosts, dashboards, etc.) by name/domain/type via entitySearch. Returns slim rows { guid, name, type, entityType, domain }. Use to discover an entity's GUID before fetching or tagging it — e.g. type='DASHBOARD' to locate a dashboard's GUID.",
   integration: "newrelic",
+  effect: "read",
   inputSchema: z.object({
     name: z.string().optional().describe("Substring match on the entity name."),
     domain: z
@@ -147,6 +149,7 @@ export const getDashboard = {
   description:
     "Fetch a dashboard by its entity GUID, including its pages and the widgets on each page (actor.entity → DashboardEntity). Use newrelic_search_entities (type='DASHBOARD') first to find the GUID. Returns { guid, name, pages: [{ guid, name, widgets }] }.",
   integration: "newrelic",
+  effect: "read",
   inputSchema: z.object({
     guid: z.string().describe("Dashboard entity GUID."),
   }),
@@ -187,6 +190,7 @@ export const createAlertPolicy = {
   description:
     "Create a New Relic alert policy via NerdGraph (alertsPolicyCreate). Alert policies are containers that group alert conditions and define how incidents are rolled up. incidentPreference controls grouping: PER_POLICY (one incident for the whole policy), PER_CONDITION (one per condition), or PER_CONDITION_AND_TARGET (one per condition+entity). Returns { id, name, incidentPreference }.",
   integration: "newrelic",
+  effect: "write",
   inputSchema: z.object({
     accountId: z.number().optional().describe("New Relic account ID; falls back to the connection's Default Account ID if omitted."),
     name: z.string().describe("Policy name."),
@@ -219,6 +223,7 @@ export const createStaticNrqlAlertCondition = {
   description:
     "Create a static NRQL alert condition on a policy via NerdGraph (alertsNrqlConditionStaticCreate). Use to threshold-alert on a NRQL query's result. Supports signal-loss detection (expiration) and gap filling (signal.fillOption). Returns { id, name, enabled }.",
   integration: "newrelic",
+  effect: "write",
   inputSchema: z.object({
     accountId: z.number().optional().describe("Account ID; falls back to the connection's Default Account ID if omitted."),
     policyId: z.string().describe("ID of the policy to attach the condition to."),
@@ -314,6 +319,7 @@ export const createAlertNotificationChannel = {
   description:
     "Register a (legacy) alert notification channel — an endpoint such as email or webhook that alert policies can notify. Returns the created channel { id, name, type }. Note: New Relic recommends the AI Notifications destinations/channels (newrelic_create_ai_notifications_*) for new setups; legacy channels remain for existing policies.",
   integration: "newrelic",
+  effect: "write",
   inputSchema: z.object({
     accountId: z.number().optional().describe("Account ID; falls back to the connection's Default Account ID if omitted."),
     name: z.string(),
@@ -344,6 +350,7 @@ export const addNotificationChannelsToPolicy = {
   description:
     "Associate existing (legacy) notification channels with an alert policy so it sends notifications when incidents open (alertsNotificationChannelsAddToPolicy). Provide the policy ID and one or more channel IDs.",
   integration: "newrelic",
+  effect: "write",
   inputSchema: z.object({
     accountId: z.number().optional().describe("Account ID; falls back to the connection's Default Account ID if omitted."),
     policyId: z.string(),
@@ -378,6 +385,7 @@ export const createAiNotificationsDestination = {
   description:
     "Create an AI Notifications destination — the endpoint config for a service like Jira, ServiceNow, Slack, email, or webhook (aiNotificationsCreateDestination). A destination is the prerequisite for an AI Notifications channel. Returns the created destination { id, name, type }.",
   integration: "newrelic",
+  effect: "write",
   inputSchema: z.object({
     accountId: z.number().optional().describe("Account ID; falls back to the connection's Default Account ID if omitted."),
     name: z.string(),
@@ -428,6 +436,7 @@ export const createAiNotificationsChannel = {
   description:
     "Create an AI Notifications channel bound to an existing destination (aiNotificationsCreateChannel). The channel shapes what gets sent (subject, payload) for a destination. Requires a destinationId from newrelic_create_ai_notifications_destination. Returns the created channel { id, name }.",
   integration: "newrelic",
+  effect: "write",
   inputSchema: z.object({
     accountId: z.number().optional().describe("Account ID; falls back to the connection's Default Account ID if omitted."),
     name: z.string(),
@@ -481,6 +490,7 @@ export const createAiWorkflow = {
   description:
     "Create an AI workflow for automated incident response (aiWorkflowsCreateWorkflow). A workflow connects an issue filter (predicates over issue attributes) to notification channels, with optional NRQL enrichments. Provide channel IDs (from newrelic_create_ai_notifications_channel) and filter predicates. Returns the created workflow { id, name }.",
   integration: "newrelic",
+  effect: "write",
   inputSchema: z.object({
     accountId: z.number().optional().describe("Account ID; falls back to the connection's Default Account ID if omitted."),
     name: z.string(),
@@ -561,6 +571,7 @@ export const addTagsToEntity = {
   description:
     "Add tags (key + values) to a New Relic entity for filtering and organization (taggingAddTagsToEntity). Identify the entity by its GUID. Note: for APM agents a restart may be required before new tags appear. Returns { errors } (empty on success).",
   integration: "newrelic",
+  effect: "write",
   inputSchema: z.object({
     guid: z.string().describe("Entity GUID (the base64-ish entity identifier)."),
     tags: z
@@ -588,6 +599,7 @@ export const addWidgetsToDashboardPage = {
   description:
     "Add visualization widgets (line/area/bar/billboard/table, etc.) to an existing dashboard page (dashboardAddWidgetsToPage). Identify the page by its GUID. Each widget carries a visualization id, a grid layout (column/row are 1-based), and NRQL queries. Returns { errors } (empty on success).",
   integration: "newrelic",
+  effect: "write",
   inputSchema: z.object({
     pageGuid: z.string().describe("GUID of the dashboard page to add widgets to."),
     widgets: z
@@ -643,6 +655,7 @@ export const configureCloudIntegration = {
   description:
     "Enable and configure a cloud integration (AWS/Azure/GCP) for monitoring (cloudConfigureIntegration). The cloud account must already be linked to New Relic. The `integrations` object is provider-shaped and keyed by provider+service, e.g. { aws: { ec2: [{ linkedAccountId, metricsPollingInterval }] } }. Returns configured integrations and any errors.",
   integration: "newrelic",
+  effect: "write",
   inputSchema: z.object({
     accountId: z.number().optional().describe("Account ID; falls back to the connection's Default Account ID if omitted."),
     integrations: z

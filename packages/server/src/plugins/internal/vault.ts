@@ -22,6 +22,7 @@ const tools: PluginTool[] = [
     name: "vault_list",
     description: `List the secrets in the user's vault: names and descriptions only, never values. Secrets are added by the user in the portal; you cannot create or read them. ${HOW_TO_REFERENCE}`,
     integration: VAULT_INTEGRATION_NAME,
+    effect: "read",
     inputSchema: z.object({}),
     handler: async (ctx: any) => {
       const secrets = await listSecrets(ctx.userId);

@@ -4,6 +4,7 @@ export const getDocument = {
   name: "google_docs_get",
   description: "Get a Google Doc by ID (returns full document structure)",
   integration: "google-docs",
+  effect: "read",
   inputSchema: z.object({
     documentId: z.string(),
   }),
@@ -19,6 +20,7 @@ export const getDocumentPlaintext = {
   name: "google_docs_get_plaintext",
   description: "Get a Google Doc as plain text by ID",
   integration: "google-docs",
+  effect: "read",
   inputSchema: z.object({
     documentId: z.string(),
   }),
@@ -50,6 +52,7 @@ export const createDocument = {
   name: "google_docs_create",
   description: "Create a new Google Doc",
   integration: "google-docs",
+  effect: "write",
   inputSchema: z.object({
     title: z.string(),
   }),
@@ -67,6 +70,7 @@ export const batchUpdate = {
   name: "google_docs_batch_update",
   description: "Apply batch updates to a Google Doc (insert text, delete content, format, etc.)",
   integration: "google-docs",
+  effect: "destructive",
   inputSchema: z.object({
     documentId: z.string(),
     requests: z.array(z.record(z.any())),
@@ -88,6 +92,7 @@ export const searchDocuments = {
   name: "google_docs_search",
   description: "Search for Google Docs in Drive",
   integration: "google-docs",
+  effect: "read",
   inputSchema: z.object({
     query: z.string().optional(),
     pageSize: z.number().default(10),

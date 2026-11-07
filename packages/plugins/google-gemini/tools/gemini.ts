@@ -4,6 +4,7 @@ export const generateContent = {
   name: "google_gemini_generate",
   description: "Generate content with Google Gemini",
   integration: "google-gemini",
+  effect: "read",
   inputSchema: z.object({
     prompt: z.string(),
     model: z.string().default("gemini-1.5-flash"),
