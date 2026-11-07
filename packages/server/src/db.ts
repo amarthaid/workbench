@@ -132,6 +132,41 @@ const SQLITE_SCHEMA = `
     updated_at INTEGER,
     updated_by TEXT
   );
+
+  -- Spaces: live apps over a viewer's own integrations. Times are epoch ms.
+  CREATE TABLE IF NOT EXISTS spaces (
+    name TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    tools TEXT NOT NULL,
+    visibility TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS space_shares (
+    space_name TEXT NOT NULL,
+    email TEXT NOT NULL,
+    PRIMARY KEY (space_name, email)
+  );
+
+  CREATE TABLE IF NOT EXISTS space_consents (
+    space_name TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    tools_hash TEXT NOT NULL,
+    granted_at INTEGER NOT NULL,
+    PRIMARY KEY (space_name, user_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS space_kv (
+    space_name TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (space_name, user_id, key)
+  );
 `;
 
 const POSTGRES_SCHEMA = `
@@ -248,6 +283,41 @@ const POSTGRES_SCHEMA = `
     value TEXT NOT NULL,
     updated_at INTEGER,
     updated_by TEXT
+  );
+
+  -- Spaces: live apps over a viewer's own integrations. Times are epoch ms.
+  CREATE TABLE IF NOT EXISTS spaces (
+    name TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    tools TEXT NOT NULL,
+    visibility TEXT NOT NULL,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS space_shares (
+    space_name TEXT NOT NULL,
+    email TEXT NOT NULL,
+    PRIMARY KEY (space_name, email)
+  );
+
+  CREATE TABLE IF NOT EXISTS space_consents (
+    space_name TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    tools_hash TEXT NOT NULL,
+    granted_at BIGINT NOT NULL,
+    PRIMARY KEY (space_name, user_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS space_kv (
+    space_name TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    PRIMARY KEY (space_name, user_id, key)
   );
 `;
 

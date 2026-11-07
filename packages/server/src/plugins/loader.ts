@@ -9,6 +9,8 @@ import { browserPlugin } from "./internal/browser";
 import { jotsPlugin } from "./internal/jots";
 import { filesPlugin } from "./internal/files";
 import { vaultPlugin } from "./internal/vault";
+import { spacesPlugin } from "./internal/spaces";
+import { INTERNAL_PLUGIN_NAMES } from "./internal-names";
 
 const builtinPlugins = [
   "google-gmail",
@@ -168,20 +170,14 @@ export async function loadPlugins(): Promise<void> {
 
 }
 
-const internalNames = [
-  browserPlugin.integration.name,
-  jotsPlugin.integration.name,
-  filesPlugin.integration.name,
-  vaultPlugin.integration.name,
-];
+const internalPlugins = [browserPlugin, jotsPlugin, filesPlugin, vaultPlugin, spacesPlugin];
+export const internalNames: readonly string[] = INTERNAL_PLUGIN_NAMES;
 
 // Internal capabilities (auth type "none") whose handlers reach into server
-// modules (browser-session, jots store, the file workspace, the vault store)
+// modules (browser-session, jots store, the file workspace, the vault store,
+// the spaces store)
 // — deliberately NOT part of the plugin ToolContext, so third-party plugins
 // can never drive the user's browser or touch those filesystems.
 export function registerInternalPlugins(): void {
-  registry.register(browserPlugin);
-  registry.register(jotsPlugin);
-  registry.register(filesPlugin);
-  registry.register(vaultPlugin);
+  for (const plugin of internalPlugins) registry.register(plugin);
 }
