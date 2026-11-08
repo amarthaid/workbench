@@ -28,6 +28,7 @@ const BUILTIN_INTEGRATIONS = [
   "jots",
   "files",
   "vault",
+  "spaces",
 ];
 
 const ALLOWED = new Set(["read", "write", "destructive"]);

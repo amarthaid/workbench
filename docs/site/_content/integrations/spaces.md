@@ -49,6 +49,11 @@ The archive root must contain `index.html` (`NO_INDEX` otherwise). `update_space
 
 Files live under `SPACES_DIR` (default: `spaces/` next to the SQLite file).
 
+> [!WARNING] Several replicas need a shared `SPACES_DIR`
+> Space metadata is in the database, but the files are on disk, and a Space is only served once its `index.html` exists there. With PostgreSQL and more than one replica, mount `SPACES_DIR` on a volume every replica shares (the same as `JOTS_DIR`). Otherwise a Space uploaded through one replica answers 404 on the others.
+
+The call rate limit (60 calls a minute per viewer per Space, shared with the KV routes) is counted in each process, so under `CLUSTER_ENABLED` or several replicas the effective limit is that number per process.
+
 ## Who can open a Space
 
 The owner always can. With `org`, any signed-in user can. With `users`, a viewer whose email is on the list can. Admins can list and delete every Space but cannot open one that was not shared with them: opening a Space runs its code as the viewer, which is not an admin power. Every portal endpoint answers 404 when the viewer cannot open the Space, so names cannot be probed.
