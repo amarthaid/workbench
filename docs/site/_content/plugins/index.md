@@ -35,6 +35,7 @@ export const search = {
   name: "internal_search",
   description: "Full-text search the internal knowledge base",
   integration: "my-internal-tool",
+  effect: "read", // "read" | "write" | "destructive"; unlabelled counts as "destructive"
   inputSchema: z.object({ query: z.string() }),
   handler: async (ctx: any, args: any) => {
     const res = await ctx.http(`https://internal.example.com/api/search?q=${args.query}`);

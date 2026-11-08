@@ -361,4 +361,10 @@ them — and that means pinning all `POST /mcp` traffic, since tool calls are no
 separable by path. Full reasoning:
 [browser session pod affinity](../field-notes/2026-09-10-browser-session-pod-affinity.md).
 
+Spaces and jots keep their files on disk (`SPACES_DIR`, `JOTS_DIR`). With more
+than one replica, put both on a volume every replica mounts, or a page uploaded
+through one replica is a 404 on the others. The Spaces call rate limit is
+counted per process, so it is approximate across replicas. See
+[Spaces](../integrations/spaces.md).
+
 Run TLS at the proxy. The server speaks plain HTTP.

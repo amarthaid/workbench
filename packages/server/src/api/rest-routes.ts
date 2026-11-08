@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
+import { effectOf } from "@a-workbench/shared";
 import { config } from "../config";
 import { registry } from "../plugins/registry";
 import { executeSingle, executeMany, type ExecResult } from "../mcp/meta-tools";
@@ -154,6 +155,7 @@ export async function registerRestRoutes(app: FastifyInstance): Promise<void> {
           tools: registry.listToolsByIntegration(integration).map((t) => ({
             name: t.name,
             description: t.description,
+            effect: effectOf(t),
             inputSchema:
               t.inputSchema instanceof z.ZodType
                 ? zodToJsonSchema(t.inputSchema as z.ZodTypeAny)

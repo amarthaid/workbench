@@ -20,6 +20,7 @@ export const listRepos = {
   description:
     "List the authenticated user's GitHub repositories as slim rows { full_name, private, default_branch, updated_at, description, language } — use github_get_repo for full detail on one repo. Defaults: type=all, 30 per page.",
   integration: "github",
+  effect: "read",
   inputSchema: z.object({
     type: z.enum(["all", "owner", "member"]).default("all"),
     perPage: z.number().default(30),
@@ -49,6 +50,7 @@ export const getRepo = {
   description:
     "Get one GitHub repository's full metadata (visibility, default branch, topics, counts) with URL bloat stripped — use github_list_repos to discover repo names first.",
   integration: "github",
+  effect: "read",
   inputSchema: z.object({
     owner: z.string(),
     repo: z.string(),
@@ -78,6 +80,7 @@ export const listBranches = {
   description:
     "List branches in a GitHub repository as slim rows { name, protected }. Defaults: 30 per page. Use github_list_commits to see history on a branch.",
   integration: "github",
+  effect: "read",
   inputSchema: z.object({
     owner: z.string(),
     repo: z.string(),
@@ -100,6 +103,7 @@ export const listCommits = {
   description:
     "List commits in a GitHub repository as slim rows { sha (12 chars), message (first line), author, date }, newest first. Pass sha to start from a branch/commit. Defaults: 30 per page.",
   integration: "github",
+  effect: "read",
   inputSchema: z.object({
     owner: z.string(),
     repo: z.string(),
@@ -129,6 +133,7 @@ export const listReleases = {
   description:
     "List releases for a GitHub repository as slim rows { tag_name, name, draft, prerelease, published_at }, newest first. Defaults: 30 per page.",
   integration: "github",
+  effect: "read",
   inputSchema: z.object({
     owner: z.string(),
     repo: z.string(),
@@ -157,6 +162,7 @@ export const getContent = {
   description:
     "Read a file (base64 content + sha) or list a directory in a GitHub repo at an optional ref. Returns the file's content/encoding/sha or, for directories, entries with name/path/type/size. Use the returned sha with github_create_or_update_file when updating.",
   integration: "github",
+  effect: "read",
   inputSchema: z.object({
     owner: z.string(),
     repo: z.string(),
@@ -190,6 +196,7 @@ export const createIssue = {
   description:
     "Create a GitHub issue with optional body and labels. Returns the created issue. Follow up with github_update_issue / github_add_issue_comment; use github_list_issues to find existing ones first and avoid duplicates.",
   integration: "github",
+  effect: "write",
   inputSchema: z.object({
     owner: z.string(),
     repo: z.string(),
@@ -215,6 +222,7 @@ export const listIssues = {
   description:
     "List issues in a GitHub repository as slim rows { number, title, state, author, labels, assignee, comments, updated_at, is_pr }. Note: GitHub's issues list includes PRs — is_pr flags them. Defaults: state=open, 10 per page. Use github_get_issue for one issue's body.",
   integration: "github",
+  effect: "read",
   inputSchema: z.object({
     owner: z.string(),
     repo: z.string(),
@@ -251,6 +259,7 @@ export const getIssue = {
   description:
     "Get one GitHub issue: { number, title, body (truncated to 2000 chars), state, author, labels, assignees, comments, html_url }. Use github_list_pr_comments-style follow-ups via github_add_issue_comment to reply.",
   integration: "github",
+  effect: "read",
   inputSchema: z.object({
     owner: z.string(),
     repo: z.string(),
@@ -279,6 +288,7 @@ export const updateIssue = {
   description:
     "Update a GitHub issue — set any of title, body, state (open|closed), labels, assignees; only the fields you pass are changed. Closing an issue = state:'closed'. Returns the updated issue's number/state/title.",
   integration: "github",
+  effect: "destructive",
   inputSchema: z.object({
     owner: z.string(),
     repo: z.string(),
@@ -312,6 +322,7 @@ export const addIssueComment = {
   description:
     "Add a comment to a GitHub issue (also works as a PR discussion comment). Returns { id, html_url }. For inline code-review comments on a PR diff, use github_add_pr_comment with type:'review' instead.",
   integration: "github",
+  effect: "write",
   inputSchema: z.object({
     owner: z.string(),
     repo: z.string(),
@@ -339,6 +350,7 @@ export const createPR = {
   description:
     "Open a GitHub pull request from head branch into base branch. Returns the created PR. Follow up with github_get_pr / github_get_pr_diff to review it and github_merge_pr to land it.",
   integration: "github",
+  effect: "write",
   inputSchema: z.object({
     owner: z.string(),
     repo: z.string(),
@@ -368,6 +380,7 @@ export const listPRs = {
   description:
     "List pull requests in a GitHub repository as slim rows { number, title, state, author, head, base, draft, updated_at }. Defaults: state=open, 10 per page. Use github_get_pr for one PR's full detail.",
   integration: "github",
+  effect: "read",
   inputSchema: z.object({
     owner: z.string(),
     repo: z.string(),
@@ -401,6 +414,7 @@ export const getPR = {
   description:
     "Get one pull request: title, body (truncated to 2000 chars), state, merged/mergeable, author, head/base refs, draft, additions/deletions/changed_files, comment counts, html_url. Use github_get_pr_diff for the actual code changes.",
   integration: "github",
+  effect: "read",
   inputSchema: z.object({
     owner: z.string(),
     repo: z.string(),
@@ -436,6 +450,7 @@ export const getPRDiff = {
   description:
     "Read a pull request's changes. With files:true (recommended first for big PRs) returns a cheap per-file summary { filename, status, additions, deletions }; with files:false (default) returns the full unified diff text, which can be very large. Check changed_files via github_get_pr to decide.",
   integration: "github",
+  effect: "read",
   inputSchema: z.object({
     owner: z.string(),
     repo: z.string(),
@@ -469,6 +484,7 @@ export const listPRComments = {
   description:
     "List comments on a pull request as slim rows { id, author, body, path?, line?, created_at }. type:'discussion' (default) = conversation-tab comments; type:'review' = inline code-review comments anchored to file/line.",
   integration: "github",
+  effect: "read",
   inputSchema: z.object({
     owner: z.string(),
     repo: z.string(),
@@ -500,6 +516,7 @@ export const addPRComment = {
   description:
     "Comment on a pull request. type:'discussion' (default) posts to the conversation tab and only needs body; type:'review' posts an inline code comment and additionally requires commit_id, path, and line. Returns { id, html_url }. For an approval/request-changes verdict, use github_create_pr_review instead.",
   integration: "github",
+  effect: "write",
   inputSchema: z.object({
     owner: z.string(),
     repo: z.string(),
@@ -540,6 +557,7 @@ export const mergePR = {
   description:
     "Merge a pull request into its base branch. IRREVERSIBLE — this lands the code; confirm the right PR number first (github_get_pr) and prefer reviewing via github_get_pr_diff before merging. Optional merge_method (merge|squash|rebase) and commit_title.",
   integration: "github",
+  effect: "destructive",
   inputSchema: z.object({
     owner: z.string(),
     repo: z.string(),
@@ -567,6 +585,7 @@ export const createPRReview = {
   description:
     "Submit a formal review verdict on a pull request: event APPROVE, REQUEST_CHANGES, or COMMENT, with an optional summary body. Returns { id, state }. For a single inline or discussion comment without a verdict, use github_add_pr_comment instead.",
   integration: "github",
+  effect: "destructive",
   inputSchema: z.object({
     owner: z.string(),
     repo: z.string(),
@@ -597,6 +616,7 @@ export const createOrUpdateFile = {
   description:
     "Create or update a single file in a GitHub repo with a commit message (content is plain text, base64-encoded automatically). Updating an existing file REQUIRES its current sha — fetch it with github_get_content first or the call fails with 409/422. Defaults: branch=main.",
   integration: "github",
+  effect: "destructive",
   inputSchema: z.object({
     owner: z.string(),
     repo: z.string(),
@@ -631,6 +651,7 @@ export const searchCode = {
   description:
     "Search code across GitHub as slim rows { path, repository, html_url }. Pass full search qualifiers in q (e.g. 'repo:owner/name TODO language:ts') — they are forwarded verbatim. Default 10 results. To read a matched file, follow up with github_get_content.",
   integration: "github",
+  effect: "read",
   inputSchema: z.object({
     q: z.string().describe("Full GitHub code-search query incl. qualifiers like repo:owner/name"),
     perPage: z.number().default(10),
@@ -658,6 +679,7 @@ export const searchIssues = {
   description:
     "Search issues and PRs across GitHub as slim rows { number, title, state, author, labels, comments, updated_at, is_pr, repository }. Pass full qualifiers in q (e.g. 'repo:owner/name is:open label:bug') — forwarded verbatim. Default 10 results. For one known repo's issues, github_list_issues is cheaper.",
   integration: "github",
+  effect: "read",
   inputSchema: z.object({
     q: z.string().describe("Full GitHub issue-search query incl. qualifiers like repo:owner/name is:open"),
     perPage: z.number().default(10),
@@ -695,6 +717,7 @@ export const listWorkflowRuns = {
   description:
     "List GitHub Actions workflow runs (CI status) as slim rows { id, name, head_branch, event, status, conclusion, run_started_at, html_url }, newest first. Optional branch and status (e.g. completed, in_progress, failure) filters. Default 10 per page.",
   integration: "github",
+  effect: "read",
   inputSchema: z.object({
     owner: z.string(),
     repo: z.string(),
@@ -731,6 +754,7 @@ export const triggerWorkflow = {
   description:
     "Trigger a GitHub Actions workflow run via workflow_dispatch. `workflow` is the workflow file name (e.g. ci.yml) or its numeric id; `ref` is the branch or tag to run on. Optional `inputs` maps to the workflow's workflow_dispatch inputs. The workflow file MUST declare `on: workflow_dispatch` or GitHub returns 422. Returns { ok: true } — the dispatch API has no body and returns no run id; poll github_list_workflow_runs (filter by branch/event=workflow_dispatch) to find the created run.",
   integration: "github",
+  effect: "destructive",
   inputSchema: z.object({
     owner: z.string(),
     repo: z.string(),
@@ -760,6 +784,7 @@ export const getWorkflowRun = {
   description:
     "Get a single GitHub Actions workflow run by id as a slim object { id, name, head_branch, event, status, conclusion, run_started_at, html_url }. Use this to poll a run you triggered with github_trigger_workflow (status: queued | in_progress | completed; conclusion: success | failure | cancelled | …).",
   integration: "github",
+  effect: "read",
   inputSchema: z.object({
     owner: z.string(),
     repo: z.string(),
@@ -787,6 +812,7 @@ export const rerunWorkflowRun = {
   description:
     "Re-run a GitHub Actions workflow run by id (all jobs). Pass failedOnly to re-run only the failed jobs (rerun-failed-jobs). Returns { ok: true } on success; on failure returns GitHub's { ok:false, status, error } body.",
   integration: "github",
+  effect: "write",
   inputSchema: z.object({
     owner: z.string(),
     repo: z.string(),
@@ -809,6 +835,7 @@ export const cancelWorkflowRun = {
   description:
     "Cancel an in-progress GitHub Actions workflow run by id. Returns { ok: true } on success; on failure returns GitHub's { ok:false, status, error } body (e.g. 409 if the run already finished).",
   integration: "github",
+  effect: "destructive",
   inputSchema: z.object({
     owner: z.string(),
     repo: z.string(),
@@ -829,6 +856,7 @@ export const getCloneUrl = {
   description:
     "Mint a temporary authenticated HTTPS git URL for a repo (https://x-access-token:<token>@github.com/owner/repo.git), usable for clone/pull/push (the granted repo scope covers push). The embedded OAuth token is short-lived and the URL dies with it — re-call this right before a push rather than storing the URL. Do NOT persist it in .git/config or scripts: anyone holding the URL holds the token until expiry.",
   integration: "github",
+  effect: "read",
   inputSchema: z.object({
     owner: z.string(),
     repo: z.string(),

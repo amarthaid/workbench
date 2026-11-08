@@ -25,6 +25,9 @@ export interface AuditRequestContext {
   user_agent?: string;
   auth_method?: AuthMethod;
   client_id?: string;
+  // Overrides the name derived from client_id, for callers that are not OAuth
+  // clients but still need naming: a Space's calls carry "space:<name>".
+  client_name?: string;
 }
 
 const USER_AGENT_MAX = 512;
@@ -94,8 +97,10 @@ export async function requestLogFields(userId: string): Promise<Record<string, s
   if (c?.source_ip) out.source_ip = c.source_ip;
   if (c?.user_agent) out.user_agent = c.user_agent;
   if (c?.auth_method) out.auth_method = c.auth_method;
-  if (c?.client_id) {
-    out.client_id = c.client_id;
+  if (c?.client_id) out.client_id = c.client_id;
+  if (c?.client_name) {
+    out.client_name = c.client_name;
+  } else if (c?.client_id) {
     const name = await oauthClientName(c.client_id);
     if (name) out.client_name = name;
   }

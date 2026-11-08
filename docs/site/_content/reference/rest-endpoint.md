@@ -155,7 +155,7 @@ Schema (no Zod internals):
   "integration": "github",
   "connected": true,
   "tools": [
-    { "name": "github_list_prs", "description": "…", "inputSchema": { "type": "object", "…": "…" } }
+    { "name": "github_list_prs", "description": "…", "effect": "read", "inputSchema": { "type": "object", "…": "…" } }
   ]
 }
 ```

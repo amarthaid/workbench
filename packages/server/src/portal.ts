@@ -19,6 +19,14 @@ function findPortalDir(): string | undefined {
   return undefined;
 }
 
+// Under /s/ the server owns the SDK, the upload endpoint and a Space's app
+// files; their misses stay plain 404s. /s/<name> and /s/<name>/ are the
+// portal's Space shell and fall through to index.html like any client route.
+export function isServerOwnedSpacePath(url: string): boolean {
+  const p = url.split("?")[0];
+  return p.startsWith("/s/_sdk/") || p.startsWith("/s/upload/") || /^\/s\/[^/]+\/app(\/|$)/.test(p);
+}
+
 // Serve the built portal as static files with SPA fallback: any GET that isn't
 // an API/MCP/REST route and doesn't map to a file resolves to index.html, so
 // client routes (e.g. the /connect/:integration magic-link page) load on hard
@@ -35,7 +43,8 @@ export async function registerPortal(app: FastifyInstance): Promise<void> {
       !request.url.startsWith("/api") &&
       !request.url.startsWith("/mcp") &&
       !request.url.startsWith("/rest") &&
-      !request.url.startsWith("/.well-known")
+      !request.url.startsWith("/.well-known") &&
+      !isServerOwnedSpacePath(request.url)
     ) {
       return reply.sendFile("index.html");
     }

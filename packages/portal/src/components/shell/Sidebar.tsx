@@ -38,6 +38,12 @@ const AgentsIcon = () => (
     <path d="M8 9.5v5" />
   </Icon>
 );
+const SpacesIcon = () => (
+  <Icon>
+    <rect x="2" y="2.5" width="12" height="11" rx="1" />
+    <path d="M2 5.5h12M5 8.5h6M5 11h3.5" />
+  </Icon>
+);
 const ActivityIcon = () => <Icon><path d="M1 8h3l2-5.5L10 13l2-5h3" /></Icon>;
 const FilesIcon = () => (
   <Icon>
@@ -73,6 +79,7 @@ const NAV_GROUPS = [
     { to: "/", label: "Home", end: true, Glyph: HomeIcon },
     { to: "/apps", label: "Apps", end: false, Glyph: AppsIcon },
     { to: "/agents", label: "Agents", end: false, Glyph: AgentsIcon },
+    { to: "/spaces", label: "Spaces", end: false, Glyph: SpacesIcon },
     { to: "/activity", label: "Activity", end: false, Glyph: ActivityIcon },
   ],
   [

@@ -133,6 +133,9 @@ export const configSchema = z.object({
   JOTS_MAX_BYTES: z.coerce.number().int().positive().default(5_242_880),
   JOTS_MAX_FILES: z.coerce.number().int().positive().default(1000),
   JOTS_UPLOAD_TTL_SECONDS: z.coerce.number().int().positive().default(300),
+  // Where Space files live. Default: `spaces/` next to the SQLite file, like
+  // JOTS_DIR. Spaces reuse the JOTS_MAX_* limits and the upload TTL.
+  SPACES_DIR: z.string().optional(),
   // The agent file workspace. Its own mount, deliberately: RWX on a shared PVC
   // solves visibility between pods, not capacity, and a growing per-user tree
   // sharing a volume with tokens.db is

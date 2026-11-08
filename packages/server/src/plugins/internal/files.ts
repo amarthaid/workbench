@@ -42,6 +42,7 @@ const tools: PluginTool[] = [
     name: "files_list",
     description: `List the files in your workspace — the per-user scratch area that browser downloads land in and that uploads are read from. Returns name, bytes, mtime and expiresAt for each. ${RETENTION}`,
     integration: FILES_INTEGRATION_NAME,
+    effect: "read",
     inputSchema: z.object({}),
     handler: async (ctx: any) => {
       const files = await listFiles(ctx.userId);
@@ -56,6 +57,7 @@ const tools: PluginTool[] = [
     name: "files_stat",
     description: `Get one workspace file's size, mtime and expiry without reading its contents. Returns null when the name is not in your workspace. ${RETENTION}`,
     integration: FILES_INTEGRATION_NAME,
+    effect: "read",
     inputSchema: z.object({ name: z.string() }),
     handler: async (ctx: any, args: any) => {
       const entry = await statFile(ctx.userId, args.name);
@@ -66,6 +68,7 @@ const tools: PluginTool[] = [
     name: "files_read",
     description: `Read a workspace file. Use encoding 'utf8' for text and 'base64' for anything binary — a binary file read as utf8 comes back corrupted. Bytes pass through your context, so this is for files small enough to be worth that — a few KB of text, a config, a short CSV. For anything large, or anything you only need to grep or hand to another service, do NOT read it here: call files_presign({ name, op: 'download' }) and fetch the URL from wherever the bytes are actually needed. Oversize reads return TOO_LARGE rather than truncating, because a CSV cut off mid-row still parses. ${RETENTION}`,
     integration: FILES_INTEGRATION_NAME,
+    effect: "read",
     inputSchema: z.object({
       name: z.string(),
       encoding: z.enum(["utf8", "base64"]).default("utf8"),
@@ -89,6 +92,7 @@ const tools: PluginTool[] = [
     name: "files_write",
     description: `Write a file into your workspace, so it can be uploaded into a page with browser_upload_file or handed to another integration. Use encoding 'base64' for binary content. The content passes through your context, so this is for small files you are composing yourself. For large content, or bytes that already exist somewhere else, do NOT paste them here: call files_presign({ name, op: 'upload' }) and PUT the raw body to the URL from where the bytes are. ${RETENTION}`,
     integration: FILES_INTEGRATION_NAME,
+    effect: "write",
     inputSchema: z.object({
       name: z.string(),
       content: z.string(),
@@ -107,6 +111,7 @@ const tools: PluginTool[] = [
     name: "files_presign",
     description: `Mint a short-lived URL for one workspace file, so something that cannot hold a workbench credential can fetch or write it — a service that ingests by URL, an upload target, or a transfer that should not pass through your context. op 'download' returns a URL that can be fetched repeatedly until it expires; op 'upload' returns a URL that accepts exactly one PUT of a raw body, writing to the name you named here (a name sent with the PUT is ignored). Default lifetime is 5 minutes and the token appears in the URL, so treat it as a secret and do not log it. ${RETENTION}`,
     integration: FILES_INTEGRATION_NAME,
+    effect: "write",
     inputSchema: z.object({
       name: z.string(),
       op: z.enum(["download", "upload"]),
@@ -135,6 +140,7 @@ const tools: PluginTool[] = [
     description:
       "Delete a file from your workspace. Files expire on their own after 24 hours; this is for reclaiming quota early.",
     integration: FILES_INTEGRATION_NAME,
+    effect: "destructive",
     inputSchema: z.object({ name: z.string() }),
     handler: async (ctx: any, args: any) => {
       const deleted = await deleteFile(ctx.userId, args.name);

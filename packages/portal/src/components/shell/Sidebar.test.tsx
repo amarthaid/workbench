@@ -30,7 +30,7 @@ describe("Sidebar", () => {
 
   it("lists every destination", () => {
     renderAt("/");
-    for (const name of ["Home", "Apps", "Agents", "Activity", "Files", "Vault", "Settings"]) {
+    for (const name of ["Home", "Apps", "Agents", "Spaces", "Activity", "Files", "Vault", "Settings"]) {
       expect(screen.getByRole("link", { name })).toBeInTheDocument();
     }
   });
@@ -41,8 +41,15 @@ describe("Sidebar", () => {
     const list = nav.querySelector("ul.wb-nav")!;
     const items = Array.from(list.querySelectorAll("li"));
     const labels = items.map((li) => li.textContent?.trim() ?? "");
-    expect(labels).toEqual(["Home", "Apps", "Agents", "Activity", "", "Files", "Vault"]);
-    expect(items[4]).toHaveAttribute("role", "separator");
+    expect(labels).toEqual(["Home", "Apps", "Agents", "Spaces", "Activity", "", "Files", "Vault"]);
+    expect(items[5]).toHaveAttribute("role", "separator");
+  });
+
+  it("links Spaces to the gallery", () => {
+    renderAt("/spaces");
+    const link = screen.getByRole("link", { name: "Spaces" });
+    expect(link).toHaveAttribute("href", "/spaces");
+    expect(link).toHaveAttribute("aria-current", "page");
   });
 
   it("marks only the current route as the current page", () => {

@@ -56,7 +56,8 @@ it and the portal renders a generic cog. Every field is covered in the
 ### Write the tool
 
 A tool is a plain object. Five members matter: `name`, `description`,
-`integration`, `inputSchema`, and `handler`.
+`integration`, `inputSchema`, and `handler`. A sixth, `effect`, is optional but
+every tool should set it (see [Label the side effect](#label-the-side-effect)).
 
 ```ts
 // tools/gemini.ts
@@ -66,6 +67,7 @@ export const generateContent = {
   name: "google_gemini_generate",
   description: "Generate content with Google Gemini",
   integration: "google-gemini",
+  effect: "read",
   inputSchema: z.object({
     prompt: z.string(),
     model: z.string().default("gemini-1.5-flash"),
@@ -88,6 +90,27 @@ export const generateContent = {
 
 The handler calls `ctx.http`, never bare `fetch` — that is what attaches the
 user's credential. See [the context API](context.md).
+
+### Label the side effect
+
+`effect` tells workbench what a call does to the outside world, so it can decide
+whether the call runs silently or asks the user to confirm first. It takes one of
+three values:
+
+| `effect` | Meaning | Examples |
+|---|---|---|
+| `"read"` | Changes nothing. | list, get, search, download, fetch, status, query |
+| `"write"` | Creates or edits something in a recoverable or additive way. | create an issue, add a comment, upload a file, create a draft, add a label, update a single field, trigger a CI run |
+| `"destructive"` | Deletes, trashes, overwrites wholesale, merges, closes or cancels; sends or posts on the user's behalf; changes sharing or permissions; or is otherwise irreversible or outward-facing. | delete a page, trash a file, merge a pull request, send an email, post a Slack message, share a file |
+
+Decide from what the handler does, not from the tool's name. When a tool sits
+between `write` and `destructive`, label it `destructive`.
+
+The field is optional so that older plugins keep loading, but **a tool without
+`effect` is treated as `destructive`**: every call to it will need confirmation.
+`search_tools` and `get_tool_schema` report the label to agents, and
+`get_tool_schema` also returns it as MCP-style
+`annotations: { readOnlyHint, destructiveHint }`.
 
 ### Export it from `tools/index.ts`
 
@@ -189,6 +212,7 @@ of `tools/index.ts` and keeps the values that pass a duck-type check:
 | Has an `inputSchema` that is `instanceof z.ZodType` | Yes |
 | Has a `description` | No — but `search_tools` reads it |
 | Has an `integration` | No — but execution needs it |
+| Has an `effect` | No, but an unlabelled tool is treated as `"destructive"` |
 
 An export that fails any of the first four is silently ignored: helper functions,
 constants, and types can live in the same barrel without trouble. An export that

@@ -53,8 +53,11 @@ export class AuditLogger {
       if (ctx.source_ip) fullEvent.source_ip = ctx.source_ip;
       if (ctx.user_agent) fullEvent.user_agent = ctx.user_agent;
       if (ctx.auth_method) fullEvent.auth_method = ctx.auth_method;
-      if (ctx.client_id) {
-        fullEvent.client_id = ctx.client_id;
+      if (ctx.client_id) fullEvent.client_id = ctx.client_id;
+      // An explicit name (a Space's "space:<name>") wins over the OAuth lookup.
+      if (ctx.client_name) {
+        fullEvent.client_name = ctx.client_name;
+      } else if (ctx.client_id) {
         const name = await oauthClientName(ctx.client_id);
         if (name) fullEvent.client_name = name;
       }

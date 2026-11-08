@@ -5,6 +5,7 @@ describe("mcpConfigFor", () => {
   it("produces client config JSON carrying the key in the workbench header", () => {
     const parsed = JSON.parse(mcpConfigFor("tok-abc"));
     expect(parsed.mcpServers.workbench.url).toBe(MCP_URL);
+    expect(parsed.mcpServers.workbench.type).toBe("http");
     expect(parsed.mcpServers.workbench.headers["x-workbench-api-key"]).toBe("tok-abc");
   });
 

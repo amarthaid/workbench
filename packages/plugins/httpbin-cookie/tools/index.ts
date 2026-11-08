@@ -4,6 +4,7 @@ export const getCookies = {
   name: "httpbin_get_cookies",
   description: "Get current cookies from httpbin",
   integration: "httpbin-cookie",
+  effect: "read",
   inputSchema: z.object({}),
   handler: async (ctx: any, _args: any) => {
     const res = await ctx.http("https://httpbin.org/cookies");
@@ -15,6 +16,7 @@ export const setCookie = {
   name: "httpbin_set_cookie",
   description: "Set a cookie on httpbin",
   integration: "httpbin-cookie",
+  effect: "write",
   inputSchema: z.object({
     name: z.string(),
     value: z.string(),
@@ -31,6 +33,7 @@ export const getHeaders = {
   name: "httpbin_get_headers",
   description: "Get request headers (useful to verify Cookie header is injected)",
   integration: "httpbin-cookie",
+  effect: "read",
   inputSchema: z.object({}),
   handler: async (ctx: any, _args: any) => {
     const res = await ctx.http("https://httpbin.org/headers");
