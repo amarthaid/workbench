@@ -132,7 +132,7 @@ on a tool call.
 ## How the target base is resolved
 
 An integration is proxy-capable only if its manifest declares a `proxy` block. Fifteen
-of the sixteen shipped plugins do. `httpbin-cookie` does not.
+of the eighteen shipped plugins do. `httpbin-cookie`, `clevertap`, and `storybooks` do not.
 
 ### Static `baseUrl`
 

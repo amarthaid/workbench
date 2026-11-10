@@ -206,6 +206,11 @@
               "path": "integrations/clevertap",
               "label": "CleverTap",
               "layout": "wide"
+            },
+            {
+              "path": "integrations/storybooks",
+              "label": "Storybooks",
+              "layout": "wide"
             }
           ]
         },
