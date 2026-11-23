@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createContext } from "../src/plugins/context";
 import { registry } from "../src/plugins/registry";
+import { db } from "../src/db";
+import { TokenRefreshError, _setClockForTest } from "../src/auth/token-refresh";
 
 vi.mock("../src/auth/tokens", () => ({
   getToken: vi.fn(),
@@ -616,12 +618,182 @@ describe("createContext", () => {
         expiresAt: Math.floor(Date.now() / 1000) + 3600,
         scopes: "read:jira-work",
       });
-      global.fetch = vi.fn(async () => new Response("nope", { status: 401 })) as any;
+      global.fetch = vi.fn(async () => new Response("nope", { status: 500 })) as any;
 
       const ctx = await createContext("user-err", "atlassian-jira");
       await expect(
         ctx.http("https://api.atlassian.com/ex/jira/cloud-id/rest/api/3/x")
-      ).rejects.toThrow(/accessible-resources 401/);
+      ).rejects.toThrow(/accessible-resources 500/);
     });
+
+    it("hands back a 401 from accessible-resources as the response (no refresh token to retry with)", async () => {
+      const { getToken } = await import("../src/auth/tokens");
+      vi.spyOn(registry, "getIntegration").mockReturnValue(jiraIntegration);
+      vi.mocked(getToken).mockResolvedValue({
+        accessToken: "atok",
+        expiresAt: Math.floor(Date.now() / 1000) + 3600,
+        scopes: "read:jira-work",
+      });
+      global.fetch = vi.fn(async () => new Response("nope", { status: 401 })) as any;
+
+      const ctx = await createContext("user-err-401", "atlassian-jira");
+      const res = await ctx.http("https://api.atlassian.com/ex/jira/cloud-id/rest/api/3/x");
+      expect(res.status).toBe(401);
+    });
+  });
+});
+
+describe("retry once on 401 with a shared refresh", () => {
+  const TOKEN_URL = "https://oauth.example.com/token";
+  const API = "https://api.example.com/items";
+  const integ = {
+    name: "acme",
+    version: "1.0.0",
+    auth: { type: "oauth2" as const, authorizationUrl: "https://oauth.example.com/auth", tokenUrl: TOKEN_URL, scopes: [] },
+  };
+  const future = () => Math.floor(Date.now() / 1000) + 3600;
+
+  let stored: any;
+  let tokenCalls: number;
+  let apiAuth: string[];
+  // The API accepts only `accepted`; the token endpoint answers `refreshResponse`.
+  let accepted: string;
+  let refreshResponse: () => Response;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    await db.run("DELETE FROM pending_auth WHERE integration = ?", ["__token_refresh__"]);
+    _setClockForTest({ now: () => Date.now(), sleep: (ms) => new Promise((r) => setTimeout(r, ms)) });
+    const { getToken, storeToken } = await import("../src/auth/tokens");
+    const { getPluginOAuthCreds } = await import("../src/auth/plugin-oauth");
+    vi.spyOn(registry, "getIntegration").mockReturnValue(integ as any);
+    vi.mocked(getPluginOAuthCreds).mockReturnValue({ clientId: "cid", clientSecret: "csec" });
+    stored = { accessToken: "stale", refreshToken: "rt-1", expiresAt: future(), scopes: "" };
+    vi.mocked(getToken).mockImplementation(async () => ({ ...stored }));
+    vi.mocked(storeToken).mockImplementation(async (_u: string, _i: string, d: any) => {
+      stored = { ...d };
+    });
+    tokenCalls = 0;
+    apiAuth = [];
+    accepted = "fresh";
+    refreshResponse = () =>
+      new Response(JSON.stringify({ access_token: "fresh", refresh_token: "rt-2", expires_in: 3600 }), { status: 200 });
+    global.fetch = vi.fn(async (url: any, init?: RequestInit) => {
+      if (String(url) === TOKEN_URL) {
+        tokenCalls++;
+        await new Promise((r) => setTimeout(r, 5));
+        return refreshResponse();
+      }
+      const auth = new Headers(init?.headers).get("authorization") ?? "";
+      apiAuth.push(auth);
+      return auth === `Bearer ${accepted}` ? new Response("ok") : new Response("unauthorized", { status: 401 });
+    }) as any;
+  });
+
+  it("refreshes and re-sends the same request once", async () => {
+    const ctx = await createContext("u1", "acme");
+    const res = await ctx.http(API, { method: "POST", body: JSON.stringify({ a: 1 }) });
+    expect(res.status).toBe(200);
+    expect(apiAuth).toEqual(["Bearer stale", "Bearer fresh"]);
+    expect(tokenCalls).toBe(1);
+    expect(stored).toMatchObject({ accessToken: "fresh", refreshToken: "rt-2" });
+  });
+
+  it("returns the second 401 as is: one refresh, no loop", async () => {
+    accepted = "never";
+    const ctx = await createContext("u1", "acme");
+    const res = await ctx.http(API);
+    expect(res.status).toBe(401);
+    expect(apiAuth).toHaveLength(2);
+    expect(tokenCalls).toBe(1);
+  });
+
+  it("does not retry without a refresh token, on a 403, or with a stream body", async () => {
+    stored.refreshToken = undefined;
+    expect((await (await createContext("u1", "acme")).http(API)).status).toBe(401);
+    stored.refreshToken = "rt-1";
+
+    (global.fetch as any).mockImplementationOnce(async () => new Response("forbidden", { status: 403 }));
+    expect((await (await createContext("u1", "acme")).http(API)).status).toBe(403);
+
+    const stream = new ReadableStream({ start: (c) => c.close() });
+    expect((await (await createContext("u1", "acme")).http(API, { method: "POST", body: stream, duplex: "half" } as any)).status).toBe(401);
+    expect(tokenCalls).toBe(0);
+  });
+
+  it("refreshes once for many concurrent 401s and every call retries with the new token", async () => {
+    const ctxs = await Promise.all([1, 2, 3, 4, 5].map(() => createContext("u1", "acme")));
+    const results = await Promise.all(ctxs.map((c) => c.http(API)));
+    expect(results.map((r) => r.status)).toEqual([200, 200, 200, 200, 200]);
+    expect(tokenCalls).toBe(1);
+  });
+
+  it("uses a token another process already refreshed instead of refreshing again", async () => {
+    // The API rejects `stale`; by then another pod has stored `fresh`.
+    (global.fetch as any).mockImplementationOnce(async () => {
+      stored = { ...stored, accessToken: "fresh", refreshToken: "rt-2" };
+      return new Response("unauthorized", { status: 401 });
+    });
+    const res = await (await createContext("u1", "acme")).http(API);
+    expect(res.status).toBe(200);
+    expect(tokenCalls).toBe(0);
+  });
+
+  it("waits on another process's lock and takes its token", async () => {
+    const { createHash } = await import("node:crypto");
+    const key = "refresh:" + createHash("sha256").update("u1\0acme").digest("hex").slice(0, 40);
+    await db.run("INSERT INTO pending_auth (state, user_id, integration, expires_at) VALUES (?, ?, ?, ?)", [
+      key,
+      "u1",
+      "__token_refresh__",
+      Math.floor(Date.now() / 1000) + 30,
+    ]);
+    // The other holder finishes while we poll.
+    _setClockForTest({
+      sleep: async () => {
+        stored = { ...stored, accessToken: "fresh", refreshToken: "rt-2" };
+      },
+    });
+    const res = await (await createContext("u1", "acme")).http(API);
+    expect(res.status).toBe(200);
+    expect(tokenCalls).toBe(0);
+  });
+
+  it("takes over a lock whose holder died", async () => {
+    const { createHash } = await import("node:crypto");
+    const key = "refresh:" + createHash("sha256").update("u1\0acme").digest("hex").slice(0, 40);
+    await db.run("INSERT INTO pending_auth (state, user_id, integration, expires_at) VALUES (?, ?, ?, ?)", [
+      key,
+      "u1",
+      "__token_refresh__",
+      Math.floor(Date.now() / 1000) - 5,
+    ]);
+    const res = await (await createContext("u1", "acme")).http(API);
+    expect(res.status).toBe(200);
+    expect(tokenCalls).toBe(1);
+    const left = await db.get("SELECT 1 AS n FROM pending_auth WHERE state = ?", [key]);
+    expect(left).toBeUndefined();
+  });
+
+  it("a refused refresh token raises TokenRefreshError (NOT_CONNECTED) and releases the lock", async () => {
+    refreshResponse = () => new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 });
+    const err = await (await createContext("u1", "acme")).http(API).catch((e) => e);
+    expect(err).toBeInstanceOf(TokenRefreshError);
+    expect(err.code).toBe("NOT_CONNECTED");
+    const left = await db.get("SELECT 1 AS n FROM pending_auth WHERE integration = ?", ["__token_refresh__"]);
+    expect(left).toBeUndefined();
+  });
+
+  it("a token endpoint 5xx stays a plain error (may be transient)", async () => {
+    refreshResponse = () => new Response("down", { status: 503 });
+    const err = await (await createContext("u1", "acme")).http(API).catch((e) => e);
+    expect(err).not.toBeInstanceOf(TokenRefreshError);
+    expect(String(err.message)).toMatch(/Refresh failed 503/);
+  });
+
+  it("an expired token with no refresh token is NOT_CONNECTED", async () => {
+    stored = { accessToken: "stale", expiresAt: 1, scopes: "" };
+    const err = await (await createContext("u1", "acme")).getToken().catch((e) => e);
+    expect(err).toBeInstanceOf(TokenRefreshError);
   });
 });

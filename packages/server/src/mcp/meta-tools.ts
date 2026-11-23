@@ -1,4 +1,5 @@
 import { MAX_RESULT_CHARS } from "./result-overflow";
+import { TokenRefreshError } from "../auth/token-refresh";
 import { z } from "zod";
 import { effectOf, type ToolEffect } from "@a-workbench/shared";
 import { zodToJsonSchema } from "zod-to-json-schema";
@@ -572,6 +573,16 @@ export async function executeSingle(
         const durationS = duration_ms / 1000;
         toolExecutionsTotal.inc({ integration: targetTool.integration, tool: toolName, success: "false" });
         toolExecutionDuration.observe({ integration: targetTool.integration, tool: toolName, success: "false" }, durationS);
+        // The stored grant is dead (no refresh token, or the provider refused
+        // it): the caller's fix is to reconnect, so say NOT_CONNECTED, not a
+        // generic upstream failure. A Space maps this to its own NOT_CONNECTED.
+        if (e instanceof TokenRefreshError) {
+          return {
+            error: "NOT_CONNECTED",
+            integration: targetTool.integration,
+            message: `${targetTool.integration} needs to be reconnected (${err}). Use connect('${targetTool.integration}').`,
+          };
+        }
         return { error: err };
       }
     },

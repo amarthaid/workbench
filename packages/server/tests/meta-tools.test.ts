@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { z } from "zod";
 import { metaTools } from "../src/mcp/meta-tools";
 import { renderResultText, MAX_RESULT_CHARS } from "../src/mcp/result-overflow";
+import { TokenRefreshError } from "../src/auth/token-refresh";
 import { registry } from "../src/plugins/registry";
 
 const mockTool = {
@@ -990,6 +991,14 @@ describe("meta-tools", () => {
       );
       expect(result).toEqual({ result: { file_id: "file-1", rows: 1 } });
       expect(JSON.stringify(result)).not.toContain("a,b");
+    });
+
+    it("reports a dead OAuth grant as NOT_CONNECTED, not an upstream error", async () => {
+      stubComposeTools();
+      src.handler.mockRejectedValue(new TokenRefreshError("test-integ", "Refresh failed 400: invalid_grant. Reconnect the integration."));
+      const r = await run({ executions: [{ tool: "src_tool", args: { q: "x" } }] });
+      expect(r.results[0]).toMatchObject({ error: "NOT_CONNECTED", integration: "test-integ" });
+      expect(r.results[0].message).toMatch(/reconnect/i);
     });
 
     it("chains a step result larger than the MCP cap in full; the cap applies only to what is returned", async () => {

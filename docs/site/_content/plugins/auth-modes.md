@@ -51,7 +51,8 @@ instead of the consent screen. Only after that check passes does the server buil
 the provider's consent URL and send the user there.
 
 **Refresh tokens.** `ctx.getToken()` refreshes automatically 30 seconds before
-expiry, but only if a `refresh_token` was issued. That usually requires an
+expiry, and `ctx.http()` refreshes and retries once when the upstream answers 401,
+but only if a `refresh_token` was issued. That usually requires an
 explicit scope. Atlassian needs `offline_access` in the scope list. Google needs
 `access_type=offline`, which the server adds for you.
 
