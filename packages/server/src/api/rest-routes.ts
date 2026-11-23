@@ -16,7 +16,7 @@ import { hasRecipe, runWithBrowserAffinity } from "../auth/reconnect/affinity";
 // engine (`executeSingle`/`executeMany` from the meta-tools module), same
 // audit rows and metrics — only the envelope differs. JSON-RPC framing and
 // MCP content blocks are gone, and with them the 60,000-character result cap,
-// which lives in the MCP renderer (`capResultText`) and never in execution.
+// which lives in the MCP renderer (`renderResultText`) and never in execution.
 // A caller that wants a whole 2 MB payload uses this endpoint.
 
 const SingleBody = z.object({ tool: z.string().min(1), args: z.record(z.unknown()).optional() });

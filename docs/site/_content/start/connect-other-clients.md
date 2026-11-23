@@ -172,9 +172,31 @@ grant type is a 400 `unsupported_grant_type`. A bad code or refresh token is a 4
 ## Reading results
 
 A meta-tool result comes back as a single `{"type":"text"}` content block holding
-the JSON-stringified return value, capped at **60,000 characters**. Past the cap it
-is truncated and a notice is appended — and the truncated text is deliberately not
-valid JSON, so a client cannot mistake a partial response for a whole one.
+the JSON-stringified return value, capped at **60,000 characters**. Past the cap the
+whole value is written to the caller's file workspace and replaced by a stub:
+
+```json
+{
+  "_overflow": true,
+  "url": "https://workbench.example.com/api/files/dl/<token>",
+  "file": "mcp-overflow-2026-11-23T11-43-40-000Z-1a2b3c4d.json",
+  "bytes": 4200000,
+  "content_type": "application/json",
+  "url_expires_at": "2026-11-23T11:48:40.000Z",
+  "preview": "{\"results\":[{\"id\":…",
+  "hint": "…"
+}
+```
+
+The URL needs no auth header, can be fetched more than once, and stops working at
+`url_expires_at` (`WORKSPACE_PRESIGN_TTL_SECONDS`, 300 by default). The file stays
+in the workspace until the workspace reaper removes it (`WORKSPACE_TTL_HOURS`), so
+`files_presign` can mint a fresh URL for it. In an `execute_tools` batch the largest
+item results are swapped for stubs until the batch fits, one file per item.
+
+If the file cannot be stored (over `WORKSPACE_MAX_FILE_BYTES` or the per-user
+quota), the result is truncated with a notice appended instead, and the truncated
+text is deliberately not valid JSON so a client cannot mistake it for a whole one.
 
 One exception: if the result carries image data, the content becomes image blocks
 instead and the text block is dropped. `browser_screenshot` is the tool that does

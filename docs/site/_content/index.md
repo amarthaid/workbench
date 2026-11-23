@@ -52,10 +52,11 @@ workbench advertises only the 9 meta-tools. Everything else is reached by name:
 3. `execute_tools` runs one or many, concurrently, in a single call.
 
 The same discipline applies on the way back. A tool result is serialized into one
-text block capped at **60,000 characters**. Past that it is truncated with a notice
-telling the agent to narrow the request with `limit`, `fields`, or pagination.
-Truncated output is deliberately not valid JSON, so a client cannot silently parse
-a half-response as complete.
+text block capped at **60,000 characters**. Past that the full result is written
+to the caller's file workspace and the agent gets a short stub with a temporary
+download URL and a preview instead. It fetches the URL with `curl` and filters the
+file locally, so only what it extracts enters its context. In an `execute_tools`
+batch only the oversized items are swapped for stubs.
 
 ## Where to go next
 
