@@ -8,9 +8,11 @@ export interface ModalProps {
   dismissible?: boolean;
   children: ReactNode;
   footer?: ReactNode;
+  /** Extra class on the dialog panel, for a call site that needs its own layout. */
+  className?: string;
 }
 
-export function Modal({ open, onClose, title, size = "md", dismissible = true, children, footer }: ModalProps) {
+export function Modal({ open, onClose, title, size = "md", dismissible = true, children, footer, className }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
 
   const triggerRef = useRef<Element | null>(null);
@@ -51,7 +53,7 @@ export function Modal({ open, onClose, title, size = "md", dismissible = true, c
     <div className="ui-modal-backdrop" role="presentation" onClick={onClose}>
       <div
         ref={panelRef}
-        className={`ui-modal ui-modal-${size}`}
+        className={`ui-modal ui-modal-${size}${className ? ` ${className}` : ""}`}
         role="dialog"
         aria-modal="true"
         tabIndex={-1}

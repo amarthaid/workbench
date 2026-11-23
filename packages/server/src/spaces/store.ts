@@ -220,6 +220,20 @@ export async function setShares(name: string, ownerId: string, emails: readonly 
   });
 }
 
+export type EmailCheck = { ok: true; emails: string[] } | { ok: false; error: "INVALID_USERS"; message: string };
+
+/** Validate and normalise a share list input: lowercased, deduplicated, each one an email. */
+export function parseEmails(users: unknown): EmailCheck {
+  if (!Array.isArray(users) || users.some((u) => typeof u !== "string")) {
+    return { ok: false, error: "INVALID_USERS", message: "users must be an array of email addresses" };
+  }
+  const emails = Array.from(new Set((users as string[]).map(normalizeEmail)));
+  for (const e of emails) {
+    if (!/^[^\s@]+@[^\s@]+$/.test(e)) return { ok: false, error: "INVALID_USERS", message: `Not an email address: ${e}` };
+  }
+  return { ok: true, emails };
+}
+
 export type ShareChange = string[] | "forbidden" | "empty";
 
 /**

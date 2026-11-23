@@ -21,7 +21,7 @@ import {
   listAllSpaces,
   listOwnedSpaces,
   listSpaceFiles,
-  normalizeEmail,
+  parseEmails,
   normalizeTools,
   setShares,
   updateSpaceMeta,
@@ -75,18 +75,8 @@ function checkTools(tools: unknown): ToolCheck {
   return { ok: true, tools: normalizeTools(tools as string[]) };
 }
 
-type EmailCheck = { ok: true; emails: string[] } | { ok: false; error: string; message: string };
-
-function checkEmails(users: unknown): EmailCheck {
-  if (!Array.isArray(users) || users.some((u) => typeof u !== "string")) {
-    return { ok: false, error: "INVALID_USERS", message: "users must be an array of email addresses" };
-  }
-  const emails = Array.from(new Set((users as string[]).map(normalizeEmail)));
-  for (const e of emails) {
-    if (!/^[^\s@]+@[^\s@]+$/.test(e)) return { ok: false, error: "INVALID_USERS", message: `Not an email address: ${e}` };
-  }
-  return { ok: true, emails };
-}
+// Same validation the portal sharing endpoint uses.
+const checkEmails = parseEmails;
 
 const HOW_TO_BUILD =
   "HOW TO BUILD A SPACE: a Space is a static site (root index.html) that runs in a sandboxed iframe inside the workbench portal, as whoever opens it, using THEIR connections. " +

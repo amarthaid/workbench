@@ -10,6 +10,7 @@ import {
   grantSpaceConsent,
   putSpaceKv,
   revokeSpaceConsent,
+  updateSpaceSharing,
 } from "./spaces-api";
 
 const fetchMock = vi.fn();
@@ -68,6 +69,17 @@ describe("spaces api", () => {
     expect(init.method).toBe(method);
     expect(init.body).toBeUndefined();
     expect(init.headers).toEqual({ Authorization: "Bearer tok-abc" });
+  });
+
+  it("updateSpaceSharing PATCHes the change and returns the saved settings", async () => {
+    fetchMock.mockResolvedValueOnce(respond(200, { visibility: "users", users: ["qa@example.com"] }));
+    const saved = await updateSpaceSharing("my space", { add_users: ["qa@example.com"] });
+    const { url, init } = lastCall();
+    expect(url).toBe("/api/spaces/my%20space/sharing");
+    expect(init.method).toBe("PATCH");
+    expect(init.headers).toEqual({ Authorization: "Bearer tok-abc", "Content-Type": "application/json" });
+    expect(JSON.parse(init.body as string)).toEqual({ add_users: ["qa@example.com"] });
+    expect(saved).toEqual({ visibility: "users", users: ["qa@example.com"] });
   });
 
   it("callSpaceTool posts JSON and returns the result", async () => {

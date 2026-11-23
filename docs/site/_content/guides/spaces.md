@@ -144,6 +144,7 @@ Open `url` from the result (`/s/pr-timeline` on the portal). Each viewer approve
 - Add a tool: `update_space` with the new `tools` list. Every viewer is asked to approve again.
 - Share with specific people: `update_space` with `visibility: "users"` and `users: ["dev@example.com"]`.
 - Add or remove one person: `update_space` with `add_users: ["qa@example.com"]` or `remove_users: [...]`. Everyone else stays on the list; `users` would replace it.
+- Without an agent: open the Space in the portal, then **Menu > Sharing** (owner only). Choose **Only me**, **Everyone signed in** or **Specific people**, add or remove email addresses, and save.
 
 ## Tips
 

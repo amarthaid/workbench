@@ -104,6 +104,7 @@ Used by the portal shell. Portal session JWT only (`Authorization: Bearer`); API
 |---|---|
 | `GET /api/spaces` | Spaces the viewer can open, newest first |
 | `GET /api/spaces/:name` | Metadata, tools with `effect` and `connected`, `consented`, `appUrl` |
+| `PATCH /api/spaces/:name/sharing` | Owner only: change `visibility` and add or remove people (`{ visibility?, add_users?, remove_users? }`), same rules as `update_space`; answers `{ visibility, users }` |
 | `POST`, `DELETE /api/spaces/:name/consent` | Approve or revoke the current tool list |
 | `POST /api/spaces/:name/call` | Run a declared tool as the viewer |
 | `GET /api/spaces/:name/kv`, `GET`, `PUT`, `DELETE /api/spaces/:name/kv/:key` | Per-viewer key-value store |
