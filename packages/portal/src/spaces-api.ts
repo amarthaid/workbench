@@ -136,6 +136,22 @@ export function fetchSpace(name: string): Promise<SpaceDetail> {
   return request<SpaceDetail>(`/api/spaces/${seg(name)}`);
 }
 
+export interface SpaceSharing {
+  visibility: SpaceVisibility;
+  users: string[];
+}
+
+export interface SpaceSharingChange {
+  visibility?: SpaceVisibility;
+  add_users?: string[];
+  remove_users?: string[];
+}
+
+/** Owner only. add_users / remove_users leave everyone else on the list. */
+export function updateSpaceSharing(name: string, change: SpaceSharingChange): Promise<SpaceSharing> {
+  return request<SpaceSharing>(`/api/spaces/${seg(name)}/sharing`, { method: "PATCH", body: change });
+}
+
 export async function grantSpaceConsent(name: string): Promise<void> {
   await request<{ ok: true }>(`/api/spaces/${seg(name)}/consent`, { method: "POST" });
 }

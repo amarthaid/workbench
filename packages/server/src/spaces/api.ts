@@ -10,6 +10,7 @@ import { isInternalIntegration } from "../plugins/internal-names";
 import { executeSingle } from "../mcp/meta-tools";
 import { canView, type Viewer } from "./access";
 import {
+  changeShares,
   getShares,
   getSpace,
   grantConsent,
@@ -22,8 +23,11 @@ import {
   kvPut,
   listAllSpaces,
   ownerEmailOf,
+  parseEmails,
   revokeConsent,
+  updateSpaceMeta,
   type Space,
+  type Visibility,
 } from "./store";
 import { mintSig } from "./sig";
 import { takeToken } from "./rate-limit";
@@ -207,6 +211,71 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           consented: await hasConsent(space, viewer.userId),
           appUrl: `/s/${space.name}/app/${mintSig(space.name, viewer.userId)}/`,
         };
+      });
+
+      // Owner-only sharing settings, so the portal can change who can open a
+      // Space without going through an agent. Same rules as update_space:
+      // add_users / remove_users never touch anyone else on the list, and a
+      // 'users' Space cannot be left with nobody on it. A viewer who is not the
+      // owner gets the same 404 as for a Space they cannot see, or 403 when they
+      // can open it but do not own it.
+      scope.patch<{
+        Params: { name: string };
+        Body: { visibility?: unknown; add_users?: unknown; remove_users?: unknown };
+      }>("/:name/sharing", async (request, reply) => {
+        const viewer = viewerOf(request);
+        const space = await openable(request.params.name, viewer);
+        if (!space) return notFound(reply);
+        if (space.ownerId !== viewer.userId) {
+          return fail(reply, 403, { code: "FORBIDDEN", message: "Only the owner can change who can open this Space." });
+        }
+        const body = (request.body ?? {}) as { visibility?: unknown; add_users?: unknown; remove_users?: unknown };
+
+        let visibility: Visibility = space.visibility;
+        if (body.visibility !== undefined) {
+          if (body.visibility !== "private" && body.visibility !== "org" && body.visibility !== "users") {
+            return fail(reply, 400, { code: "INVALID_VISIBILITY", message: "visibility is private, org or users" });
+          }
+          visibility = body.visibility;
+        }
+        let add: string[] = [];
+        let remove: string[] = [];
+        if (body.add_users !== undefined) {
+          const e = parseEmails(body.add_users);
+          if (!e.ok) return fail(reply, 400, { code: e.error, message: e.message });
+          add = e.emails;
+        }
+        if (body.remove_users !== undefined) {
+          const e = parseEmails(body.remove_users);
+          if (!e.ok) return fail(reply, 400, { code: e.error, message: e.message });
+          remove = e.emails;
+        }
+
+        // Validate the outcome before writing anything.
+        if (visibility === "users") {
+          const removed = new Set(remove);
+          const projected = new Set([...(await getShares(space.name)), ...add].filter((x) => !removed.has(x)));
+          if (projected.size === 0) {
+            return fail(reply, 400, { code: "USERS_REQUIRED", message: "Add at least one person to share with specific people." });
+          }
+        }
+
+        if (visibility !== space.visibility) {
+          const updated = await updateSpaceMeta(space.name, viewer.userId, { visibility });
+          if (!updated) return fail(reply, 403, { code: "FORBIDDEN", message: "Only the owner can change who can open this Space." });
+        }
+        let users = await getShares(space.name);
+        if (add.length > 0 || remove.length > 0) {
+          const changed = await changeShares(space.name, viewer.userId, { add, remove }, visibility === "users");
+          if (changed === "forbidden") {
+            return fail(reply, 403, { code: "FORBIDDEN", message: "Only the owner can change who can open this Space." });
+          }
+          if (changed === "empty") {
+            return fail(reply, 409, { code: "USERS_REQUIRED", message: "The share list changed meanwhile and would be left empty." });
+          }
+          users = changed;
+        }
+        return { visibility, users };
       });
 
       scope.post<{ Params: { name: string } }>("/:name/consent", async (request, reply) => {

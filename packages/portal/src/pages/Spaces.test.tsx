@@ -56,7 +56,7 @@ describe("Spaces gallery", () => {
     expect(second).toHaveTextContent("updated 3d ago");
 
     expect(screen.getAllByText("Yours")).toHaveLength(1);
-    expect(screen.getByText("Organization")).toBeInTheDocument();
+    expect(screen.getByText("Everyone signed in")).toBeInTheDocument();
     expect(screen.getByText("Shared")).toBeInTheDocument();
   });
 

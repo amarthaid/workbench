@@ -1311,6 +1311,7 @@ body {
   font-size: 13px;
 }
 .space-bar-title { display: flex; align-items: baseline; gap: var(--s-8); min-width: 0; }
+.space-bar-home { display: inline-flex; align-self: center; color: var(--accent); }
 .space-bar-back { color: var(--text-3); text-decoration: none; }
 .space-bar-back:hover { color: var(--text); }
 .space-bar-name {
@@ -1349,6 +1350,86 @@ body {
   cursor: pointer;
 }
 .space-menu-item:hover { background: var(--bg-sunk); }
+
+/* Long share lists scroll inside the dialog body; the title and the
+   Save/Cancel row stay in view. */
+.space-share-modal { display: flex; flex-direction: column; overflow: hidden; }
+.space-share-modal .ui-modal-body { flex: 1; min-height: 0; overflow-y: auto; }
+.space-share-modal .ui-modal-foot { flex: none; }
+.space-share-choices { border: 0; padding: 0; margin: 0 0 var(--s-12); gap: var(--s-8); }
+.space-share-choice { display: flex; align-items: flex-start; gap: var(--s-8); cursor: pointer; }
+.space-share-choice > span { display: grid; gap: 2px; }
+.space-share-choice-label { font-size: 13px; color: var(--text); }
+.space-share-people { gap: var(--s-8); }
+.space-share-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+.space-share-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-8);
+  padding: var(--s-4) var(--s-8);
+}
+.space-share-row + .space-share-row { border-top: 1px solid var(--border-strong); }
+.space-share-email { font-size: 13px; overflow-wrap: anywhere; }
+.space-share-add { display: flex; align-items: flex-start; gap: var(--s-8); }
+.space-share-pills {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-4);
+  padding: var(--s-4) var(--s-8);
+  max-height: 128px;
+  overflow-y: auto;
+  cursor: text;
+}
+.space-share-pills:focus-within { border-color: var(--accent); }
+.space-share-pills-input {
+  flex: 1;
+  min-width: 140px;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  padding: var(--s-4) 0;
+}
+.space-share-pills-input::placeholder { color: var(--text-4); }
+.space-share-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-4);
+  max-width: 100%;
+  padding: 2px var(--s-4) 2px var(--s-8);
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg-sunk);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  overflow-wrap: anywhere;
+}
+.space-share-pill-bad { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
+.space-share-pill-x {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+  opacity: .7;
+}
+.space-share-pill-x:hover { opacity: 1; }
 
 .space-banners { flex: none; display: grid; }
 .space-banner {

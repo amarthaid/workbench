@@ -13,13 +13,16 @@ import {
   putSpaceKv,
   revokeSpaceConsent,
   type SpaceDetail,
+  type SpaceSharing,
 } from "../spaces-api";
 import { createSpaceBridge, type ConfirmRequest } from "../spaces/bridge";
 import { SpaceToolList } from "../spaces/ToolList";
 import { ConfirmActionModal } from "../spaces/ConfirmActionModal";
+import { SharingModal } from "../spaces/SharingModal";
 import { Button } from "../components/ui/Button";
 import { Modal } from "../components/ui/Modal";
-import { BrandLockup } from "../components/BrandMark";
+import { BrandLockup, BrandMark } from "../components/BrandMark";
+import { LOCKUP } from "@a-workbench/brand";
 
 type Stopped = "paused" | "navigated" | null;
 
@@ -78,12 +81,14 @@ function SpaceRunner({
   onStopped,
   onRevoke,
   revoking,
+  onSharingSaved,
 }: {
   space: SpaceDetail;
   onConsentRequired: () => void;
   onStopped: (why: "paused" | "navigated") => void;
   onRevoke: () => void;
   revoking: boolean;
+  onSharingSaved: (sharing: SpaceSharing) => void;
 }) {
   const { user } = useAuth();
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -94,6 +99,7 @@ function SpaceRunner({
   const [banners, setBanners] = useState<{ integration: string; name: string }[]>([]);
   const [menuOpen, setMenuOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
+  const [sharingOpen, setSharingOpen] = useState(false);
 
   // The bridge reads these through refs so it is created once per mount.
   const spaceRef = useRef(space);
@@ -151,6 +157,9 @@ function SpaceRunner({
     <div className="space-shell">
       <header className="space-bar">
         <div className="space-bar-title">
+          <Link to="/" className="space-bar-home" aria-label="workbench home">
+            <BrandMark size={LOCKUP.compact.mark} />
+          </Link>
           <Link to="/spaces" className="space-bar-back" aria-label="All Spaces">Spaces</Link>
           <span className="space-bar-name">{space.title}</span>
           <span className="space-bar-owner">by {space.ownerEmail}</span>
@@ -180,6 +189,19 @@ function SpaceRunner({
                 >
                   View tools
                 </button>
+                {space.mine && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="space-menu-item"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      setSharingOpen(true);
+                    }}
+                  >
+                    Sharing
+                  </button>
+                )}
                 <button
                   type="button"
                   role="menuitem"
@@ -233,6 +255,17 @@ function SpaceRunner({
       <Modal open={toolsOpen} onClose={() => setToolsOpen(false)} title="Tools this Space can use" size="lg">
         <SpaceToolList tools={space.tools} />
       </Modal>
+
+      {space.mine && (
+        <SharingModal
+          open={sharingOpen}
+          spaceName={space.name}
+          visibility={space.visibility}
+          users={space.users ?? []}
+          onClose={() => setSharingOpen(false)}
+          onSaved={onSharingSaved}
+        />
+      )}
     </div>
   );
 }
@@ -335,6 +368,10 @@ export default function SpaceShell() {
       space={data}
       revoking={revoke.isPending}
       onRevoke={() => revoke.mutate()}
+      onSharingSaved={(sharing) => {
+        queryClient.setQueryData<SpaceDetail>(queryKey, (d) => (d ? { ...d, ...sharing } : d));
+        void queryClient.invalidateQueries({ queryKey: ["spaces"] });
+      }}
       onStopped={setStopped}
       onConsentRequired={() => {
         // The author changed the tool list: ask again, over the new list.

@@ -21,10 +21,11 @@ vi.mock("../spaces-api", async (importOriginal) => {
     fetchSpaceKv: vi.fn(async () => undefined),
     putSpaceKv: vi.fn(async () => undefined),
     deleteSpaceKv: vi.fn(async () => undefined),
+    updateSpaceSharing: vi.fn(),
   };
 });
 
-import { SpaceApiError, callSpaceTool, fetchSpace, grantSpaceConsent, revokeSpaceConsent } from "../spaces-api";
+import { SpaceApiError, callSpaceTool, fetchSpace, grantSpaceConsent, revokeSpaceConsent, updateSpaceSharing } from "../spaces-api";
 
 function space(overrides: Partial<SpaceDetail> = {}): SpaceDetail {
   return {
@@ -157,12 +158,122 @@ describe("SpaceShell", () => {
     });
   });
 
+  describe("sharing", () => {
+    const openSharing = async () => {
+      await frame();
+      fireEvent.click(screen.getByRole("button", { name: "Menu" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Sharing" }));
+      return screen.findByRole("dialog");
+    };
+
+    it("is offered to the owner only", async () => {
+      renderShell();
+      await frame();
+      fireEvent.click(screen.getByRole("button", { name: "Menu" }));
+      expect(screen.queryByRole("menuitem", { name: "Sharing" })).not.toBeInTheDocument();
+    });
+
+    it("opens a Space to everyone signed in", async () => {
+      vi.mocked(fetchSpace).mockResolvedValue(space({ mine: true, visibility: "private", users: [] }));
+      vi.mocked(updateSpaceSharing).mockResolvedValue({ visibility: "org", users: [] });
+      renderShell();
+      const dialog = await openSharing();
+      expect(within(dialog).getByLabelText(/Only me/)).toBeChecked();
+      fireEvent.click(within(dialog).getByLabelText(/Everyone signed in/));
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(updateSpaceSharing).toHaveBeenCalledWith("pr-timeline", { visibility: "org" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    });
+
+    it("adds and removes people, sending only the difference", async () => {
+      vi.mocked(fetchSpace).mockResolvedValue(
+        space({ mine: true, visibility: "users", users: ["ops@example.com", "qa@example.com"] })
+      );
+      vi.mocked(updateSpaceSharing).mockResolvedValue({ visibility: "users", users: ["new@example.com", "two@example.com", "qa@example.com"] });
+      renderShell();
+      const dialog = await openSharing();
+      const input = within(dialog).getByLabelText("Email addresses to add");
+      fireEvent.change(input, { target: { value: "New@Example.com, two@example.com" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(within(dialog).getByText("new@example.com")).toBeInTheDocument();
+      expect(within(dialog).getByText("two@example.com")).toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole("button", { name: "Remove ops@example.com" }));
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+      await waitFor(() =>
+        expect(updateSpaceSharing).toHaveBeenCalledWith("pr-timeline", {
+          add_users: ["new@example.com", "two@example.com"],
+          remove_users: ["ops@example.com"],
+        })
+      );
+    });
+
+    it("rejects a bad address and an empty people list without calling the server", async () => {
+      vi.mocked(fetchSpace).mockResolvedValue(space({ mine: true, visibility: "users", users: ["qa@example.com"] }));
+      renderShell();
+      const dialog = await openSharing();
+      const input = within(dialog).getByLabelText("Email addresses to add");
+      fireEvent.change(input, { target: { value: "not-an-email" } });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+      expect(within(dialog).getByText(/Not an email address: not-an-email/)).toBeInTheDocument();
+      // The bad pill has to go before anything else can be added.
+      fireEvent.click(within(dialog).getByRole("button", { name: "Remove not-an-email from the addresses to add" }));
+      fireEvent.click(within(dialog).getByRole("button", { name: "Remove qa@example.com" }));
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+      expect(within(dialog).getByText(/Add at least one person/)).toBeInTheDocument();
+      expect(updateSpaceSharing).not.toHaveBeenCalled();
+    });
+
+    it("turns comma-separated input into pills, and Backspace drops the last one", async () => {
+      vi.mocked(fetchSpace).mockResolvedValue(space({ mine: true, visibility: "users", users: ["qa@example.com"] }));
+      vi.mocked(updateSpaceSharing).mockResolvedValue({ visibility: "users", users: ["a@example.com", "qa@example.com"] });
+      renderShell();
+      const dialog = await openSharing();
+      const input = within(dialog).getByLabelText("Email addresses to add") as HTMLInputElement;
+      fireEvent.change(input, { target: { value: "a@example.com, b@example.com, c@exa" } });
+      expect(input.value).toBe("c@exa");
+      expect(within(dialog).getByRole("button", { name: "Remove a@example.com from the addresses to add" })).toBeInTheDocument();
+      expect(within(dialog).getByRole("button", { name: "Remove b@example.com from the addresses to add" })).toBeInTheDocument();
+      fireEvent.change(input, { target: { value: "" } });
+      fireEvent.keyDown(input, { key: "Backspace" });
+      expect(within(dialog).queryByRole("button", { name: "Remove b@example.com from the addresses to add" })).not.toBeInTheDocument();
+      // Save refuses while a pill is waiting to be added.
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+      expect(within(dialog).getByText(/Press Add to include/)).toBeInTheDocument();
+      expect(updateSpaceSharing).not.toHaveBeenCalled();
+      fireEvent.click(within(dialog).getByRole("button", { name: "Add" }));
+      expect(within(dialog).getByText("a@example.com")).toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(updateSpaceSharing).toHaveBeenCalledWith("pr-timeline", { add_users: ["a@example.com"] }));
+    });
+
+    it("shows the server's error and keeps the dialog open", async () => {
+      vi.mocked(fetchSpace).mockResolvedValue(space({ mine: true, visibility: "private", users: [] }));
+      vi.mocked(updateSpaceSharing).mockRejectedValue(new SpaceApiError(403, { code: "FORBIDDEN", message: "Only the owner can change who can open this Space." }));
+      renderShell();
+      const dialog = await openSharing();
+      fireEvent.click(within(dialog).getByLabelText(/Everyone signed in/));
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+      expect(await within(dialog).findByText("Only the owner can change who can open this Space.")).toBeInTheDocument();
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+    });
+  });
+
   describe("running", () => {
     it("shows the top bar", async () => {
       renderShell();
       await frame();
       expect(screen.getByText("by owner@example.com")).toBeInTheDocument();
       expect(screen.getByText("Running as you")).toBeInTheDocument();
+    });
+
+    it("shows the workbench mark before Spaces, linking home", async () => {
+      renderShell();
+      await frame();
+      const home = screen.getByRole("link", { name: "workbench home" });
+      expect(home).toHaveAttribute("href", "/");
+      expect(home.querySelector(".brand-mark")).not.toBeNull();
+      const spaces = screen.getByRole("link", { name: "All Spaces" });
+      expect(home.compareDocumentPosition(spaces) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
     it("hands the frame a port and round-trips a call", async () => {

@@ -11,7 +11,7 @@ export const EXAMPLE_PROMPT = "Build me a Space that shows my open GitHub and Bi
 
 const VISIBILITY: Record<SpaceVisibility, { label: string; variant: "neutral" | "blue" | "primary" }> = {
   private: { label: "Private", variant: "neutral" },
-  org: { label: "Organization", variant: "blue" },
+  org: { label: "Everyone signed in", variant: "blue" },
   users: { label: "Shared", variant: "primary" },
 };
 

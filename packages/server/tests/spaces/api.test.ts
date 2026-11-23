@@ -177,6 +177,65 @@ describe("GET /api/spaces/:name", () => {
   });
 });
 
+describe("PATCH /api/spaces/:name/sharing", () => {
+  const sharing = (user: string, payload: Record<string, unknown>, name = "s1") =>
+    app.inject({ method: "PATCH", url: `/api/spaces/${name}/sharing`, headers: as(user), payload });
+  const shares = async () =>
+    (await db.all<{ email: string }>("SELECT email FROM space_shares WHERE space_name = ? ORDER BY email", ["s1"])).map(
+      (r) => r.email
+    );
+
+  it("adds and removes people without touching anyone else", async () => {
+    let res = await sharing("u1", { add_users: ["Ops@Example.com", "dev2@example.com"] });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ visibility: "users", users: ["dev2@example.com", "ops@example.com", "qa@example.com"] });
+    res = await sharing("u1", { remove_users: ["dev2@example.com"] });
+    expect(res.json().users).toEqual(["ops@example.com", "qa@example.com"]);
+    // The newly added viewer can now open it.
+    expect((await app.inject({ method: "GET", url: "/api/spaces/s1", headers: as("u3") })).statusCode).toBe(200);
+  });
+
+  it("opens a Space to everyone signed in and back, keeping the list", async () => {
+    let res = await sharing("u1", { visibility: "org" });
+    expect(res.json()).toEqual({ visibility: "org", users: ["qa@example.com"] });
+    expect((await getSpace("s1"))!.visibility).toBe("org");
+    expect((await app.inject({ method: "GET", url: "/api/spaces/s1", headers: as("u3") })).statusCode).toBe(200);
+    res = await sharing("u1", { visibility: "private" });
+    expect(res.json().visibility).toBe("private");
+    expect((await app.inject({ method: "GET", url: "/api/spaces/s1", headers: as("u2") })).statusCode).toBe(404);
+    expect(await shares()).toEqual(["qa@example.com"]);
+  });
+
+  it("refuses to leave a 'users' Space with nobody, and writes nothing", async () => {
+    const res = await sharing("u1", { remove_users: ["qa@example.com"] });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe("USERS_REQUIRED");
+    expect(await shares()).toEqual(["qa@example.com"]);
+    // Switching to private while removing the last person is fine.
+    const ok = await sharing("u1", { visibility: "private", remove_users: ["qa@example.com"] });
+    expect(ok.json()).toEqual({ visibility: "private", users: [] });
+  });
+
+  it("validates input before writing", async () => {
+    expect((await sharing("u1", { visibility: "everyone" })).json().code).toBe("INVALID_VISIBILITY");
+    const bad = await sharing("u1", { visibility: "org", add_users: ["not-an-email"] });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().code).toBe("INVALID_USERS");
+    expect((await getSpace("s1"))!.visibility).toBe("users");
+  });
+
+  it("only the owner may change it: 403 for a viewer, 404 without access, 401 without a session", async () => {
+    const viewer = await sharing("u2", { add_users: ["evil@example.com"] });
+    expect(viewer.statusCode).toBe(403);
+    expect((await sharing("u3", { visibility: "org" })).statusCode).toBe(404);
+    expect((await sharing("admin", { visibility: "org" })).statusCode).toBe(404);
+    const anon = await app.inject({ method: "PATCH", url: "/api/spaces/s1/sharing", payload: { visibility: "org" } });
+    expect(anon.statusCode).toBe(401);
+    expect(await shares()).toEqual(["qa@example.com"]);
+    expect((await getSpace("s1"))!.visibility).toBe("users");
+  });
+});
+
 describe("consent", () => {
   it("POST records it for the current hash, DELETE revokes", async () => {
     expect((await consent("u2")).json()).toEqual({ ok: true });
