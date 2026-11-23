@@ -23,7 +23,7 @@ Like `jots`, it is an internal plugin: server source rather than `PLUGINS_DIR`, 
 | Tool | Effect | Purpose |
 |---|---|---|
 | `deploy_space` | write | Create or replace a Space. Saves its metadata, returns an upload URL and a single-use token |
-| `update_space` | write | Change title, description, tools, visibility or users at once; with `files: true` or `delete`, also mint a patch upload |
+| `update_space` | write | Change title, description, tools, visibility or the share list at once (`add_users` / `remove_users` edit it, `users` replaces it); with `files: true` or `delete`, also mint a patch upload |
 | `list_spaces` | read | List your Spaces. Admins can pass `all: true` to list every Space with its owner |
 | `list_space_files` | read | List the files of a Space you own |
 | `delete_space` | destructive | Delete a Space, its shares, approvals, stored values and files. Owner or admin |
@@ -33,6 +33,7 @@ Like `jots`, it is an internal plugin: server source rather than `PLUGINS_DIR`, 
 - `name` follows the [jot rules](jots.md#names-ownership-and-access) (lowercase letters, digits and hyphens, at most 64) and may not be `_sdk` or `upload`. Names are global and creator-locked: another user's name returns `SPACE_NAME_TAKEN`.
 - `tools` is the list of fully-qualified registry tool names the page may call, such as `github_list_prs`. A tool from an internal plugin (`browser`, `jots`, `files`, `vault`, `spaces`), a custom-app tool or an unknown name returns `TOOL_NOT_ALLOWED`. The check is on the tool's integration, not on its name.
 - `visibility` is `private` (only you), `org` (any signed-in user of this deployment) or `users` (the emails in `users`, required in that case, compared case-insensitively).
+- The share list: `users` on `deploy_space` or `update_space` **replaces** it, so anyone left out loses access, and redeploying without `users` clears it. To grant or revoke one person, use `update_space` with `add_users` / `remove_users`, which leave everyone else on the list; they cannot be combined with `users` (`CONFLICTING_USERS`). Removing the last person from a `users` Space is refused (`USERS_REQUIRED`). `list_spaces` returns the current list as `users`.
 
 The metadata is saved at once. A new Space is not visible to anyone until its first upload lands.
 

@@ -25,6 +25,7 @@ import {
   normalizeTools,
   revokeConsent,
   setShares,
+  changeShares,
   toolsHash,
   updateSpaceMeta,
   upsertSpace,
@@ -92,6 +93,48 @@ describe("spaces/store", () => {
     expect(await getShares("s1")).toEqual(["dev@example.com", "qa@example.com"]);
     await setShares("s1", "u1", ["ops@example.com"]);
     expect(await getShares("s1")).toEqual(["ops@example.com"]);
+  });
+
+  it("changeShares adds and removes without touching other shares", async () => {
+    await upsertSpace({ name: "s1", ...base });
+    await setShares("s1", "u1", ["dev@example.com", "qa@example.com"]);
+    expect(await changeShares("s1", "u1", { add: ["Ops@Example.com", "dev@example.com"] })).toEqual([
+      "dev@example.com",
+      "ops@example.com",
+      "qa@example.com",
+    ]);
+    expect(await changeShares("s1", "u1", { remove: ["QA@example.com", "nobody@example.com"] })).toEqual([
+      "dev@example.com",
+      "ops@example.com",
+    ]);
+    // In both lists: removal wins.
+    expect(await changeShares("s1", "u1", { add: ["x@example.com"], remove: ["x@example.com"] })).toEqual([
+      "dev@example.com",
+      "ops@example.com",
+    ]);
+    expect(await getShares("s1")).toEqual(["dev@example.com", "ops@example.com"]);
+  });
+
+  it("changeShares keeps both of two concurrent additions", async () => {
+    await upsertSpace({ name: "s1", ...base });
+    await setShares("s1", "u1", ["dev@example.com"]);
+    await Promise.all([
+      changeShares("s1", "u1", { add: ["a@example.com"] }),
+      changeShares("s1", "u1", { add: ["b@example.com"] }),
+    ]);
+    expect(await getShares("s1")).toEqual(["a@example.com", "b@example.com", "dev@example.com"]);
+  });
+
+  it("changeShares refuses to empty a required list and checks the owner", async () => {
+    await upsertSpace({ name: "s1", ...base });
+    await setShares("s1", "u1", ["dev@example.com"]);
+    expect(await changeShares("s1", "u1", { remove: ["dev@example.com"] }, true)).toBe("empty");
+    expect(await getShares("s1")).toEqual(["dev@example.com"]);
+    expect(await changeShares("s1", "u2", { add: ["evil@example.com"] })).toBe("forbidden");
+    expect(await changeShares("missing", "u1", { add: ["x@example.com"] })).toBe("forbidden");
+    expect(await getShares("s1")).toEqual(["dev@example.com"]);
+    // Without the requirement an empty list is fine.
+    expect(await changeShares("s1", "u1", { remove: ["dev@example.com"] })).toEqual([]);
   });
 
   it("metadata and share writes carry the owner predicate", async () => {

@@ -220,6 +220,55 @@ export async function setShares(name: string, ownerId: string, emails: readonly 
   });
 }
 
+export type ShareChange = string[] | "forbidden" | "empty";
+
+/**
+ * Add and/or remove emails from the share list as `ownerId`, leaving every
+ * other share alone. Removals apply after additions, so an email in both ends
+ * up removed. One transaction with the owner check, so two concurrent edits
+ * each keep the other's change, which a read-merge-`setShares` cannot promise.
+ *
+ * `requireNonEmpty` (a Space with visibility 'users') refuses a change that
+ * would leave nobody on the list: "empty", and nothing is written. Returns the
+ * resulting list, or "forbidden" when the Space is missing or someone else's.
+ */
+export async function changeShares(
+  name: string,
+  ownerId: string,
+  change: { add?: readonly string[]; remove?: readonly string[] },
+  requireNonEmpty = false
+): Promise<ShareChange> {
+  const norm = (list?: readonly string[]) =>
+    Array.from(new Set((list ?? []).map(normalizeEmail).filter((e) => e !== "")));
+  const add = norm(change.add);
+  const remove = norm(change.remove);
+  return db.transaction(async (tx) => {
+    const row = await tx.get<{ owner_id: string }>("SELECT owner_id FROM spaces WHERE name = ?", [name]);
+    if (!row || row.owner_id !== ownerId) return "forbidden";
+    for (const email of add) {
+      await tx.run(
+        "INSERT INTO space_shares (space_name, email) VALUES (?, ?) ON CONFLICT (space_name, email) DO NOTHING",
+        [name, email]
+      );
+    }
+    for (const email of remove) {
+      await tx.run("DELETE FROM space_shares WHERE space_name = ? AND email = ?", [name, email]);
+    }
+    const rows = await tx.all<{ email: string }>(
+      "SELECT email FROM space_shares WHERE space_name = ? ORDER BY email ASC",
+      [name]
+    );
+    // Throwing rolls the transaction back; the sentinel is caught below.
+    if (requireNonEmpty && rows.length === 0) throw new EmptyShares();
+    return rows.map((r) => r.email);
+  }).catch((e) => {
+    if (e instanceof EmptyShares) return "empty" as const;
+    throw e;
+  });
+}
+
+class EmptyShares extends Error {}
+
 export async function isSharedWith(name: string, email: string): Promise<boolean> {
   const row = await db.get<{ n: number }>(
     "SELECT 1 AS n FROM space_shares WHERE space_name = ? AND email = ?",
