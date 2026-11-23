@@ -1,6 +1,6 @@
-import { getToken, storeToken, getConnectionConfig, TokenData } from "../auth/tokens";
+import { getToken, getConnectionConfig, TokenData } from "../auth/tokens";
+import { isExpiring, refreshToken } from "../auth/token-refresh";
 import { getCookies, CookieData, isCookieExpired } from "../auth/cookie";
-import { getPluginOAuthCreds, resolveOAuthUrls } from "../auth/plugin-oauth";
 import { registry } from "./registry";
 import { matchesDead } from "../auth/reconnect/dead";
 import { reconnectSession } from "../auth/reconnect/runner";
@@ -30,57 +30,6 @@ function isReplayableBody(body: RequestInit["body"]): boolean {
   );
 }
 
-// Refresh a few seconds before the actual expiry to absorb clock skew.
-const TOKEN_EXPIRY_SKEW_SECONDS = 30;
-
-async function refreshAccessToken(
-  userId: string,
-  integration: string,
-  data: TokenData
-): Promise<TokenData> {
-  if (!data.refreshToken) throw new Error("Token expired and no refresh_token stored");
-  const integ = registry.getIntegration(integration);
-  if (!integ || integ.auth.type !== "oauth2") {
-    throw new Error("Cannot refresh non-oauth2 integration");
-  }
-  const creds = getPluginOAuthCreds(integration);
-  if (!creds) throw new Error(`OAuth client not configured for ${integration}`);
-
-  const body = new URLSearchParams({
-    grant_type: "refresh_token",
-    client_id: creds.clientId,
-    refresh_token: data.refreshToken,
-  });
-  if (creds.clientSecret) body.set("client_secret", creds.clientSecret);
-
-  const { tokenUrl } = resolveOAuthUrls(integ.auth, data.config);
-  const res = await fetch(tokenUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body,
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Refresh failed ${res.status}: ${body.slice(0, 200)}`);
-  }
-  const tokens = (await res.json()) as {
-    access_token: string;
-    refresh_token?: string;
-    expires_in?: number;
-  };
-  const refreshed: TokenData = {
-    accessToken: tokens.access_token,
-    refreshToken: tokens.refresh_token ?? data.refreshToken,
-    expiresAt: tokens.expires_in
-      ? Math.floor(Date.now() / 1000) + tokens.expires_in
-      : undefined,
-    scopes: data.scopes,
-    config: data.config,
-  };
-  await storeToken(userId, integration, refreshed);
-  return refreshed;
-}
-
 export interface ToolContext {
   userId: string;
   getToken(): Promise<string>;
@@ -97,10 +46,11 @@ const atlassianCloudIdCache = new Map<string, string>();
 async function resolveAtlassianCloudId(
   accessToken: string,
   product: "jira" | "confluence"
-): Promise<string> {
+): Promise<string | Response> {
   const res = await fetch("https://api.atlassian.com/oauth/token/accessible-resources", {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
+  if (res.status === 401) return res;
   if (!res.ok) throw new Error(`accessible-resources ${res.status}`);
   const sites = (await res.json()) as Array<{ id: string; scopes?: string[]; url?: string }>;
   const needle = product === "jira" ? "jira" : "confluence";
@@ -136,9 +86,11 @@ export async function createContext(userId: string, integration: string): Promis
         tokenData = await getToken(userId, integration);
         if (!tokenData) throw new Error("Not connected");
       }
-      const now = Math.floor(Date.now() / 1000);
-      if (tokenData.expiresAt && tokenData.expiresAt - TOKEN_EXPIRY_SKEW_SECONDS <= now) {
-        tokenData = await refreshAccessToken(userId, integration, tokenData);
+      if (isExpiring(tokenData)) {
+        if (registry.getIntegration(integration)?.auth.type !== "oauth2") {
+          throw new Error("Cannot refresh non-oauth2 integration");
+        }
+        tokenData = await refreshToken(userId, integration, tokenData.accessToken);
       }
       return tokenData.accessToken;
     },
@@ -217,26 +169,46 @@ export async function createContext(userId: string, integration: string): Promis
         return retried;
       }
 
-      const token = await ctx.getToken();
-      headers.set("Authorization", `Bearer ${token}`);
-
-      let resolvedUrl = url;
-      const atlassianMatch = url.match(/^https:\/\/api\.atlassian\.com\/ex\/(jira|confluence)\/cloud-id\//);
-      if (atlassianMatch) {
-        const product = atlassianMatch[1] as "jira" | "confluence";
-        const cacheKey = `${userId}:${product}`;
-        let cloudId = atlassianCloudIdCache.get(cacheKey);
-        if (!cloudId) {
-          cloudId = await resolveAtlassianCloudId(token, product);
-          atlassianCloudIdCache.set(cacheKey, cloudId);
+      const send = async (token: string): Promise<Response> => {
+        headers.set("Authorization", `Bearer ${token}`);
+        let resolvedUrl = url;
+        const atlassianMatch = url.match(/^https:\/\/api\.atlassian\.com\/ex\/(jira|confluence)\/cloud-id\//);
+        if (atlassianMatch) {
+          const product = atlassianMatch[1] as "jira" | "confluence";
+          const cacheKey = `${userId}:${product}`;
+          let cloudId = atlassianCloudIdCache.get(cacheKey);
+          if (!cloudId) {
+            const resolved = await resolveAtlassianCloudId(token, product);
+            // A rejected token here is the same signal as a 401 on the call itself.
+            if (resolved instanceof Response) return resolved;
+            cloudId = resolved;
+            atlassianCloudIdCache.set(cacheKey, cloudId);
+          }
+          resolvedUrl = url.replace(`/ex/${product}/cloud-id/`, `/ex/${product}/${cloudId}/`);
         }
-        resolvedUrl = url.replace(
-          `/ex/${product}/cloud-id/`,
-          `/ex/${product}/${cloudId}/`
-        );
-      }
+        return fetch(resolvedUrl, { ...init, headers });
+      };
 
-      return fetch(resolvedUrl, { ...init, headers });
+      const token = await ctx.getToken();
+      const res = await send(token);
+
+      // Retry once on 401: the token died before its stated expiry (revoked
+      // and re-granted, no expires_in from the provider, clock skew, rotated
+      // elsewhere). A 401 means the upstream rejected the credentials before
+      // doing anything, so re-sending is safe for writes too, but only with a
+      // body we still hold. Only OAuth grants with a refresh token qualify;
+      // a 403 is a permission problem a refresh cannot fix.
+      if (
+        res.status !== 401 ||
+        integrationConfig?.auth.type !== "oauth2" ||
+        !tokenData?.refreshToken ||
+        !isReplayableBody(init?.body)
+      ) {
+        return res;
+      }
+      await res.body?.cancel().catch(() => undefined);
+      tokenData = await refreshToken(userId, integration, token);
+      return send(tokenData.accessToken);
     },
   };
   return ctx;

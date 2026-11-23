@@ -75,9 +75,23 @@ free.
   is persisted, and the previous `refresh_token` is kept if the provider does not
   return a new one.
 - Refresh throws if there is no stored `refresh_token`, if the integration is not
-  `oauth2`, or if no OAuth client is configured for it.
+  `oauth2`, or if no OAuth client is configured for it. A missing refresh token,
+  or a token endpoint answering 400/401 (`invalid_grant`), throws
+  `TokenRefreshError`, which the tool call reports as `NOT_CONNECTED` so the
+  agent or Space viewer knows to reconnect. Other refresh failures (5xx,
+  timeout) stay plain errors.
+- Only one refresh runs at a time per user and integration, across every
+  process: concurrent callers wait and reuse the new token. A caller that finds
+  the stored token already replaced uses it without refreshing. This matters for
+  providers that rotate refresh tokens, which reject a second refresh with the
+  same one.
 
-Most handlers never call `getToken()` — `ctx.http()` does it for them. Call it
+Most handlers never call `getToken()` — `ctx.http()` does it for them. For an
+`oauth2` integration with a stored refresh token, `ctx.http()` also retries once
+when the upstream answers **401**: it refreshes (sharing the refresh above) and
+re-sends the same request with the new token. A second 401 is returned as is.
+It does not retry a 403 (a permission problem), or a request whose body is a
+stream. A 401 from Atlassian's `accessible-resources` lookup counts the same way. Call it
 directly only when you need the raw token in a payload, as
 `github_get_clone_url` does when minting an `https://x-access-token:<token>@…`
 URL.
