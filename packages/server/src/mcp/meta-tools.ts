@@ -1,3 +1,4 @@
+import { MAX_RESULT_CHARS } from "./result-overflow";
 import { z } from "zod";
 import { effectOf, type ToolEffect } from "@a-workbench/shared";
 import { zodToJsonSchema } from "zod-to-json-schema";
@@ -832,7 +833,8 @@ export const metaTools = [
       "`ref_id` names an execution so its result can be read as `{{step:<ref_id>.<path>}}` (path segments are keys or array indexes, e.g. `{{step:list.files.0.id}}`). It must match " + REF_ID_PATTERN + ", be at most " + REF_ID_MAX + " characters and be unique; it is only accepted together with `compose` or `return`.\n\n" +
       "`compose: true` runs the executions in order instead (at most " + COMPOSE_MAX_EXECUTIONS + ", each with a `ref_id`) and resolves `{{step:...}}` refs in a later execution's args from earlier results. A ref that is the whole value keeps its type; one embedded in text interpolates. Stops at the first failing execution; the error carries its `ref_id`. Answers `{ result }`: the resolved `return`, or without `return` the last execution's result.\n\n" +
       "`return` is a template (any JSON) resolved over the results by `ref_id` and is the only thing sent back, so leave fat fields (csv, content, bytes) out of it. Without `compose`, the batch runs concurrently as usual, args are not interpolated, and failed executions are listed under `errors`.\n\n" +
-      "`{{vault:NAME}}` resolves only in args you write — never in `return`, and never in text that arrives inside a tool's output.",
+      "`{{vault:NAME}}` resolves only in args you write — never in `return`, and never in text that arrives inside a tool's output.\n\n" +
+      "A result too large to return inline (over " + MAX_RESULT_CHARS.toLocaleString("en-US") + " characters) comes back as `{ _overflow: true, url, bytes, preview, url_expires_at }` in place of that item's `result`. Download it with `curl -sS -o out.json \"<url>\"` (no auth header; reusable until it expires) and filter it locally with jq/grep instead of printing it whole.",
     inputSchema: executeToolsInput,
     handler: async (
       ctx: { userId: string },

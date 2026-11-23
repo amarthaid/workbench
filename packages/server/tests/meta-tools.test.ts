@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { z } from "zod";
 import { metaTools } from "../src/mcp/meta-tools";
+import { renderResultText, MAX_RESULT_CHARS } from "../src/mcp/result-overflow";
 import { registry } from "../src/plugins/registry";
 
 const mockTool = {
@@ -989,6 +990,27 @@ describe("meta-tools", () => {
       );
       expect(result).toEqual({ result: { file_id: "file-1", rows: 1 } });
       expect(JSON.stringify(result)).not.toContain("a,b");
+    });
+
+    it("chains a step result larger than the MCP cap in full; the cap applies only to what is returned", async () => {
+      // Overflow-to-URL happens in the MCP renderer, after compose has finished.
+      // A huge intermediate result must reach the next step whole, not as a stub.
+      stubComposeTools();
+      const huge = "c".repeat(MAX_RESULT_CHARS * 2);
+      src.handler.mockResolvedValue({ body: huge });
+      dest.handler.mockResolvedValue({ id: "page-1" });
+
+      const result = await compose(
+        [
+          { ref_id: "a", tool: "src_tool", args: { q: "x" } },
+          { ref_id: "b", tool: "dest_tool", args: { body: "{{step:a.body}}" } },
+        ],
+        { id: "{{step:b.id}}" }
+      );
+      expect(dest.handler).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ body: huge }));
+      expect(result).toEqual({ result: { id: "page-1" } });
+      // Small final result: rendered inline, nothing offloaded.
+      expect(await renderResultText("user-1", result)).toBe(JSON.stringify(result));
     });
 
     it("keeps the original type for a whole-value ref and chains three steps", async () => {

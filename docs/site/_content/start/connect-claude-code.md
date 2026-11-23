@@ -122,7 +122,8 @@ touches no integration.
 | Tool calls return `{"error":"NOT_CONNECTED"}` | the workbench user has no credential for that integration | `connect('<integration>')`, then `wait_for_connection` |
 | A tool "succeeds" but the content is an error object | plugin-tool failures are not JSON-RPC errors | read `results[i].error` in the response body |
 | Connected to the wrong workbench | two similarly named servers, e.g. staging and production | check the exact `url` in `claude mcp list` — each server is authorized separately |
-| Results end mid-JSON with a truncation notice | the 60,000-character result cap | narrow the request with the tool's `limit`, `fields`, or pagination arguments |
+| A result is `{"_overflow": true, "url": …}` | the result passed the 60,000-character cap | `curl -sS -o out.json "<url>"` before `url_expires_at`, then filter with `jq`/`grep` |
+| Results end mid-JSON with a truncation notice | the result passed the cap and could not be stored (file size or workspace quota) | narrow the request with the tool's `limit`, `fields`, or pagination arguments |
 
 ## What Claude Code sees
 

@@ -1,18 +1,8 @@
 import { metaTools, metaToolSchemas } from "./meta-tools";
+import { renderResultText } from "./result-overflow";
 
-// Upstream APIs can return arbitrarily large payloads and plugin handlers
-// mostly pass them through; without a cap a single tools/call can blow the
-// caller's context window. Truncated output is no longer valid JSON — the
-// notice tells the model to narrow the request instead of re-parsing.
-export const MAX_RESULT_CHARS = 60_000;
-
-export function capResultText(text: string): string {
-  if (text.length <= MAX_RESULT_CHARS) return text;
-  return (
-    text.slice(0, MAX_RESULT_CHARS) +
-    `\n…[result truncated: ${text.length} chars total, showing first ${MAX_RESULT_CHARS}. Narrow the request (limit/fields/pagination) to get complete data.]`
-  );
-}
+// Result size cap and overflow-to-URL live in ./result-overflow.
+export { MAX_RESULT_CHARS } from "./result-overflow";
 
 export async function handleMcpRequest(body: Record<string, unknown>, userId: string): Promise<Record<string, unknown> | null> {
   const { method, params, id } = body;
@@ -102,7 +92,7 @@ export async function handleMcpRequest(body: Record<string, unknown>, userId: st
     const images = collectImages(result);
     const content = images.length
       ? images.map((img) => ({ type: "image", data: img.data, mimeType: img.mimeType }))
-      : [{ type: "text", text: capResultText(JSON.stringify(result)) }];
+      : [{ type: "text", text: await renderResultText(userId, result) }];
 
     return {
       jsonrpc: "2.0",
