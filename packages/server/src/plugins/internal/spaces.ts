@@ -12,6 +12,7 @@ import { isAdminEmail } from "../../auth/admin";
 import { getUserById } from "../../auth/users";
 import { mint } from "../../spaces/pending";
 import {
+  changeShares,
   deleteSpace,
   getShares,
   getSpace,
@@ -102,7 +103,7 @@ const tools: PluginTool[] = [
     description:
       "Create or replace a Space: a live web app at /s/<name> in the workbench portal that calls integrations as the viewer. " +
       "`tools` lists the fully-qualified registry tool names the page may call (find them with search_tools; internal plugins and custom apps are refused with TOOL_NOT_ALLOWED). " +
-      "`visibility`: 'private' (only you), 'org' (any signed-in user of this workbench) or 'users' (the emails in `users`, required then). " +
+      "`visibility`: 'private' (only you), 'org' (any signed-in user of this workbench) or 'users' (the emails in `users`, required then). Deploying over an existing Space replaces its share list with `users` (empty if omitted); to grant or revoke one person use update_space with add_users / remove_users. " +
       "Metadata is saved at once; the files come from an upload: package your site directory as a gzip tarball and POST it to the returned uploadUrl within ~5 min, e.g. `tar czf - -C <dir> . | curl --data-binary @- -H 'Content-Type: application/gzip' <uploadUrl>`. " +
       "The archive root must contain index.html (NO_INDEX otherwise). A new Space is not visible until its first upload lands. Names are global and creator-locked (SPACE_NAME_TAKEN); lowercase letters, digits and hyphens. Limits: <=5 MiB decompressed, <=1000 files. " +
       HOW_TO_BUILD,
@@ -150,7 +151,8 @@ const tools: PluginTool[] = [
   {
     name: "update_space",
     description:
-      "Change a Space you own. `title`, `description`, `tools`, `visibility` and `users` apply immediately, without an upload (changing `tools` asks every viewer to approve again). " +
+      "Change a Space you own. `title`, `description`, `tools`, `visibility` and the share list apply immediately, without an upload (changing `tools` asks every viewer to approve again; `tools` replaces the whole list). " +
+      "Share list: `add_users` / `remove_users` add or remove emails and leave everyone else on the list; use them to grant or revoke one person. `users` REPLACES the entire list (anyone not in it loses access); it cannot be combined with `add_users` / `remove_users`. list_spaces shows the current list. " +
       "Pass `files: true` (or a `delete` list) to also get a patch upload: the archive you upload is overlaid onto the live files, `delete` paths are removed first, and files you do not mention stay. Upload the same way as deploy_space, e.g. `tar czf - -C <dir> index.html | curl --data-binary @- -H 'Content-Type: application/gzip' <uploadUrl>`. " +
       "Call list_space_files to see the current tree. The merged tree must fit <=5 MiB / <=1000 files and keep a root index.html. " +
       "Same build rules as deploy_space: load /s/_sdk/workbench.js, call tools through workbench.call, bundle or inline every asset, no network access.",
@@ -163,6 +165,8 @@ const tools: PluginTool[] = [
       tools: z.array(z.string()).optional(),
       visibility: z.enum(["private", "org", "users"]).optional(),
       users: z.array(z.string()).optional(),
+      add_users: z.array(z.string()).optional(),
+      remove_users: z.array(z.string()).optional(),
       files: z.boolean().optional(),
       delete: z.array(z.string()).optional(),
     }),
@@ -179,16 +183,39 @@ const tools: PluginTool[] = [
         if (!checked.ok) return checked.tool ? { error: checked.error, tool: checked.tool, message: checked.message } : { error: checked.error, message: checked.message };
         toolList = checked.tools;
       }
+      const incremental = args.add_users !== undefined || args.remove_users !== undefined;
+      if (incremental && args.users !== undefined) {
+        return {
+          error: "CONFLICTING_USERS",
+          message: "`users` replaces the whole share list; pass it alone, or use add_users / remove_users without it.",
+        };
+      }
       let emails: string[] | undefined;
       if (args.users !== undefined) {
         const e = checkEmails(args.users);
         if (!e.ok) return { error: e.error, message: e.message };
         emails = e.emails;
       }
+      let addEmails: string[] = [];
+      let removeEmails: string[] = [];
+      if (args.add_users !== undefined) {
+        const e = checkEmails(args.add_users);
+        if (!e.ok) return { error: e.error, message: e.message };
+        addEmails = e.emails;
+      }
+      if (args.remove_users !== undefined) {
+        const e = checkEmails(args.remove_users);
+        if (!e.ok) return { error: e.error, message: e.message };
+        removeEmails = e.emails;
+      }
       const visibility: Visibility = args.visibility ?? existing.visibility;
       if (visibility === "users") {
-        const shares = emails ?? (await getShares(args.name));
-        if (shares.length === 0) return { error: "USERS_REQUIRED", message: "visibility 'users' needs a non-empty `users` list" };
+        let shares = emails ?? (await getShares(args.name));
+        if (incremental) {
+          const removed = new Set(removeEmails);
+          shares = Array.from(new Set([...shares, ...addEmails])).filter((x) => !removed.has(x));
+        }
+        if (shares.length === 0) return { error: "USERS_REQUIRED", message: "visibility 'users' needs a non-empty share list" };
       }
       const deletes: string[] = [];
       for (const d of args.delete ?? []) {
@@ -207,6 +234,17 @@ const tools: PluginTool[] = [
       });
       if (!updated) return { error: "FORBIDDEN" };
       if (emails && !(await setShares(args.name, ctx.userId, emails))) return { error: "FORBIDDEN" };
+      if (incremental) {
+        const changed = await changeShares(
+          args.name,
+          ctx.userId,
+          { add: addEmails, remove: removeEmails },
+          visibility === "users"
+        );
+        if (changed === "forbidden") return { error: "FORBIDDEN" };
+        // Only reachable if a concurrent edit emptied the list after the check above.
+        if (changed === "empty") return { error: "USERS_REQUIRED", message: "visibility 'users' needs a non-empty share list" };
+      }
 
       const result: Record<string, unknown> = {
         name: updated.name,
@@ -229,7 +267,7 @@ const tools: PluginTool[] = [
   {
     name: "list_spaces",
     description:
-      "List the Spaces you own (name, title, visibility, tools, url, updatedAt; `live` is false until the first upload lands). Admins may pass `all: true` to list every Space with its owner's email.",
+      "List the Spaces you own (name, title, visibility, tools, users (the share list), url, updatedAt; `live` is false until the first upload lands). Admins may pass `all: true` to list every Space with its owner's email.",
     integration: SPACES_INTEGRATION_NAME,
     effect: "read",
     inputSchema: z.object({ all: z.boolean().optional() }),
@@ -238,29 +276,31 @@ const tools: PluginTool[] = [
         if (!(await isAdmin(ctx.userId))) return { error: "FORBIDDEN", message: "Only admins can list every Space." };
         const all = await listAllSpaces();
         return {
-          spaces: all.map((s) => ({
+          spaces: await Promise.all(all.map(async (s) => ({
             name: s.name,
             title: s.title,
             visibility: s.visibility,
             tools: s.tools,
+            users: await getShares(s.name),
             url: spaceUrl(s.name),
             updatedAt: s.updatedAt,
             live: hasFiles(s.name),
             ownerEmail: s.ownerEmail,
-          })),
+          }))),
         };
       }
       const own = await listOwnedSpaces(ctx.userId);
       return {
-        spaces: own.map((s) => ({
+        spaces: await Promise.all(own.map(async (s) => ({
           name: s.name,
           title: s.title,
           visibility: s.visibility,
           tools: s.tools,
+          users: await getShares(s.name),
           url: spaceUrl(s.name),
           updatedAt: s.updatedAt,
           live: hasFiles(s.name),
-        })),
+        }))),
       };
     },
   },

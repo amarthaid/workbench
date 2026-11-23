@@ -143,6 +143,7 @@ Open `url` from the result (`/s/pr-timeline` on the portal). Each viewer approve
 - Edit a file: `update_space` with `files: true`, then upload only the changed files. Unmentioned files stay.
 - Add a tool: `update_space` with the new `tools` list. Every viewer is asked to approve again.
 - Share with specific people: `update_space` with `visibility: "users"` and `users: ["dev@example.com"]`.
+- Add or remove one person: `update_space` with `add_users: ["qa@example.com"]` or `remove_users: [...]`. Everyone else stays on the list; `users` would replace it.
 
 ## Tips
 

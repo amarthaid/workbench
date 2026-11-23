@@ -131,6 +131,44 @@ describe("spaces plugin", () => {
     expect(r.applied.users).toEqual(["qa@example.com"]);
   });
 
+  it("update_space add_users / remove_users change one person and keep the rest", async () => {
+    await deploy("u1", { ...ok, visibility: "users", users: ["qa@example.com", "ops@example.com"] });
+    const added = await update("u1", { name: "s1", add_users: ["New@Example.com"] });
+    expect(added.applied.users).toEqual(["new@example.com", "ops@example.com", "qa@example.com"]);
+    const removed = await update("u1", { name: "s1", remove_users: ["ops@example.com"] });
+    expect(removed.applied.users).toEqual(["new@example.com", "qa@example.com"]);
+    expect(await getShares("s1")).toEqual(["new@example.com", "qa@example.com"]);
+  });
+
+  it("update_space refuses users together with add_users / remove_users", async () => {
+    await deploy("u1", { ...ok, visibility: "users", users: ["qa@example.com"] });
+    const r = await update("u1", { name: "s1", users: ["x@example.com"], add_users: ["y@example.com"] });
+    expect(r.error).toBe("CONFLICTING_USERS");
+    expect(await getShares("s1")).toEqual(["qa@example.com"]);
+  });
+
+  it("update_space validates add_users / remove_users before changing anything", async () => {
+    await deploy("u1", { ...ok, visibility: "users", users: ["qa@example.com"] });
+    expect((await update("u1", { name: "s1", title: "x", add_users: ["not-an-email"] })).error).toBe("INVALID_USERS");
+    // Removing the last person from a 'users' Space is refused, and the title is not applied either.
+    expect((await update("u1", { name: "s1", title: "x", remove_users: ["qa@example.com"] })).error).toBe("USERS_REQUIRED");
+    expect((await getSpace("s1"))!.title).toBe("Items");
+    expect(await getShares("s1")).toEqual(["qa@example.com"]);
+    // Switching to 'users' with add_users satisfies the requirement.
+    await update("u1", { name: "s1", visibility: "org", users: [] });
+    const r = await update("u1", { name: "s1", visibility: "users", add_users: ["dev@example.com"] });
+    expect(r.applied).toMatchObject({ visibility: "users", users: ["dev@example.com"] });
+  });
+
+  it("update_space add_users returns FORBIDDEN when the owner changed between check and write", async () => {
+    await deploy("u1", ok);
+    const stale = (await getSpace("s1"))!;
+    await db.run("UPDATE spaces SET owner_id = ? WHERE name = ?", ["u2", "s1"]);
+    vi.mocked(getSpace).mockResolvedValueOnce(stale);
+    expect((await update("u1", { name: "s1", add_users: ["x@example.com"] })).error).toBe("FORBIDDEN");
+    expect(await getShares("s1")).toEqual([]);
+  });
+
   it("update_space returns FORBIDDEN when the owner changed between check and write", async () => {
     await deploy("u1", ok);
     const stale = (await getSpace("s1"))!;
@@ -149,7 +187,7 @@ describe("spaces plugin", () => {
     writeSpaceFiles(tmp, "s1", { "index.html": "x" });
     const own = await list("u1", {});
     expect(own.spaces).toHaveLength(1);
-    expect(own.spaces[0]).toMatchObject({ name: "s1", title: "Items", visibility: "org", tools: ["acme_list_items"], url: `${config.PORTAL_URL}/s/s1`, live: true });
+    expect(own.spaces[0]).toMatchObject({ name: "s1", title: "Items", visibility: "org", tools: ["acme_list_items"], users: [], url: `${config.PORTAL_URL}/s/s1`, live: true });
     expect(own.spaces[0].ownerEmail).toBeUndefined();
     expect((await list("u1", { all: true })).error).toBe("FORBIDDEN");
     const all = await list("admin", { all: true });
