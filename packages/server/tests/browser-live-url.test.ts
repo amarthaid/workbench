@@ -30,7 +30,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   ensureMock.mockResolvedValue({ userId: "u1", cdpToken: "ctok" });
   signMock.mockResolvedValue("jwt-xyz");
-  createPendingMock.mockReturnValue({ connectionId: "conn-1", status: "PENDING" });
+  createPendingMock.mockResolvedValue({ connectionId: "conn-1", status: "PENDING" });
 });
 
 describe("browser_live_url", () => {

@@ -30,10 +30,10 @@ vi.mock("../src/auth/browser-session", () => ({
 }));
 
 vi.mock("../src/auth/connections", () => ({
-  createPending: vi.fn(() => ({ connectionId: "conn-1", status: "PENDING" })),
-  getPending: vi.fn(),
+  createPending: vi.fn(async () => ({ connectionId: "conn-1", status: "PENDING" })),
+  getPending: vi.fn(async () => undefined),
   reapOne: vi.fn(async () => undefined),
-  markConnected: vi.fn(),
+  markConnected: vi.fn(async () => undefined),
 }));
 
 vi.mock("../src/auth/connect-token", () => ({

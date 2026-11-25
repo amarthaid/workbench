@@ -73,10 +73,10 @@ vi.mock("../src/auth/browser-session", () => ({
 }));
 
 vi.mock("../src/auth/connections", () => ({
-  createPending: vi.fn(() => ({ connectionId: "conn-1", status: "PENDING" })),
-  getPending: vi.fn(),
+  createPending: vi.fn(async () => ({ connectionId: "conn-1", status: "PENDING" })),
+  getPending: vi.fn(async () => undefined),
   reapOne: vi.fn(async () => undefined),
-  markConnected: vi.fn(),
+  markConnected: vi.fn(async () => undefined),
 }));
 
 vi.mock("../src/auth/connect-token", () => ({
@@ -807,7 +807,7 @@ describe("meta-tools", () => {
   describe("wait_for_connection", () => {
     it("returns CONNECTED when the record is connected", async () => {
       const { getPending } = await import("../src/auth/connections");
-      vi.mocked(getPending).mockReturnValue({ status: "CONNECTED", userId: "user-1" } as any);
+      vi.mocked(getPending).mockResolvedValue({ status: "CONNECTED", userId: "user-1" } as any);
       const tool = findTool("wait_for_connection");
       const result = await tool.handler({ userId: "user-1" }, { connectionId: "conn-1", timeoutSec: 1 });
       expect(result.status).toBe("CONNECTED");
@@ -815,7 +815,7 @@ describe("meta-tools", () => {
 
     it("returns TIMEOUT and reaps when never connected", async () => {
       const { getPending, reapOne } = await import("../src/auth/connections");
-      vi.mocked(getPending).mockReturnValue({ status: "PENDING", userId: "user-1" } as any);
+      vi.mocked(getPending).mockResolvedValue({ status: "PENDING", userId: "user-1" } as any);
       const tool = findTool("wait_for_connection");
       const result = await tool.handler({ userId: "user-1" }, { connectionId: "conn-1", timeoutSec: 1 });
       expect(result.status).toBe("TIMEOUT");
@@ -824,7 +824,7 @@ describe("meta-tools", () => {
 
     it("returns EXPIRED when the record is expired", async () => {
       const { getPending } = await import("../src/auth/connections");
-      vi.mocked(getPending).mockReturnValue({ status: "EXPIRED", userId: "user-1" } as any);
+      vi.mocked(getPending).mockResolvedValue({ status: "EXPIRED", userId: "user-1" } as any);
       const tool = findTool("wait_for_connection");
       const result = await tool.handler({ userId: "user-1" }, { connectionId: "conn-1", timeoutSec: 1 });
       expect(result.status).toBe("EXPIRED");
@@ -832,7 +832,7 @@ describe("meta-tools", () => {
 
     it("returns error for unknown connectionId", async () => {
       const { getPending } = await import("../src/auth/connections");
-      vi.mocked(getPending).mockReturnValue(undefined);
+      vi.mocked(getPending).mockResolvedValue(undefined);
       const tool = findTool("wait_for_connection");
       const result = await tool.handler({ userId: "user-1" }, { connectionId: "nope", timeoutSec: 1 });
       expect(result.error).toBe("Unknown connectionId");
@@ -840,7 +840,7 @@ describe("meta-tools", () => {
 
     it("rejects access to another user's connection (IDOR)", async () => {
       const { getPending } = await import("../src/auth/connections");
-      vi.mocked(getPending).mockReturnValue({ status: "CONNECTED", userId: "other-user" } as any);
+      vi.mocked(getPending).mockResolvedValue({ status: "CONNECTED", userId: "other-user" } as any);
       const tool = findTool("wait_for_connection");
       const result = await tool.handler({ userId: "user-1" }, { connectionId: "conn-1", timeoutSec: 1 });
       expect(result.error).toBe("Unknown connectionId");

@@ -646,7 +646,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
 
     try {
       const { userId } = await handlePluginCallback(integration, code, state, binding);
-      markConnected(userId, integration);
+      await markConnected(userId, integration);
       return result("ok");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -676,7 +676,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       }
       await storeCookies(user.userId, integration, data);
       await clearFailureIfPortal(request, user.userId, integration);
-      markConnected(user.userId, integration);
+      await markConnected(user.userId, integration);
       markConnectEnded(user.userId);
       return { success: true, cookieCount: data.cookies.length };
     } catch (err) {
@@ -737,7 +737,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       await storeCookies(user.userId, integration, data);
       // Import accepts an API key: only a portal session ends the cooldown.
       await clearFailureIfPortal(request, user.userId, integration);
-      markConnected(user.userId, integration);
+      await markConnected(user.userId, integration);
       markConnectEnded(user.userId);
       return { success: true, cookieCount: data.cookies.length };
     }
@@ -781,7 +781,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     try {
       const s = await defaultTab(user.userId);
       if (url) await navigate(s, url);
-      const rec = createPending({
+      const rec = await createPending({
         userId: user.userId,
         integration: "__browser__",
         // "cookie" is a stand-in: ConnectionType has no browser member, and
@@ -840,11 +840,11 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(403).send({ error: "ACCOUNT_MISMATCH", integration: payload.integration });
     }
 
-    const rec = getPending(payload.connectionId);
+    const rec = await getPending(payload.connectionId);
     if (!rec || rec.userId !== payload.userId) {
       return reply.status(410).send({ error: "LINK_CONSUMED" });
     }
-    if (!redeemPending(payload.connectionId)) {
+    if (!(await redeemPending(payload.connectionId))) {
       return reply.status(410).send({ error: "LINK_CONSUMED" });
     }
 
@@ -927,7 +927,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       }
       await storeCookies(user.userId, payload.integration, data);
       await clearFailureIfPortal(request, user.userId, payload.integration);
-      markConnected(user.userId, payload.integration);
+      await markConnected(user.userId, payload.integration);
       markConnectEnded(user.userId);
       return { success: true, cookieCount: data.cookies.length };
     } catch (err) {
@@ -1191,7 +1191,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
 
     try {
       const { userId } = await handleCustomAppCallback(app, code, state, binding);
-      markConnected(userId, integration);
+      await markConnected(userId, integration);
       invalidateIndex(userId);
       return result("ok");
     } catch (err) {

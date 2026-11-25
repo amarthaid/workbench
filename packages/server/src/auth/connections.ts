@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { db } from "../db";
 
 export type ConnectionType = "oauth2" | "cookie" | "apikey";
 export type ConnectionStatus = "PENDING" | "CONNECTED" | "EXPIRED";
@@ -20,18 +21,108 @@ export interface PendingConnection {
   redeemedAt?: number;
 }
 
-const store = new Map<string, PendingConnection>();
+// Pending connections live in `pending_auth` under a sentinel `integration`,
+// like jot upload tokens (jots/pending.ts) and presign grants.
+//
+// They used to live in a process-local Map. Under CLUSTER_ENABLED every pod
+// forks one worker per CPU, and more pods run behind the HPA, so the agent's
+// connect() call minted the record in one process while the portal's redeem
+// (and the OAuth callback, and wait_for_connection) usually landed in another.
+// That process had never heard of the connectionId and answered LINK_CONSUMED:
+// every fresh link read as "already used". A restart lost them all too.
+//
+// Row layout: state = connectionId, user_id = owner, expires_at = link expiry
+// plus the terminal grace below (so the generic pending_auth sweep in
+// auth/oauth.ts does not drop a record a wait_for_connection still needs to
+// read as EXPIRED), session_data = the JSON record. Every read and write is
+// scoped to the sentinel.
+const SENTINEL = "__connect__";
+
+/** Grace window (seconds) a record outlives its link, so a waiter can read the terminal status. */
+const PRUNE_GRACE_SECONDS = 3600;
+
+interface StoredRecord {
+  integration: string;
+  type: ConnectionType;
+  status: ConnectionStatus;
+  createdAt: number;
+  expiresAt: number;
+  redeemedAt?: number;
+}
+
+interface Row {
+  state: string;
+  user_id: string;
+  session_data: string | null;
+}
 
 function nowSec(): number {
   return Math.floor(Date.now() / 1000);
 }
 
-export function createPending(args: {
+function decode(row: Row): PendingConnection | undefined {
+  let rec: StoredRecord;
+  try {
+    rec = JSON.parse(row.session_data ?? "") as StoredRecord;
+  } catch {
+    return undefined;
+  }
+  if (!rec || typeof rec.integration !== "string") return undefined;
+  // A PENDING record past its expiry reads as EXPIRED whether or not the
+  // reaper has run yet: the reaper is an optimisation, not the source of truth.
+  const status: ConnectionStatus =
+    rec.status === "PENDING" && rec.expiresAt <= nowSec() ? "EXPIRED" : rec.status;
+  return {
+    connectionId: row.state,
+    userId: row.user_id,
+    integration: rec.integration,
+    type: rec.type,
+    status,
+    createdAt: rec.createdAt,
+    expiresAt: rec.expiresAt,
+    ...(rec.redeemedAt !== undefined ? { redeemedAt: rec.redeemedAt } : {}),
+  };
+}
+
+function encode(rec: PendingConnection): string {
+  const stored: StoredRecord = {
+    integration: rec.integration,
+    type: rec.type,
+    status: rec.status,
+    createdAt: rec.createdAt,
+    expiresAt: rec.expiresAt,
+    ...(rec.redeemedAt !== undefined ? { redeemedAt: rec.redeemedAt } : {}),
+  };
+  return JSON.stringify(stored);
+}
+
+async function readRow(connectionId: string): Promise<Row | undefined> {
+  return db.get<Row>(
+    "SELECT state, user_id, session_data FROM pending_auth WHERE state = ? AND integration = ?",
+    [connectionId, SENTINEL]
+  );
+}
+
+/**
+ * Compare-and-swap on the stored JSON: the write lands only if the row still
+ * holds exactly what we read. Two processes racing on the same record both
+ * read the same text, the database serialises the updates, and exactly one
+ * reports a changed row.
+ */
+async function swap(connectionId: string, before: string, after: string): Promise<boolean> {
+  const { changes } = await db.run(
+    "UPDATE pending_auth SET session_data = ? WHERE state = ? AND integration = ? AND session_data = ?",
+    [after, connectionId, SENTINEL, before]
+  );
+  return changes === 1;
+}
+
+export async function createPending(args: {
   userId: string;
   integration: string;
   type: ConnectionType;
   ttlSeconds: number;
-}): PendingConnection {
+}): Promise<PendingConnection> {
   const createdAt = nowSec();
   const rec: PendingConnection = {
     connectionId: randomUUID(),
@@ -42,85 +133,93 @@ export function createPending(args: {
     createdAt,
     expiresAt: createdAt + args.ttlSeconds,
   };
-  store.set(rec.connectionId, rec);
+  await db.run(
+    "INSERT INTO pending_auth (state, user_id, integration, expires_at, session_data) VALUES (?, ?, ?, ?, ?)",
+    [rec.connectionId, rec.userId, SENTINEL, rec.expiresAt + PRUNE_GRACE_SECONDS, encode(rec)]
+  );
   return rec;
 }
 
-export function getPending(connectionId: string): PendingConnection | undefined {
-  return store.get(connectionId);
+export async function getPending(connectionId: string): Promise<PendingConnection | undefined> {
+  if (typeof connectionId !== "string" || connectionId === "") return undefined;
+  const row = await readRow(connectionId);
+  return row ? decode(row) : undefined;
 }
 
 /**
  * Spend a connect link. Returns the record on the first call and stamps
  * `redeemedAt`; returns null for an unknown, expired, or already-redeemed
  * connectionId. Callers must treat null as "link consumed" and do no work.
+ * Single use holds across every worker and replica: the stamp is a
+ * compare-and-swap in the database.
  */
-export function redeemPending(connectionId: string): PendingConnection | null {
-  const rec = store.get(connectionId);
+export async function redeemPending(connectionId: string): Promise<PendingConnection | null> {
+  const row = await readRow(connectionId);
+  if (!row || row.session_data === null) return null;
+  const rec = decode(row);
   if (!rec) return null;
   if (rec.redeemedAt !== undefined) return null;
-  if (rec.expiresAt <= nowSec()) return null;
-  rec.redeemedAt = nowSec();
-  return rec;
+  if (rec.status !== "PENDING") return null;
+  const redeemed: PendingConnection = { ...rec, redeemedAt: nowSec() };
+  if (!(await swap(connectionId, row.session_data, encode(redeemed)))) return null;
+  return redeemed;
 }
 
 /**
  * Flip the newest PENDING record for (userId, integration) to CONNECTED.
  * Called from the cookie capture handler and the oauth callback handler.
  *
- * Resolution is by (userId, integration) — NOT by connectionId — because the
+ * Resolution is by (userId, integration), NOT by connectionId, because the
  * capture/oauth-callback handlers don't carry the originating connectionId.
  * "Newest wins" is deliberate: on the rare same-user/same-integration
  * concurrent connect, the most recent attempt is the one marked CONNECTED.
- * Impact is benign (both records belong to the same user/target). The `>=`
- * tiebreak picks the last-inserted record on a same-second createdAt tie
- * (Map iteration is insertion-ordered), i.e. latest-inserted.
+ * Impact is benign (both records belong to the same user/target).
  */
-export function markConnected(userId: string, integration: string): void {
-  let newest: PendingConnection | undefined;
-  for (const rec of store.values()) {
-    if (rec.userId === userId && rec.integration === integration && rec.status === "PENDING") {
-      if (!newest || rec.createdAt >= newest.createdAt) newest = rec;
-    }
+export async function markConnected(userId: string, integration: string): Promise<void> {
+  const rows = await db.all<Row>(
+    "SELECT state, user_id, session_data FROM pending_auth WHERE integration = ? AND user_id = ?",
+    [SENTINEL, userId]
+  );
+  let newest: { row: Row; rec: PendingConnection } | undefined;
+  for (const row of rows) {
+    const rec = decode(row);
+    if (!rec || rec.integration !== integration || rec.status !== "PENDING") continue;
+    if (!newest || rec.createdAt >= newest.rec.createdAt) newest = { row, rec };
   }
-  if (newest) newest.status = "CONNECTED";
+  if (!newest || newest.row.session_data === null) return;
+  await swap(newest.rec.connectionId, newest.row.session_data, encode({ ...newest.rec, status: "CONNECTED" }));
 }
 
-/** Grace window (seconds) before a terminal record is pruned from the store. */
-const PRUNE_GRACE_SECONDS = 3600;
-
 /**
- * Sweep: any PENDING record past expiry → mark EXPIRED.
- * Then prune terminal records (CONNECTED/EXPIRED) whose expiry is older than the
- * grace window, so the store doesn't grow unbounded in a long-running server.
- * The grace (1h) sits well beyond any wait_for_connection timeout (max 900s), so
- * an in-flight wait can still read a freshly-EXPIRED record before it's pruned.
+ * Sweep: mark PENDING records past expiry EXPIRED, then drop records whose
+ * link expired more than the grace window ago. Every process runs this; the
+ * statements are idempotent, so overlapping sweeps are harmless.
  */
 export async function reapExpired(): Promise<void> {
   const t = nowSec();
-  const pruneCutoff = t - PRUNE_GRACE_SECONDS;
-  const toDelete: string[] = [];
-  for (const rec of store.values()) {
-    if (rec.status === "PENDING" && rec.expiresAt <= t) {
-      rec.status = "EXPIRED";
-    }
-    if (
-      (rec.status === "CONNECTED" || rec.status === "EXPIRED") &&
-      rec.expiresAt <= pruneCutoff
-    ) {
-      toDelete.push(rec.connectionId);
+  const rows = await db.all<Row>(
+    "SELECT state, user_id, session_data FROM pending_auth WHERE integration = ?",
+    [SENTINEL]
+  );
+  for (const row of rows) {
+    const rec = decode(row);
+    if (!rec || row.session_data === null) continue;
+    // decode() already reports an overdue PENDING as EXPIRED; persist that.
+    const storedStatus = (JSON.parse(row.session_data) as StoredRecord).status;
+    if (rec.status === "EXPIRED" && storedStatus === "PENDING") {
+      await swap(rec.connectionId, row.session_data, encode(rec));
     }
   }
-  for (const id of toDelete) {
-    store.delete(id);
-  }
+  await db.run("DELETE FROM pending_auth WHERE integration = ? AND expires_at <= ?", [SENTINEL, t]);
 }
 
-/** Immediately reap one connection (used by wait_for_connection timeout). */
+/** Immediately expire one connection (used by wait_for_connection timeout). */
 export async function reapOne(connectionId: string): Promise<void> {
-  const rec = store.get(connectionId);
+  const row = await readRow(connectionId);
+  if (!row || row.session_data === null) return;
+  const rec = decode(row);
   if (!rec || rec.status !== "PENDING") return;
-  rec.status = "EXPIRED";
+  await swap(connectionId, row.session_data, encode({ ...rec, status: "EXPIRED" }));
 }
 
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -128,7 +227,7 @@ let timer: ReturnType<typeof setInterval> | null = null;
 export function startReaper(intervalMs = 60_000): void {
   if (timer) return;
   timer = setInterval(() => {
-    void reapExpired();
+    void reapExpired().catch((e) => console.warn("[connect] pending reaper failed:", e));
   }, intervalMs);
   timer.unref?.();
 }
@@ -140,7 +239,7 @@ export function stopReaper(): void {
   }
 }
 
-/** Test-only: wipe the store. */
-export function _clearAll(): void {
-  store.clear();
+/** Test-only: wipe every pending connection. */
+export async function _clearAll(): Promise<void> {
+  await db.run("DELETE FROM pending_auth WHERE integration = ?", [SENTINEL]);
 }
