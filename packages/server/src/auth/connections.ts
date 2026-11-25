@@ -25,7 +25,7 @@ export interface PendingConnection {
 // like jot upload tokens (jots/pending.ts) and presign grants.
 //
 // They used to live in a process-local Map. Under CLUSTER_ENABLED every pod
-// forks one worker per CPU, and more pods run behind the HPA, so the agent's
+// forks one worker per CPU, and a deployment may run several replicas, so the agent's
 // connect() call minted the record in one process while the portal's redeem
 // (and the OAuth callback, and wait_for_connection) usually landed in another.
 // That process had never heard of the connectionId and answered LINK_CONSUMED:

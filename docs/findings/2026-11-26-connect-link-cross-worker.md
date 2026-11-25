@@ -11,8 +11,8 @@ used"** almost every time, even though nobody had opened it before.
 ## Cause
 
 Pending connections (`auth/connections.ts`) lived in a module-level `Map`.
-Under `CLUSTER_ENABLED` every pod forks one worker per CPU, and the HPA can
-run several pods. The agent's `connect()` minted the record in one process;
+Under `CLUSTER_ENABLED` every pod forks one worker per CPU, and a deployment
+may run several replicas. The agent's `connect()` minted the record in one process;
 the portal's `POST /api/connect/redeem` was load-balanced to another. That
 process had never seen the `connectionId`, `getPending` returned nothing, and
 the route answered `410 LINK_CONSUMED`, which the portal renders as "Link
