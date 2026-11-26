@@ -294,6 +294,9 @@ const executeToolsInput = z
 
 const NO_RECONNECT = { autoReconnect: false } as const;
 
+// Runs as `userId` with that user's full power: vault, custom apps, cookie
+// auto-reconnect. Never call it on someone else's behalf (a delegated Space
+// call): use executeDelegated, which drops those and records the actor.
 export async function executeSingle(
   userId: string,
   toolName: string,
