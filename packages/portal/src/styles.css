@@ -1555,6 +1555,13 @@ body {
 .space-warn-title { font-size: 13px; font-weight: 600; color: var(--warn); }
 .space-warn-text { font-size: 13px; color: var(--text-2); }
 .space-warn-actions { display: flex; justify-content: flex-end; }
+.space-share-tabs { margin-bottom: var(--s-16); border-bottom: 1px solid var(--border); }
+.space-share-tabs .ui-tab { gap: var(--s-4); }
+.space-share-note { display: grid; gap: var(--s-8); padding: var(--s-12); margin: var(--s-12) 0; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface); }
+.space-share-note.is-dashed { border-style: dashed; background: none; }
+.space-share-note .space-tool-groups { margin-top: var(--s-4); }
+.space-share-status { display: flex; align-items: center; gap: var(--s-8); flex-wrap: wrap; font-size: 13px; color: var(--text-2); margin: var(--s-12) 0 var(--s-8); }
+.space-share-link { background: none; border: 0; padding: 0; font: inherit; font-size: 13px; color: var(--accent); cursor: pointer; text-decoration: underline; }
 .space-delegate-confirm { display: grid; gap: var(--s-12); font-size: 14px; color: var(--text-2); }
 .space-delegate-confirm strong { color: var(--text); }
 

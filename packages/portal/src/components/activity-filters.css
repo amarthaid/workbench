@@ -1,0 +1,71 @@
+/* Activity filters, comboboxes and detail drawer. Built from the tokens and
+   .ui-* classes in styles.css; only what those do not cover lives here. */
+
+/* Filter bar */
+.af-bar { display: flex; flex-wrap: wrap; gap: var(--s-8); align-items: center; margin-bottom: var(--s-8); }
+.af-range { display: inline-flex; }
+.af-range .ui-button { border-radius: 0; margin-left: -1px; }
+.af-range .ui-button:first-child { border-radius: var(--radius) 0 0 var(--radius); margin-left: 0; }
+.af-range .ui-button:last-child { border-radius: 0 var(--radius) var(--radius) 0; }
+.af-range .ui-button.is-on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); position: relative; z-index: 1; }
+.af-custom { display: inline-flex; align-items: center; gap: var(--s-4); font-size: 13px; color: var(--text-3); }
+.af-custom .ui-input { width: auto; min-height: 32px; }
+.af-custom-error { font-size: 12px; color: var(--danger); }
+.af-popwrap { position: relative; margin-left: auto; }
+
+/* Popover */
+.af-pop { position: absolute; z-index: 20; top: calc(100% + 6px); right: 0; width: 360px; max-width: calc(100vw - 48px);
+  background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-lg, 8px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .16); display: grid; }
+.af-pop-body { padding: var(--s-16); display: grid; gap: var(--s-12); }
+.af-pop-body h3 { font-size: 14px; margin: 0; }
+.af-pop-foot { display: flex; justify-content: space-between; align-items: center; gap: var(--s-8); padding: var(--s-12) var(--s-16); border-top: 1px solid var(--border); }
+.af-pop .ui-input { width: 100%; min-height: 32px; }
+.af-field { display: grid; gap: 2px; }
+.af-lab { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: .05em; font-weight: 700; }
+.af-check { display: inline-flex; gap: var(--s-4); align-items: center; font-size: 13px; color: var(--text-2); cursor: pointer; }
+.af-sub { font-size: 12px; color: var(--text-3); display: inline-flex; align-items: center; gap: var(--s-8); white-space: nowrap; }
+
+/* Chips */
+.af-applied { display: flex; flex-wrap: wrap; gap: var(--s-4); align-items: center; margin: 0 0 var(--s-12); font-size: 13px; color: var(--text-3); }
+.af-chip { display: inline-flex; align-items: center; gap: var(--s-4); font-size: 13px; padding: 2px var(--s-4) 2px var(--s-8);
+  border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface); color: var(--text-2); }
+.af-chip button { border: 0; background: none; color: inherit; cursor: pointer; font: inherit; padding: 0 2px; }
+
+/* Combobox */
+.af-combo { position: relative; }
+.af-list { position: absolute; z-index: 5; top: calc(100% + 4px); left: 0; width: 100%; min-width: 240px; max-height: 280px; overflow-y: auto;
+  list-style: none; margin: 0; padding: var(--s-4); background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: var(--radius); box-shadow: 0 8px 24px rgba(0, 0, 0, .14); }
+.af-opt { display: flex; justify-content: space-between; align-items: center; gap: var(--s-12); padding: var(--s-4) var(--s-8);
+  border-radius: var(--radius); cursor: pointer; font-size: 13px; overflow-wrap: anywhere; }
+.af-opt.is-active { background: var(--bg-sunk); }
+.af-opt mark { background: var(--accent-soft, var(--bg-sunk)); color: inherit; font-weight: 600; border-radius: 2px; }
+.af-note { padding: var(--s-8); font-size: 13px; color: var(--text-3); }
+.af-hint { padding: var(--s-4) var(--s-8) 0; font-size: 12px; color: var(--text-3); border-top: 1px solid var(--border); margin-top: var(--s-4); }
+
+/* Clickable rows and the delegation line */
+.af-row { cursor: pointer; }
+.af-row:hover td { background: var(--bg-sunk); }
+.af-row.is-open td { background: var(--accent-soft, var(--bg-sunk)); }
+.af-link { border: 0; background: none; padding: 0; font: inherit; font-weight: 500; color: var(--text-2); cursor: pointer;
+  text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 2px; }
+.af-link:hover { color: var(--accent); text-decoration-color: var(--accent); }
+
+/* Drawer */
+.af-scrim { position: fixed; inset: 0; z-index: 40; background: rgba(0, 0, 0, .18); }
+.af-drawer { position: fixed; top: 0; right: 0; bottom: 0; z-index: 41; width: 440px; max-width: 100%; background: var(--surface);
+  border-left: 1px solid var(--border-strong); display: flex; flex-direction: column; animation: af-slide .25s cubic-bezier(.22, 1, .36, 1); }
+.af-drawer:focus { outline: none; }
+@keyframes af-slide { from { transform: translateX(100%); } to { transform: none; } }
+@media (prefers-reduced-motion: reduce) { .af-drawer { animation: none; } }
+.af-drawer-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--s-8); padding: var(--s-16); border-bottom: 1px solid var(--border); }
+.af-drawer-head h2 { font-size: 15px; margin: 0; }
+.af-drawer-body { flex: 1; overflow-y: auto; padding: var(--s-16); display: grid; gap: var(--s-16); align-content: start; }
+.af-drawer-foot { display: flex; justify-content: space-between; align-items: center; gap: var(--s-8); padding: var(--s-12) var(--s-16); border-top: 1px solid var(--border); }
+.af-sec h3 { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); margin: 0 0 var(--s-8); }
+.af-kv { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: var(--s-4) var(--s-12); font-size: 13px; margin: 0; }
+.af-kv dt { color: var(--text-3); }
+.af-kv dd { margin: 0; overflow-wrap: anywhere; }
+.af-err { color: var(--danger); font-size: 13px; background: var(--danger-soft); border: 1px solid var(--danger);
+  border-radius: var(--radius); padding: var(--s-8); overflow-wrap: anywhere; margin-top: var(--s-8); }
