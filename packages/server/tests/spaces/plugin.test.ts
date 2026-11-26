@@ -17,6 +17,7 @@ import { db } from "../../src/db";
 import { consume } from "../../src/spaces/pending";
 import { getShares, getSpace, grantConsent, kvPut, toolsHash, updateSpaceMeta } from "../../src/spaces/store";
 import { setPermission } from "../../src/permissions/store";
+import { auditLogger } from "../../src/audit/logger";
 import { spacesPlugin } from "../../src/plugins/internal/spaces";
 import { INTERNAL_PLUGIN_NAMES } from "../../src/plugins/internal-names";
 import { registerInternalPlugins } from "../../src/plugins/loader";
@@ -290,7 +291,7 @@ describe("spaces plugin: delegated access", () => {
     expect(await offRows()).toEqual([]);
     await deploy("u1", { ...ok, visibility: "private" });
     expect((await getSpace("s1"))!.accessMode).toBe("viewer");
-    expect((await offRows()).map((r) => r.error)).toEqual(["reason: audience set to only me"]);
+    expect((await offRows()).map((r) => [r.tool, r.error ?? null])).toEqual([["space:s1 (reason: audience set to only me)", null]]);
   });
 
   it("update_space to private resets with a reason", async () => {
@@ -298,7 +299,9 @@ describe("spaces plugin: delegated access", () => {
     await grantAndEnable();
     await update("u1", { name: "s1", visibility: "private" });
     expect((await getSpace("s1"))!.accessMode).toBe("viewer");
-    expect((await offRows()).map((r) => [r.action, r.error])).toEqual([["SPACE_DELEGATION_OFF", "reason: audience set to only me"]]);
+    expect((await offRows()).map((r) => [r.action, r.tool, r.error ?? null])).toEqual([
+      ["SPACE_DELEGATION_OFF", "space:s1 (reason: audience set to only me)", null],
+    ]);
   });
 
   it("update_space changing tools on a delegated Space is allowed and reports it paused", async () => {
@@ -313,6 +316,34 @@ describe("spaces plugin: delegated access", () => {
     const plain = await update("u1", { name: "s1", tools: ["acme_list_items"], title: "T2" });
     expect(plain.delegation_suspended).toBeUndefined();
     expect(plain.note).toBeUndefined();
+  });
+
+  it("a failed audit write does not fail update_space, and the mode is saved", async () => {
+    await deploy("u1", ok);
+    await grantAndEnable();
+    vi.spyOn(auditLogger, "log").mockRejectedValue(new Error("audit store down"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const r = await update("u1", { name: "s1", delegate_access: false });
+      expect(r.error).toBeUndefined();
+      expect((await getSpace("s1"))!.accessMode).toBe("viewer");
+      expect(err).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("delegation_active is the effective state; delegate_access stays the stored one", async () => {
+    await deploy("u1", ok);
+    await grantAndEnable();
+    expect((await list("u1", {})).spaces[0]).toMatchObject({ delegate_access: true, delegation_active: true });
+    expect((await update("u1", { name: "s1", title: "T2" })).applied).toMatchObject({ delegate_access: true, delegation_active: true });
+    expect(await deploy("u1", { ...ok, title: "T3" })).toMatchObject({ delegate_access: true, delegation_active: true });
+    await db.run("DELETE FROM user_permissions WHERE user_id = ?", ["u1"]);
+    expect((await list("u1", {})).spaces[0]).toMatchObject({ delegate_access: true, delegation_active: false });
+    expect((await list("admin", { all: true })).spaces[0]).toMatchObject({ delegate_access: true, delegation_active: false });
+    expect((await update("u1", { name: "s1", title: "T4" })).applied).toMatchObject({ delegate_access: true, delegation_active: false });
+    expect(await deploy("u1", { ...ok, title: "T5" })).toMatchObject({ delegate_access: true, delegation_active: false });
   });
 
   it("list_spaces shows delegate_access and delegation_suspended", async () => {

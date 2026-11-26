@@ -10,7 +10,7 @@ import { isInternalIntegration } from "../plugins/internal-names";
 import { executeSingle } from "../mcp/meta-tools";
 import { can } from "../permissions/store";
 import { canView, type Viewer } from "./access";
-import { delegationFor, mayEnableDelegation, recordDelegationChange } from "./delegation";
+import { delegationFor, mayEnableDelegation, recordDelegationChange, recordModeReset } from "./delegation";
 import {
   changeShares,
   delegationSuspended,
@@ -191,7 +191,9 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
         const space = await openable(request.params.name, viewer);
         if (!space) return notFound(reply);
         const mine = space.ownerId === viewer.userId;
-        const delegation = await delegationFor(space);
+        // Read the owner's permission once: for can_delegate and for the mode.
+        const ownerCanDelegate = mine ? await can(viewer.userId, "spaces.delegate_access") : undefined;
+        const delegation = await delegationFor(space, { ownerCanDelegate });
         // Delegated: the tools run with the owner's connections, so that is
         // what "connected" reports.
         const connectedAs = delegation.mode === "owner" ? delegation.runAs : viewer.userId;
@@ -236,13 +238,15 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           tools,
           consented: await hasConsent(space, viewer.userId),
           appUrl: `/s/${space.name}/app/${mintSig(space.name, viewer.userId)}/`,
-          delegate_access: space.accessMode === "owner",
-          delegation_suspended: delegationSuspended(space),
+          // The owner sees the stored mode; anyone else only whether it is in
+          // effect, so a viewer cannot infer why it is off.
+          delegate_access: mine ? space.accessMode === "owner" : delegation.mode === "owner",
+          delegation_suspended: mine
+            ? delegationSuspended(space)
+            : delegation.mode === "off" && delegation.reason === "tools_changed",
           delegation_off: delegation.mode === "off" ? { reason: delegation.reason, message: delegation.message } : null,
           // Owner only: the hash of the list shown, sent back to confirm it.
-          ...(mine
-            ? { tools_hash: toolsHash(space.tools), can_delegate: await can(viewer.userId, "spaces.delegate_access") }
-            : {}),
+          ...(mine ? { tools_hash: toolsHash(space.tools), can_delegate: ownerCanDelegate === true } : {}),
         };
       });
 
@@ -298,6 +302,9 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
         }
         const delegate = body.delegate_access as boolean | undefined;
         const reviewedHash = body.tools_hash as string | undefined;
+        if (delegate === true && reviewedHash === undefined) {
+          return fail(reply, 400, { code: "INVALID_ARGS", message: "tools_hash is required to turn on delegated access." });
+        }
 
         // Validate the outcome before writing anything.
         if (delegate === true) {
@@ -316,10 +323,15 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
         // while already on is the re-confirm after a tool change).
         let current: Space = space;
         const modeOff = delegate === false && space.accessMode === "owner";
-        if (visibility !== space.visibility || delegate === true || modeOff) {
+        // true on a Space already on, unpaused, for the same list: nothing to
+        // confirm (a double submit), so no confirm and no second ON row.
+        const reconfirm =
+          delegate === true &&
+          !(space.accessMode === "owner" && !delegationSuspended(space) && reviewedHash === toolsHash(space.tools));
+        if (visibility !== space.visibility || reconfirm || modeOff) {
           const updated = await updateSpaceMeta(space.name, viewer.userId, {
             visibility,
-            ...(delegate === true
+            ...(reconfirm
               ? { accessMode: "owner" as const, confirmDelegation: true, expectedToolsHash: reviewedHash }
               : delegate === false
                 ? { accessMode: "viewer" as const }
@@ -333,11 +345,10 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           }
           if (!updated) return fail(reply, 403, { code: "FORBIDDEN", message: "Only the owner can change who can open this Space." });
           current = updated.space;
-          if (delegate === true) {
+          if (reconfirm) {
             await recordDelegationChange(current, viewer.userId, "on");
           } else if (updated.modeReset) {
-            // Private forces it off; an explicit false is the owner's choice.
-            await recordDelegationChange(current, viewer.userId, "off", delegate === false ? undefined : "audience set to only me");
+            await recordModeReset(current, viewer.userId, delegate === false);
           }
         }
         let users = await getShares(space.name);

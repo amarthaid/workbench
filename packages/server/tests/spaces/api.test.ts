@@ -25,6 +25,7 @@ import { verifySig } from "../../src/spaces/sig";
 import { setPermission } from "../../src/permissions/store";
 import { storeToken } from "../../src/auth/tokens";
 import { registry } from "../../src/plugins/registry";
+import { auditLogger } from "../../src/audit/logger";
 import { _resetRateLimitForTest, _setNowForTest as setRateNow } from "../../src/spaces/rate-limit";
 import { handlers, registerFixtures } from "./fixtures";
 import { resetSpacesDb, seedUser, writeSpaceFiles } from "./helpers";
@@ -336,13 +337,14 @@ describe("delegated access in the portal API", () => {
     expect(await detail("u2")).toMatchObject({ delegate_access: true, delegation_off: null });
   });
 
-  it("enabling with a missing or stale tools_hash is 409 TOOLS_CHANGED and writes nothing", async () => {
+  it("enabling without tools_hash is 400, with a stale one 409 TOOLS_CHANGED; neither writes", async () => {
     await grant();
-    for (const payload of [{ delegate_access: true }, { delegate_access: true, tools_hash: toolsHash(["acme_list_items"]) }]) {
-      const res = await sharing("u1", { ...payload, visibility: "org" });
-      expect(res.statusCode).toBe(409);
-      expect(res.json()).toEqual({ code: "TOOLS_CHANGED", message: "The tool list changed. Review it again." });
-    }
+    const missing = await sharing("u1", { delegate_access: true, visibility: "org" });
+    expect(missing.statusCode).toBe(400);
+    expect(missing.json()).toEqual({ code: "INVALID_ARGS", message: "tools_hash is required to turn on delegated access." });
+    const stale = await sharing("u1", { delegate_access: true, tools_hash: toolsHash(["acme_list_items"]), visibility: "org" });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toEqual({ code: "TOOLS_CHANGED", message: "The tool list changed. Review it again." });
     const s = (await getSpace("s1"))!;
     expect(s).toMatchObject({ accessMode: "viewer", visibility: "users", delegatedToolsHash: null });
     expect(await delegationRows()).toEqual([]);
@@ -362,9 +364,9 @@ describe("delegated access in the portal API", () => {
     const res = await sharing("u1", { visibility: "private" });
     expect(res.json()).toMatchObject({ visibility: "private", delegate_access: false });
     expect((await getSpace("s1"))!.accessMode).toBe("viewer");
-    expect((await delegationRows()).map((r) => [r.action, r.error])).toEqual([
-      ["SPACE_DELEGATION_ON", null],
-      ["SPACE_DELEGATION_OFF", "reason: audience set to only me"],
+    expect((await delegationRows()).map((r) => [r.action, r.tool, r.error ?? null])).toEqual([
+      ["SPACE_DELEGATION_ON", "space:s1", null],
+      ["SPACE_DELEGATION_OFF", "space:s1 (reason: audience set to only me)", null],
     ]);
   });
 
@@ -375,9 +377,9 @@ describe("delegated access in the portal API", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ visibility: "users", delegate_access: false });
     expect((await getSpace("s1"))!).toMatchObject({ accessMode: "viewer", delegatedToolsHash: null });
-    expect((await delegationRows()).map((r) => [r.action, r.error])).toEqual([
-      ["SPACE_DELEGATION_ON", null],
-      ["SPACE_DELEGATION_OFF", null],
+    expect((await delegationRows()).map((r) => [r.action, r.tool, r.error ?? null])).toEqual([
+      ["SPACE_DELEGATION_ON", "space:s1", null],
+      ["SPACE_DELEGATION_OFF", "space:s1", null],
     ]);
     // Turning off what is already off writes nothing.
     await sharing("u1", { delegate_access: false });
@@ -401,8 +403,54 @@ describe("delegated access in the portal API", () => {
     await grant();
     await enable();
     await db.run("DELETE FROM user_permissions WHERE user_id = ?", ["u1"]);
-    expect(await detail("u2")).toMatchObject({ delegate_access: true, delegation_off: { reason: "turned_off" } });
-    expect((await detail("u1")).can_delegate).toBe(false);
+    const viewer = await detail("u2");
+    // Effective for a viewer: they cannot tell the owner lost the permission.
+    expect(viewer).toMatchObject({ delegate_access: false, delegation_suspended: false });
+    expect(viewer.delegation_off).toEqual({ reason: "turned_off", message: "This Space's shared access was turned off." });
+    // The owner sees the stored mode, and why it is off.
+    expect(await detail("u1")).toMatchObject({ delegate_access: true, can_delegate: false, delegation_off: { reason: "turned_off" } });
+  });
+
+  it("a no-op re-confirm (and a double submit) writes nothing and audits once", async () => {
+    await grant();
+    vi.mocked(updateSpaceMeta).mockClear();
+    const first = await enable();
+    const second = await enable();
+    expect(second.statusCode).toBe(200);
+    expect(second.json()).toEqual(first.json());
+    expect(vi.mocked(updateSpaceMeta)).toHaveBeenCalledTimes(1);
+    const third = await sharing("u1", { delegate_access: true, tools_hash: await hashNow(), visibility: "users" });
+    expect(third.json()).toMatchObject({ delegate_access: true, delegation_suspended: false });
+    expect(vi.mocked(updateSpaceMeta)).toHaveBeenCalledTimes(1);
+    expect((await delegationRows()).map((r) => r.action)).toEqual(["SPACE_DELEGATION_ON"]);
+    // Already on, with an audience change: the audience is written, no new ON row.
+    const widened = await sharing("u1", { delegate_access: true, tools_hash: await hashNow(), visibility: "org" });
+    expect(widened.json()).toMatchObject({ visibility: "org", delegate_access: true });
+    expect(await getSpace("s1")).toMatchObject({ visibility: "org", accessMode: "owner" });
+    expect((await delegationRows()).map((r) => r.action)).toEqual(["SPACE_DELEGATION_ON"]);
+  });
+
+  it("delegate_access true with a visibility change org -> users enables and audits once", async () => {
+    await grant();
+    await sharing("u1", { visibility: "org" });
+    const res = await sharing("u1", { visibility: "users", delegate_access: true, tools_hash: await hashNow() });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ visibility: "users", delegate_access: true });
+    expect(await getSpace("s1")).toMatchObject({ visibility: "users", accessMode: "owner" });
+    expect((await delegationRows()).map((r) => r.action)).toEqual(["SPACE_DELEGATION_ON"]);
+  });
+
+  it("a failed audit write after the mode is saved does not fail the request", async () => {
+    await grant();
+    vi.spyOn(auditLogger, "log").mockRejectedValue(new Error("audit store down"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const on = await enable();
+    expect(on.statusCode).toBe(200);
+    expect((await getSpace("s1"))!.accessMode).toBe("owner");
+    const off = await sharing("u1", { visibility: "private" });
+    expect(off.statusCode).toBe(200);
+    expect((await getSpace("s1"))!.accessMode).toBe("viewer");
+    expect(err).toHaveBeenCalledTimes(2);
   });
 
   it("validates delegate_access and tools_hash, and only the owner may set them", async () => {

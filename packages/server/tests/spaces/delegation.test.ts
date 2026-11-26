@@ -1,9 +1,16 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { auditLogger } from "../../src/audit/logger";
 import { db } from "../../src/db";
 import { setPermission } from "../../src/permissions/store";
 import { setUserDisabled } from "../../src/auth/user-status";
 import { getSpace, updateSpaceMeta, upsertSpace, toolsHash, type Space } from "../../src/spaces/store";
-import { delegationFor, mayEnableDelegation, recordDelegationChange } from "../../src/spaces/delegation";
+import {
+  PRIVATE_REASON,
+  delegationFor,
+  mayEnableDelegation,
+  recordDelegationChange,
+  recordModeReset,
+} from "../../src/spaces/delegation";
 import { acmePlugin } from "./fixtures";
 import { resetSpacesDb, seedUser } from "./helpers";
 
@@ -120,10 +127,43 @@ describe("recordDelegationChange", () => {
     ]);
   });
 
-  it("a forced OFF carries the reason", async () => {
+  it("a forced OFF carries the reason in the tool text, not in error", async () => {
     await upsertSpace({ name: "s1", ownerId: "u1", title: "T", tools: TOOLS, visibility: "org" });
-    await recordDelegationChange((await getSpace("s1"))!, "u1", "off", "audience set to only me");
-    expect((await rows())[0]).toMatchObject({ action: "SPACE_DELEGATION_OFF", error: "reason: audience set to only me" });
+    await recordDelegationChange((await getSpace("s1"))!, "u1", "off", PRIVATE_REASON);
+    const r = (await rows())[0];
+    expect(r).toMatchObject({ action: "SPACE_DELEGATION_OFF", tool: "space:s1 (reason: audience set to only me)" });
+    expect(r.error ?? null).toBeNull();
+  });
+
+  it("recordModeReset: forced reset carries the reason, an explicit off does not", async () => {
+    await recordModeReset({ name: "s1" }, "u1", false);
+    await recordModeReset({ name: "s1" }, "u1", true);
+    expect((await rows()).map((r) => [r.action, r.tool])).toEqual([
+      ["SPACE_DELEGATION_OFF", "space:s1 (reason: audience set to only me)"],
+      ["SPACE_DELEGATION_OFF", "space:s1"],
+    ]);
+  });
+
+  describe("when the audit write fails", () => {
+    afterEach(() => vi.restoreAllMocks());
+    it("logs a clear line and resolves", async () => {
+      vi.spyOn(auditLogger, "log").mockRejectedValueOnce(new Error("disk full"));
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      await expect(recordDelegationChange({ name: "s1" }, "u1", "off", PRIVATE_REASON)).resolves.toBeUndefined();
+      expect(err).toHaveBeenCalledTimes(1);
+      const line = err.mock.calls[0].map(String).join(" ");
+      for (const part of ["s1", "u1", "off", PRIVATE_REASON, "disk full"]) expect(line).toContain(part);
+    });
+  });
+});
+
+describe("delegationFor with a known permission", () => {
+  it("uses the caller's answer instead of reading it again", async () => {
+    const s = await delegated();
+    // Not granted in the table, but the caller already knows it is.
+    expect(await delegationFor(s, { ownerCanDelegate: true })).toEqual({ mode: "owner", runAs: "u1" });
+    await setPermission({ userId: "u1", capability: "spaces.delegate_access", effect: "allow", grantedBy: "admin" });
+    expect(await delegationFor(s, { ownerCanDelegate: false })).toMatchObject({ mode: "off", reason: "turned_off" });
   });
 });
 

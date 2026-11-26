@@ -11,7 +11,7 @@ import { safeRelPath } from "../../jots/paths";
 import { isAdminEmail } from "../../auth/admin";
 import { getUserById } from "../../auth/users";
 import { mint } from "../../spaces/pending";
-import { recordDelegationChange } from "../../spaces/delegation";
+import { delegationFor, recordModeReset } from "../../spaces/delegation";
 import {
   changeShares,
   delegationSuspended,
@@ -27,6 +27,7 @@ import {
   normalizeTools,
   setShares,
   toolsHash,
+  type Space,
   updateSpaceMeta,
   upsertSpace,
   type Visibility,
@@ -81,13 +82,18 @@ function checkTools(tools: unknown): ToolCheck {
 // Same validation the portal sharing endpoint uses.
 const checkEmails = parseEmails;
 
+// delegate_access is the stored setting; delegation_active is whether calls
+// run with the owner's access right now (off when paused, revoked, ...).
+async function delegationFields(s: Space): Promise<{ delegate_access: boolean; delegation_active: boolean }> {
+  return { delegate_access: s.accessMode === "owner", delegation_active: (await delegationFor(s)).mode === "owner" };
+}
+
 // An agent can read and turn off delegated access, never turn it on: that is
 // the owner's choice in the portal, where the full tool list is shown.
 const PORTAL_ONLY = {
   error: "DELEGATION_PORTAL_ONLY",
   message: "Delegated access can only be turned on by you in the portal (Space > Sharing).",
 };
-const PRIVATE_REASON = "audience set to only me";
 const SUSPENDED_NOTE = "Delegated access is paused until you confirm the new tool list in the portal.";
 
 const HOW_TO_BUILD =
@@ -106,7 +112,7 @@ const tools: PluginTool[] = [
       "Create or replace a Space: a live web app at /s/<name> in the workbench portal that calls integrations as the viewer (or with the owner's access, when the owner turned on delegated access). " +
       "`tools` lists the fully-qualified registry tool names the page may call (find them with search_tools; internal plugins and custom apps are refused with TOOL_NOT_ALLOWED). " +
       "`visibility`: 'private' (only you), 'org' (any signed-in user of this workbench) or 'users' (the emails in `users`, required then). Deploying over an existing Space replaces its share list with `users` (empty if omitted); to grant or revoke one person use update_space with add_users / remove_users. " +
-      "Delegated access (calls run with your connections) is turned on only by you in the portal; `delegate_access: false` turns it off, `true` is refused (DELEGATION_PORTAL_ONLY). A redeploy keeps the current setting unless the Space becomes private, which turns it off. " +
+      "Delegated access (calls run with your connections) is turned on only by you in the portal; `delegate_access: false` turns it off, `true` is refused (DELEGATION_PORTAL_ONLY). A redeploy keeps the current setting unless the Space becomes private, which turns it off. The result has `delegate_access` (stored) and `delegation_active` (in effect now). " +
       "Metadata is saved at once; the files come from an upload: package your site directory as a gzip tarball and POST it to the returned uploadUrl within ~5 min, e.g. `tar czf - -C <dir> . | curl --data-binary @- -H 'Content-Type: application/gzip' <uploadUrl>`. " +
       "The archive root must contain index.html (NO_INDEX otherwise). A new Space is not visible until its first upload lands. Names are global and creator-locked (SPACE_NAME_TAKEN); lowercase letters, digits and hyphens. Limits: <=5 MiB decompressed, <=1000 files. " +
       HOW_TO_BUILD,
@@ -150,7 +156,7 @@ const tools: PluginTool[] = [
       });
       if (saved.result === "taken") return { error: "SPACE_NAME_TAKEN" };
       if (saved.modeReset) {
-        await recordDelegationChange({ name: args.name }, ctx.userId, "off", args.delegate_access === false ? undefined : PRIVATE_REASON);
+        await recordModeReset({ name: args.name }, ctx.userId, args.delegate_access === false);
       }
       if (!(await setShares(args.name, ctx.userId, emails))) return { error: "SPACE_NAME_TAKEN" };
       const { token, expiresAt } = await mint({ owner: ctx.userId, name: args.name, mode: "replace" });
@@ -161,6 +167,8 @@ const tools: PluginTool[] = [
         maxBytes: config.JOTS_MAX_BYTES,
         url: spaceUrl(args.name),
       };
+      const after = await getSpace(args.name);
+      if (after) Object.assign(out, await delegationFields(after));
       // Still delegated, and this redeploy changed the confirmed tool list.
       const stillOwner = existing?.accessMode === "owner" && !saved.modeReset;
       if (stillOwner && !delegationSuspended(existing) && toolsHash(checked.tools) !== existing.delegatedToolsHash) {
@@ -176,7 +184,7 @@ const tools: PluginTool[] = [
       "Share list: `add_users` / `remove_users` add or remove emails and leave everyone else on the list; use them to grant or revoke one person. `users` REPLACES the entire list (anyone not in it loses access); it cannot be combined with `add_users` / `remove_users`. list_spaces shows the current list. " +
       "Pass `files: true` (or a `delete` list) to also get a patch upload: the archive you upload is overlaid onto the live files, `delete` paths are removed first, and files you do not mention stay. Upload the same way as deploy_space, e.g. `tar czf - -C <dir> index.html | curl --data-binary @- -H 'Content-Type: application/gzip' <uploadUrl>`. " +
       "Call list_space_files to see the current tree. The merged tree must fit <=5 MiB / <=1000 files and keep a root index.html. " +
-      "`delegate_access: false` turns delegated access off; `true` is refused (DELEGATION_PORTAL_ONLY), only the owner turns it on in the portal. Changing `tools` on a delegated Space pauses delegated access until the owner confirms the new list in the portal (`delegation_suspended: true`). Setting visibility to private turns it off. " +
+      "`delegate_access: false` turns delegated access off; `true` is refused (DELEGATION_PORTAL_ONLY), only the owner turns it on in the portal. Changing `tools` on a delegated Space pauses delegated access until the owner confirms the new list in the portal (`delegation_suspended: true`). Setting visibility to private turns it off. `applied` has `delegate_access` (stored) and `delegation_active` (in effect now). " +
       "Same build rules as deploy_space: load /s/_sdk/workbench.js, call tools through workbench.call, bundle or inline every asset, no network access.",
     integration: SPACES_INTEGRATION_NAME,
     effect: "write",
@@ -262,7 +270,7 @@ const tools: PluginTool[] = [
       if (!meta || meta === "tools_changed") return { error: "FORBIDDEN" };
       const updated = meta.space;
       if (meta.modeReset) {
-        await recordDelegationChange(updated, ctx.userId, "off", args.delegate_access === false ? undefined : PRIVATE_REASON);
+        await recordModeReset(updated, ctx.userId, args.delegate_access === false);
       }
       if (emails && !(await setShares(args.name, ctx.userId, emails))) return { error: "FORBIDDEN" };
       if (incremental) {
@@ -286,7 +294,7 @@ const tools: PluginTool[] = [
           tools: updated.tools,
           visibility: updated.visibility,
           users: await getShares(updated.name),
-          delegate_access: updated.accessMode === "owner",
+          ...(await delegationFields(updated)),
         },
       };
       // Newly paused by this change (a tool list that differs from the one
@@ -304,7 +312,7 @@ const tools: PluginTool[] = [
   {
     name: "list_spaces",
     description:
-      "List the Spaces you own (name, title, visibility, tools, users (the share list), url, updatedAt; `live` is false until the first upload lands; `delegate_access` is true when calls run with your connections, `delegation_suspended` when the tool list changed since you confirmed it in the portal). Admins may pass `all: true` to list every Space with its owner's email.",
+      "List the Spaces you own (name, title, visibility, tools, users (the share list), url, updatedAt; `live` is false until the first upload lands; `delegate_access` is the stored setting (you turned delegated access on in the portal), `delegation_active` whether calls run with your connections right now, `delegation_suspended` true when the tool list changed since you confirmed it). Admins may pass `all: true` to list every Space with its owner's email.",
     integration: SPACES_INTEGRATION_NAME,
     effect: "read",
     inputSchema: z.object({ all: z.boolean().optional() }),
@@ -322,7 +330,7 @@ const tools: PluginTool[] = [
             url: spaceUrl(s.name),
             updatedAt: s.updatedAt,
             live: hasFiles(s.name),
-            delegate_access: s.accessMode === "owner",
+            ...(await delegationFields(s)),
             delegation_suspended: delegationSuspended(s),
             ownerEmail: s.ownerEmail,
           }))),
@@ -339,7 +347,7 @@ const tools: PluginTool[] = [
           url: spaceUrl(s.name),
           updatedAt: s.updatedAt,
           live: hasFiles(s.name),
-          delegate_access: s.accessMode === "owner",
+          ...(await delegationFields(s)),
           delegation_suspended: delegationSuspended(s),
         }))),
       };

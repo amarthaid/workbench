@@ -33,10 +33,14 @@ export type DelegationState =
 
 /**
  * Whose access a call on this Space runs with, decided per call (no cache, so
- * a revoke or a disabled owner takes effect at once). Owner mode that is no
+ * a revoke or a disabled owner takes effect at once). `known.ownerCanDelegate`
+ * is the owner's permission when the caller has just read it. Owner mode that is no
  * longer valid is "off": never a fallback to the viewer's own access.
  */
-export async function delegationFor(space: Space): Promise<DelegationState> {
+export async function delegationFor(
+  space: Space,
+  known: { ownerCanDelegate?: boolean } = {}
+): Promise<DelegationState> {
   if (space.accessMode !== "owner") return { mode: "viewer" };
   const off = { mode: "off" as const, reason: "turned_off" as const, message: "This Space's shared access was turned off." };
   if (space.visibility === "private") return off;
@@ -46,7 +50,9 @@ export async function delegationFor(space: Space): Promise<DelegationState> {
     space.ownerId,
   ]);
   if (!owner || (owner.disabled_at !== null && owner.disabled_at !== undefined)) return off;
-  if (!(await can(space.ownerId, "spaces.delegate_access"))) return off;
+  // A caller that already read the owner's permission passes it in.
+  const granted = known.ownerCanDelegate ?? (await can(space.ownerId, "spaces.delegate_access"));
+  if (!granted) return off;
   if (delegationSuspended(space)) {
     return {
       mode: "off",
@@ -57,10 +63,16 @@ export async function delegationFor(space: Space): Promise<DelegationState> {
   return { mode: "owner", runAs: space.ownerId };
 }
 
+/** Why a mode reset was forced when the audience was set to only the owner. */
+export const PRIVATE_REASON = "audience set to only me";
+
 /**
  * Audit a change of a Space's access mode, as the owner. "on" also covers a
- * re-confirm. `reason` is set when the change was forced (for example the
- * audience was set to only the owner), not chosen.
+ * re-confirm. `reason` is set when the change was forced, not chosen; it goes
+ * in the tool text, since the row records a success.
+ *
+ * Never throws: it runs after the mode is saved, and a failed audit write must
+ * not turn a saved change into an error for the owner. The failure is logged.
  */
 export async function recordDelegationChange(
   space: Pick<Space, "name">,
@@ -68,12 +80,28 @@ export async function recordDelegationChange(
   change: "on" | "off",
   reason?: string
 ): Promise<void> {
-  await auditLogger.log({
-    user_id: ownerId,
-    integration: "spaces",
-    tool: `space:${space.name}`,
-    action: change === "on" ? "SPACE_DELEGATION_ON" : "SPACE_DELEGATION_OFF",
-    success: true,
-    ...(reason ? { error: `reason: ${reason}` } : {}),
-  });
+  try {
+    await auditLogger.log({
+      user_id: ownerId,
+      integration: "spaces",
+      tool: reason ? `space:${space.name} (reason: ${reason})` : `space:${space.name}`,
+      action: change === "on" ? "SPACE_DELEGATION_ON" : "SPACE_DELEGATION_OFF",
+      success: true,
+    });
+  } catch (err) {
+    console.error(
+      `[spaces] audit of delegation change failed: space=${space.name} owner=${ownerId} change=${change}` +
+        (reason ? ` reason="${reason}"` : "") +
+        `: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
+/**
+ * Audit a write that turned owner mode off (`modeReset`). An explicit
+ * `delegate_access: false` is the owner's choice; otherwise the only cause is
+ * a private audience, which is recorded as the reason.
+ */
+export async function recordModeReset(space: Pick<Space, "name">, ownerId: string, explicitOff: boolean): Promise<void> {
+  await recordDelegationChange(space, ownerId, "off", explicitOff ? undefined : PRIVATE_REASON);
 }

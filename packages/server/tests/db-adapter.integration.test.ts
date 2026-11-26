@@ -390,11 +390,16 @@ for (const backend of backends) {
         expect(await delegationFor(s)).toMatchObject({ mode: "off", reason: "turned_off" });
 
         await recordDelegationChange(s, "u1", "off", "audience set to only me");
-        const row = await db.get<{ user_id: string; action: string; tool: string; error: string }>(
+        const row = await db.get<{ user_id: string; action: string; tool: string; error: string | null }>(
           "SELECT user_id, action, tool, error FROM audit_log WHERE action = ?",
           ["SPACE_DELEGATION_OFF"]
         );
-        expect(row).toEqual({ user_id: "u1", action: "SPACE_DELEGATION_OFF", tool: "space:s1", error: "reason: audience set to only me" });
+        expect(row).toEqual({
+          user_id: "u1",
+          action: "SPACE_DELEGATION_OFF",
+          tool: "space:s1 (reason: audience set to only me)",
+          error: null,
+        });
       });
     });
   });
