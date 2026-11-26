@@ -364,6 +364,8 @@ async function initSqliteSchema(db: DbAdapter): Promise<void> {
     "ALTER TABLE audit_log ADD COLUMN auth_method TEXT",
     "ALTER TABLE audit_log ADD COLUMN client_id TEXT",
     "ALTER TABLE audit_log ADD COLUMN client_name TEXT",
+    "ALTER TABLE audit_log ADD COLUMN actor_user_id TEXT",
+    "ALTER TABLE audit_log ADD COLUMN actor_email TEXT",
   ]) {
     try {
       await db.exec(stmt);
@@ -382,6 +384,8 @@ async function initSqliteSchema(db: DbAdapter): Promise<void> {
       "CREATE INDEX IF NOT EXISTS idx_users_api_key_sha ON users(api_key_sha) WHERE api_key_sha IS NOT NULL"
     );
   } catch { /* already exists */ }
+  // After the ALTERs: on an old database the column only exists from here.
+  await db.exec("CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_log(actor_user_id, created_at)");
 }
 
 async function initPostgresSchema(db: DbAdapter): Promise<void> {
@@ -408,8 +412,11 @@ async function initPostgresSchema(db: DbAdapter): Promise<void> {
     ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS auth_method TEXT;
     ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS client_id TEXT;
     ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS client_name TEXT;
+    ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS actor_user_id TEXT;
+    ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS actor_email TEXT;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_keycloak_sub ON users(keycloak_sub) WHERE keycloak_sub IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_users_api_key_sha ON users(api_key_sha) WHERE api_key_sha IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_log(actor_user_id, created_at);
   `);
 }
 

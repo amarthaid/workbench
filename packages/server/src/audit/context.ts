@@ -28,6 +28,9 @@ export interface AuditRequestContext {
   // Overrides the name derived from client_id, for callers that are not OAuth
   // clients but still need naming: a Space's calls carry "space:<name>".
   client_name?: string;
+  // The person who triggered the call when it runs on someone else's access
+  // (a delegated Space): the viewer, while the call's user is the owner.
+  actor_user_id?: string;
 }
 
 const USER_AGENT_MAX = 512;
@@ -94,6 +97,11 @@ export async function requestLogFields(userId: string): Promise<Record<string, s
   const email = await auditUserEmail(userId);
   if (email) out.user_email = email;
   const c = store.getStore();
+  if (c?.actor_user_id) {
+    out.actor_user_id = c.actor_user_id;
+    const actorEmail = await auditUserEmail(c.actor_user_id);
+    if (actorEmail) out.actor_email = actorEmail;
+  }
   if (c?.source_ip) out.source_ip = c.source_ip;
   if (c?.user_agent) out.user_agent = c.user_agent;
   if (c?.auth_method) out.auth_method = c.auth_method;

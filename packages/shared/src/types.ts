@@ -202,6 +202,13 @@ export interface AuditEvent {
   /** OAuth client, for auth_method "oauth". The name is self-declared at registration. */
   client_id?: string;
   client_name?: string;
+  /**
+   * Who triggered the call when it ran on someone else's access (a delegated
+   * Space): user_id is whose access ran, actor_user_id is the viewer. Absent
+   * on ordinary calls.
+   */
+  actor_user_id?: string;
+  actor_email?: string | null;
   /** AUDIT_PAYLOAD: sanitised JSON text of the arguments the agent sent, capped. */
   args?: string;
   args_truncated?: boolean;

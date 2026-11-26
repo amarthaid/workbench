@@ -33,6 +33,18 @@ describe("audit destinations", () => {
     expect(Number(count?.c)).toBe(1);
   });
 
+  it("db destination writes the actor columns", async () => {
+    await new DbDestination().log(ev("u1", { actor_user_id: "u2", actor_email: "qa@example.com" }));
+    await new DbDestination().log(ev("u3"));
+    const rows = await db.all<{ user_id: string; actor_user_id: string | null; actor_email: string | null }>(
+      "SELECT user_id, actor_user_id, actor_email FROM audit_log ORDER BY user_id"
+    );
+    expect(rows).toEqual([
+      { user_id: "u1", actor_user_id: "u2", actor_email: "qa@example.com" },
+      { user_id: "u3", actor_user_id: null, actor_email: null },
+    ]);
+  });
+
   it("SqliteDestination is the old name of the db destination", () => {
     expect(SqliteDestination).toBe(DbDestination);
   });

@@ -294,5 +294,34 @@ for (const backend of backends) {
         expect(await clearPermission("u1", cap)).toBe(false);
       });
     });
+
+    describe("audit actor columns", () => {
+      beforeAll(() => {
+        target.current = db;
+      });
+      afterAll(() => {
+        target.current = null;
+      });
+      beforeEach(async () => {
+        await db.run("DELETE FROM audit_log");
+      });
+
+      it("the db destination writes actor_user_id and actor_email", async () => {
+        const { DbDestination } = await import("../src/audit/destinations");
+        await new DbDestination().log({
+          user_id: "u1",
+          action: "EXECUTE",
+          success: true,
+          timestamp: "2026-01-01T00:00:00Z",
+          actor_user_id: "u2",
+          actor_email: "qa@example.com",
+        });
+        const row = await db.get<{ user_id: string; actor_user_id: string; actor_email: string }>(
+          "SELECT user_id, actor_user_id, actor_email FROM audit_log WHERE actor_user_id = ?",
+          ["u2"]
+        );
+        expect(row).toEqual({ user_id: "u1", actor_user_id: "u2", actor_email: "qa@example.com" });
+      });
+    });
   });
 }

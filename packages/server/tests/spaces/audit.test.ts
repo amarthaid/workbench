@@ -47,3 +47,52 @@ describe("audit client_name override", () => {
     expect(oauth).toMatchObject({ client_id: "c1", client_name: "Claude Code" });
   });
 });
+
+describe("audit actor (delegated calls)", () => {
+  let seen: any[];
+  const logger = () => {
+    const l = new AuditLogger();
+    (l as any).destination = { log: (e: unknown) => void seen.push(e) };
+    return l;
+  };
+  beforeEach(async () => {
+    seen = [];
+    resetAuditEmailCache();
+    await db.exec("DELETE FROM users");
+    await db.run("INSERT INTO users (id, email) VALUES (?, ?)", ["u1", "dev@example.com"]);
+    await db.run("INSERT INTO users (id, email) VALUES (?, ?)", ["u2", "qa@example.com"]);
+  });
+
+  it("the logger copies the actor and its email from the context", async () => {
+    await runWithAuditContext({ auth_method: "session", actor_user_id: "u2" }, () =>
+      logger().log({ user_id: "u1", action: "EXECUTE", success: true })
+    );
+    expect(seen[0]).toMatchObject({
+      user_id: "u1",
+      user_email: "dev@example.com",
+      actor_user_id: "u2",
+      actor_email: "qa@example.com",
+    });
+  });
+
+  it("an ordinary call carries neither actor key", async () => {
+    await runWithAuditContext({ auth_method: "session" }, () =>
+      logger().log({ user_id: "u1", action: "EXECUTE", success: true })
+    );
+    await logger().log({ user_id: "u1", action: "EXECUTE", success: true });
+    for (const e of seen) {
+      expect(e).not.toHaveProperty("actor_user_id");
+      expect(e).not.toHaveProperty("actor_email");
+    }
+  });
+
+  it("requestLogFields names the actor when there is one", async () => {
+    const fields = await runWithAuditContext({ auth_method: "session", actor_user_id: "u2" }, () =>
+      requestLogFields("u1")
+    );
+    expect(fields).toMatchObject({ user_email: "dev@example.com", actor_user_id: "u2", actor_email: "qa@example.com" });
+    const plain = await runWithAuditContext({ auth_method: "session" }, () => requestLogFields("u1"));
+    expect(plain).not.toHaveProperty("actor_user_id");
+    expect(plain).not.toHaveProperty("actor_email");
+  });
+});
