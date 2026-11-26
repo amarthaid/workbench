@@ -65,6 +65,25 @@ describe("ctx.http cookie reconnect", () => {
     expect(fetchMock.mock.calls[1][1].body).toBe("{\"a\":1}");
   });
 
+  it("autoReconnect false: the dead response is returned, no reconnect, no retry, session marked dead", async () => {
+    withAuth({ ...baseAuth, session: { dead: { status: [401] } }, reconnect: { steps: [{ goto: "loginUrl" }] } });
+    fetchMock.mockResolvedValue(new Response("no", { status: 401 }));
+    reconnect.mockResolvedValue({ ok: true });
+    const ctx = await createContext(U, I, { autoReconnect: false });
+    expect((await ctx.http("https://app.example.com/api/x")).status).toBe(401);
+    expect(reconnect).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect((await getReconnectState(U, I)).deadAt).toBeTypeOf("number");
+  });
+
+  it("autoReconnect false: a live response passes through", async () => {
+    withAuth({ ...baseAuth, session: { dead: { status: [401] } }, reconnect: { steps: [{ goto: "loginUrl" }] } });
+    fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
+    const ctx = await createContext(U, I, { autoReconnect: false });
+    expect((await ctx.http("https://app.example.com/api/x")).status).toBe(200);
+    expect(reconnect).not.toHaveBeenCalled();
+  });
+
   it("retry that is still dead is returned, no second reconnect", async () => {
     withAuth({ ...baseAuth, session: { dead: { status: [401] } }, reconnect: { steps: [{ goto: "loginUrl" }] } });
     fetchMock.mockResolvedValue(new Response("no", { status: 401 }));

@@ -380,13 +380,22 @@ async function runStep(
  * Connected-check for cookie integrations that also revives a session found
  * dead earlier (e.g. overnight), so the first call of the day works instead of
  * answering NOT_CONNECTED.
+ *
+ * `autoReconnect: false` (a call made on someone else's behalf, a delegated
+ * Space): connected only when a live session already exists. Nothing runs in
+ * the user's browser, not even the fast path, and no stored login is typed.
  */
-export async function ensureCookieSession(userId: string, integration: string): Promise<boolean> {
+export async function ensureCookieSession(
+  userId: string,
+  integration: string,
+  opts?: { autoReconnect?: boolean }
+): Promise<boolean> {
   if (await hasValidCookies(userId, integration)) return true;
   const data = await getCookies(userId, integration);
   if (!data) return false; // never connected: nothing to revive
   const state = await getReconnectState(userId, integration);
   if (!isCookieExpired(data) && !state.deadAt) return true;
+  if (opts?.autoReconnect === false) return false;
   // Dead (a response said so) or every stored cookie's expiry has passed,
   // which no response ever reports because ctx.http refuses to send them.
   const auth = registry.getIntegration(integration)?.auth;

@@ -23,7 +23,7 @@ import { signConnectToken } from "../auth/connect-token";
 import { signCurlToken } from "../auth/curl-session";
 import { resolveVaultRefs, scrubVaultValues, scrubString, VaultRefError, VaultScrubError } from "../vault/interpolate";
 import { touchUsed } from "../vault/store";
-import { requestLogFields } from "../audit/context";
+import { requestLogFields, currentAuditContext, runWithAuditContext } from "../audit/context";
 import { redactInlineSecrets } from "../audit/payload";
 import { rememberSubstituted, recentSubstituted } from "../vault/recent";
 
@@ -292,18 +292,46 @@ const executeToolsInput = z
     });
   });
 
+export interface ExecuteOptions {
+  /**
+   * The person who triggered the call when it runs on `userId`'s access (a
+   * delegated Space: `userId` is the owner, the actor the viewer). Audit rows
+   * and request log lines carry it, and nothing runs on `userId`'s behalf
+   * beyond the tool's own call: no cookie auto-reconnect (which types the
+   * stored login into their browser), no vault lookup, no custom-app
+   * fallback. A token refresh on expiry or 401 still happens: it renews the
+   * same grant and is audited as `userId`.
+   */
+  actorUserId?: string;
+}
+
+const NO_RECONNECT = { autoReconnect: false } as const;
+
 export async function executeSingle(
   userId: string,
   toolName: string,
   rawArgs: Record<string, unknown>,
-  preSubstituted?: Map<string, string>
+  preSubstituted?: Map<string, string>,
+  opts?: ExecuteOptions
 ): Promise<ExecResult> {
+  const actor = opts?.actorUserId;
+  if (actor) {
+    const audit = currentAuditContext();
+    // Outside a request there is no context to name the actor on: make one,
+    // so the audit rows still say who triggered the call.
+    if (!audit) {
+      return runWithAuditContext({ actor_user_id: actor }, () =>
+        executeSingle(userId, toolName, rawArgs, preSubstituted, opts)
+      );
+    }
+    audit.actor_user_id = actor;
+  }
   // What the audit log may record of the arguments (AUDIT_PAYLOAD): the ones
   // the agent sent, `{{vault:…}}` references unresolved. Never for the vault's
   // own tools, whose arguments are the secrets themselves.
   const auditArgs = toolName.startsWith("vault_") ? undefined : rawArgs;
   const targetTool = registry.getTool(toolName);
-  if (!targetTool) {
+  if (!targetTool && !actor) {
     const appTool = await getToolForUser(userId, toolName);
     if (appTool) return executeCustomAppSingle(userId, appTool, rawArgs, preSubstituted);
   }
@@ -330,7 +358,9 @@ export async function executeSingle(
         integ?.auth.type === "none"
           ? true
           : integ?.auth.type === "cookie"
-            ? await ensureCookieSession(userId, targetTool.integration)
+            ? await (actor
+                ? ensureCookieSession(userId, targetTool.integration, NO_RECONNECT)
+                : ensureCookieSession(userId, targetTool.integration))
             : !!(await getToken(userId, targetTool.integration));
 
       if (!isConnected) {
@@ -357,9 +387,13 @@ export async function executeSingle(
       // `preSubstituted` means the caller (compose) already resolved them in
       // its own single pass; scanning again here would resolve refs that
       // arrived inside an earlier step's output.
+      // With an actor the owner's vault is never read or touched: references
+      // stay literal, and whatever a caller pre-substituted is ignored.
       let effectiveArgs: Record<string, unknown> = rawArgs ?? {};
       let substituted = new Map<string, string>();
-      if (preSubstituted) {
+      if (actor) {
+        substituted = new Map();
+      } else if (preSubstituted) {
         substituted = preSubstituted;
         if (substituted.size > 0) {
           void touchUsed(userId, [...substituted.keys()]).catch(() => undefined);
@@ -479,7 +513,9 @@ export async function executeSingle(
       }
 
       try {
-        const toolCtx = await createContext(userId, targetTool.integration);
+        const toolCtx = actor
+          ? await createContext(userId, targetTool.integration, NO_RECONNECT)
+          : await createContext(userId, targetTool.integration);
         const result = scrubVaultValues(
           await targetTool.handler(toolCtx, parsedArgs as Record<string, unknown>),
           scrubEntries,
