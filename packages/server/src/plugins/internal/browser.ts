@@ -379,7 +379,7 @@ const tools: PluginTool[] = [
     handler: async (ctx: any) => {
       // No ensureSession here: the session is warmed at redeem time, after the
       // opener proves they own this account.
-      const rec = createPending({
+      const rec = await createPending({
         userId: ctx.userId,
         integration: "__browser__",
         // "cookie" is a stand-in: ConnectionType has no browser member, and

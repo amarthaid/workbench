@@ -1081,7 +1081,7 @@ describe("API routes", () => {
     beforeEach(async () => {
       const { markConnectEnded } = await import("../src/auth/reconnect/connect-lock");
       markConnectEnded("user-1");
-      _clearAll();
+      await _clearAll();
       vi.spyOn(registry, "getIntegration").mockReturnValue(lockInteg as never);
     });
 
@@ -1138,7 +1138,7 @@ describe("API routes", () => {
     it("link redeem sets the lock and link capture clears it", async () => {
       const { isConnectInProgress } = await import("../src/auth/reconnect/connect-lock");
       const { captureLiveCookies } = await import("../src/auth/browser-session");
-      const rec = createPending({ userId: "user-1", integration: "legacy", type: "cookie", ttlSeconds: 600 });
+      const rec = await createPending({ userId: "user-1", integration: "legacy", type: "cookie", ttlSeconds: 600 });
       const token = await signConnectToken(
         { connectionId: rec.connectionId, userId: "user-1", integration: "legacy", sessionId: "user-1" },
         600
@@ -1156,7 +1156,7 @@ describe("API routes", () => {
       const { isConnectInProgress } = await import("../src/auth/reconnect/connect-lock");
       const { defaultTab } = await import("../src/auth/browser-session");
       vi.mocked(defaultTab).mockRejectedValueOnce(new Error("spawn failed"));
-      const rec = createPending({ userId: "user-1", integration: "legacy", type: "cookie", ttlSeconds: 600 });
+      const rec = await createPending({ userId: "user-1", integration: "legacy", type: "cookie", ttlSeconds: 600 });
       const token = await signConnectToken(
         { connectionId: rec.connectionId, userId: "user-1", integration: "legacy", sessionId: "user-1" },
         600
@@ -1648,15 +1648,15 @@ describe("API routes", () => {
       return signConnectToken({ connectionId, userId, integration, sessionId: userId }, 600);
     }
 
-    beforeEach(() => {
-      _clearAll();
+    beforeEach(async () => {
+      await _clearAll();
     });
 
     it("returns cookie login details when the session owns the link", async () => {
       const { ensureSession, navigate } = await import("../src/auth/browser-session");
       vi.mocked(ensureSession).mockResolvedValue({ cdpToken: "cdp-1" } as never);
       vi.spyOn(registry, "getIntegration").mockReturnValue(cookieInteg as never);
-      const rec = createPending({ userId: "user-1", integration: "legacy", type: "cookie", ttlSeconds: 600 });
+      const rec = await createPending({ userId: "user-1", integration: "legacy", type: "cookie", ttlSeconds: 600 });
       const token = await mintLink("user-1", "legacy", rec.connectionId);
 
       const app = await buildApp();
@@ -1684,7 +1684,7 @@ describe("API routes", () => {
       const { ensureSession } = await import("../src/auth/browser-session");
       vi.mocked(ensureSession).mockResolvedValue({ cdpToken: "cdp-1" } as never);
       vi.spyOn(registry, "getIntegration").mockReturnValue(cookieInteg as never);
-      const rec = createPending({ userId: "user-1", integration: "legacy", type: "cookie", ttlSeconds: 600 });
+      const rec = await createPending({ userId: "user-1", integration: "legacy", type: "cookie", ttlSeconds: 600 });
       const token = await mintLink("user-1", "legacy", rec.connectionId);
 
       const app = await buildApp();
@@ -1700,11 +1700,11 @@ describe("API routes", () => {
       expect(res.json().integration).toBe("legacy");
       // No side effects: no browser session warmed, and the link is not spent.
       expect(ensureSession).not.toHaveBeenCalled();
-      expect(getPending(rec.connectionId)!.redeemedAt).toBeUndefined();
+      expect((await getPending(rec.connectionId))!.redeemedAt).toBeUndefined();
     });
 
     it("401s AUTH_REQUIRED with no session, without spending the link", async () => {
-      const rec = createPending({ userId: "user-1", integration: "legacy", type: "cookie", ttlSeconds: 600 });
+      const rec = await createPending({ userId: "user-1", integration: "legacy", type: "cookie", ttlSeconds: 600 });
       const token = await mintLink("user-1", "legacy", rec.connectionId);
 
       const app = await buildApp();
@@ -1712,7 +1712,7 @@ describe("API routes", () => {
 
       expect(res.statusCode).toBe(401);
       expect(res.json().error).toBe("AUTH_REQUIRED");
-      expect(getPending(rec.connectionId)!.redeemedAt).toBeUndefined();
+      expect((await getPending(rec.connectionId))!.redeemedAt).toBeUndefined();
     });
 
     it("401s LINK_INVALID on a garbage link token", async () => {
@@ -1748,7 +1748,7 @@ describe("API routes", () => {
       const { ensureSession } = await import("../src/auth/browser-session");
       vi.mocked(ensureSession).mockResolvedValue({ cdpToken: "cdp-1" } as never);
       vi.spyOn(registry, "getIntegration").mockReturnValue(cookieInteg as never);
-      const rec = createPending({ userId: "user-1", integration: "legacy", type: "cookie", ttlSeconds: 600 });
+      const rec = await createPending({ userId: "user-1", integration: "legacy", type: "cookie", ttlSeconds: 600 });
       const token = await mintLink("user-1", "legacy", rec.connectionId);
 
       const app = await buildApp();
@@ -1767,7 +1767,7 @@ describe("API routes", () => {
         version: "1.0.0",
         auth: { type: "oauth2" as const, scopes: ["repo"] },
       } as never);
-      const rec = createPending({ userId: "user-1", integration: "github", type: "oauth2", ttlSeconds: 600 });
+      const rec = await createPending({ userId: "user-1", integration: "github", type: "oauth2", ttlSeconds: 600 });
       const token = await mintLink("user-1", "github", rec.connectionId);
 
       const app = await buildApp();
@@ -1791,7 +1791,7 @@ describe("API routes", () => {
         version: "1.0.0",
         auth: { type: "oauth2" as const, scopes: ["repo"] },
       } as never);
-      const rec = createPending({ userId: "user-1", integration: "github", type: "oauth2", ttlSeconds: 600 });
+      const rec = await createPending({ userId: "user-1", integration: "github", type: "oauth2", ttlSeconds: 600 });
       const token = await mintLink("user-1", "github", rec.connectionId);
 
       const app = await buildApp();
@@ -1809,7 +1809,7 @@ describe("API routes", () => {
     it("returns browser-session details for a __browser__ link", async () => {
       const { ensureSession } = await import("../src/auth/browser-session");
       vi.mocked(ensureSession).mockResolvedValue({ cdpToken: "cdp-1" } as never);
-      const rec = createPending({ userId: "user-1", integration: "__browser__", type: "cookie", ttlSeconds: 600 });
+      const rec = await createPending({ userId: "user-1", integration: "__browser__", type: "cookie", ttlSeconds: 600 });
       const token = await mintLink("user-1", "__browser__", rec.connectionId);
 
       const app = await buildApp();

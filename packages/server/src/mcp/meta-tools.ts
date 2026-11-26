@@ -68,7 +68,7 @@ async function startConnect(
   // workbench user it was minted for, and nothing else. Warming a browser
   // session or building a provider consent URL happens at /api/connect/redeem,
   // once a human has proved they own this account.
-  const rec = createPending({ userId, integration, type: integ.auth.type, ttlSeconds: ttl });
+  const rec = await createPending({ userId, integration, type: integ.auth.type, ttlSeconds: ttl });
   const jwt = await signConnectToken(
     { connectionId: rec.connectionId, userId, integration, sessionId: userId },
     ttl
@@ -910,7 +910,7 @@ export const metaTools = [
     handler: async (ctx: { userId: string }, args: { connectionId: string; timeoutSec: number }) => {
       const deadline = Date.now() + args.timeoutSec * 1000;
       for (;;) {
-        const rec = getPending(args.connectionId);
+        const rec = await getPending(args.connectionId);
         if (!rec) return { error: "Unknown connectionId" };
         if (rec.userId !== ctx.userId) return { error: "Unknown connectionId" }; // same shape — no existence oracle
         if (rec.status === "CONNECTED") return { status: "CONNECTED" };
