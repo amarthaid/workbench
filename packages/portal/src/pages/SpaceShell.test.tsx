@@ -153,7 +153,7 @@ describe("SpaceShell", () => {
 
       const bitbucket = screen.getByRole("heading", { name: "Bitbucket" }).closest("section")!;
       const connect = within(bitbucket).getByRole("link", { name: "Connect" });
-      expect(connect).toHaveAttribute("href", "/connect/bitbucket");
+      expect(connect).toHaveAttribute("href", "/apps/bitbucket");
       expect(connect).toHaveAttribute("target", "_blank");
       const github = screen.getByRole("heading", { name: "GitHub" }).closest("section")!;
       expect(within(github).getByText("Connected")).toBeInTheDocument();
