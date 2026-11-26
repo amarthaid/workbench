@@ -9,13 +9,15 @@ vi.mock("../../src/spaces/dir", () => ({ spacesRoot: () => tmp }));
 // see a stale row (the race between check and write).
 vi.mock("../../src/spaces/store", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/spaces/store")>();
-  return { ...actual, getSpace: vi.fn(actual.getSpace) };
+  return { ...actual, getSpace: vi.fn(actual.getSpace), updateSpaceMeta: vi.fn(actual.updateSpaceMeta) };
 });
 
 import { config } from "../../src/config";
 import { db } from "../../src/db";
 import { consume } from "../../src/spaces/pending";
-import { getShares, getSpace, grantConsent, kvPut } from "../../src/spaces/store";
+import { getShares, getSpace, grantConsent, kvPut, toolsHash, updateSpaceMeta } from "../../src/spaces/store";
+import { setPermission } from "../../src/permissions/store";
+import { auditLogger } from "../../src/audit/logger";
 import { spacesPlugin } from "../../src/plugins/internal/spaces";
 import { INTERNAL_PLUGIN_NAMES } from "../../src/plugins/internal-names";
 import { registerInternalPlugins } from "../../src/plugins/loader";
@@ -131,6 +133,14 @@ describe("spaces plugin", () => {
     expect(r.applied.users).toEqual(["qa@example.com"]);
   });
 
+  it("update_space reports a lost race as CONFLICT, not FORBIDDEN", async () => {
+    await deploy("u1", ok);
+    vi.mocked(updateSpaceMeta).mockResolvedValueOnce("conflict");
+    const r = await update("u1", { name: "s1", title: "x" });
+    expect(r).toMatchObject({ error: "CONFLICT" });
+    expect(r.message).toMatch(/changed meanwhile/);
+  });
+
   it("update_space add_users / remove_users change one person and keep the rest", async () => {
     await deploy("u1", { ...ok, visibility: "users", users: ["qa@example.com", "ops@example.com"] });
     const added = await update("u1", { name: "s1", add_users: ["New@Example.com"] });
@@ -219,5 +229,216 @@ describe("spaces plugin", () => {
     expect(Number((await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM space_kv"))!.n)).toBe(0);
     expect(await del("admin", { name: "s2" })).toEqual({ ok: true, name: "s2" });
     expect((await del("u1", { name: "s2" })).error).toBe("NOT_FOUND");
+  });
+});
+
+describe("spaces plugin: delegated access", () => {
+  const grantAndEnable = async () => {
+    await setPermission({ userId: "u1", capability: "spaces.delegate_access", effect: "allow", grantedBy: "admin" });
+    const s = (await getSpace("s1"))!;
+    const r = await updateSpaceMeta("s1", "u1", { accessMode: "owner", confirmDelegation: true, expectedToolsHash: toolsHash(s.tools) });
+    if (!r || typeof r === "string") throw new Error("setup failed");
+  };
+  const offRows = () =>
+    db.all<{ user_id: string; action: string; tool: string; error: string | null }>(
+      "SELECT user_id, action, tool, error FROM audit_log WHERE action LIKE 'SPACE_DELEGATION_%' ORDER BY id"
+    );
+
+  it("both tools accept delegate_access in their schema", () => {
+    for (const name of ["deploy_space", "update_space"]) {
+      const schema = spacesPlugin.tools.find((t) => t.name === name)!.inputSchema;
+      expect(schema.safeParse({ ...ok, delegate_access: false }).success).toBe(true);
+      expect(schema.safeParse({ ...ok, delegate_access: "no" }).success).toBe(false);
+    }
+  });
+
+  it("delegate_access true is DELEGATION_PORTAL_ONLY on both tools, and nothing changes", async () => {
+    await setPermission({ userId: "u1", capability: "spaces.delegate_access", effect: "allow", grantedBy: "admin" });
+    const refused = { error: "DELEGATION_PORTAL_ONLY", message: "Delegated access can only be turned on by you in the portal (Space > Sharing)." };
+    expect(await deploy("u1", { ...ok, delegate_access: true })).toEqual(refused);
+    expect(await getSpace("s1")).toBeNull();
+    await deploy("u1", ok);
+    expect(await update("u1", { name: "s1", title: "Changed", delegate_access: true })).toEqual(refused);
+    expect(await deploy("u1", { ...ok, title: "Changed", delegate_access: true })).toEqual(refused);
+    expect(await getSpace("s1")).toMatchObject({ title: "Items", accessMode: "viewer" });
+    expect(await offRows()).toEqual([]);
+  });
+
+  it("update_space delegate_access false turns it off and audits; again is a no-op", async () => {
+    await deploy("u1", ok);
+    await grantAndEnable();
+    const r = await update("u1", { name: "s1", delegate_access: false });
+    expect(r.applied).toMatchObject({ delegate_access: false });
+    expect(await getSpace("s1")).toMatchObject({ accessMode: "viewer", delegatedToolsHash: null });
+    expect(await offRows()).toEqual([{ user_id: "u1", action: "SPACE_DELEGATION_OFF", tool: "space:s1", error: null }]);
+    await update("u1", { name: "s1", delegate_access: false });
+    expect(await offRows()).toHaveLength(1);
+  });
+
+  it("deploy_space delegate_access false turns it off and audits", async () => {
+    await deploy("u1", ok);
+    await grantAndEnable();
+    await deploy("u1", { ...ok, delegate_access: false });
+    expect((await getSpace("s1"))!.accessMode).toBe("viewer");
+    expect(await offRows()).toEqual([{ user_id: "u1", action: "SPACE_DELEGATION_OFF", tool: "space:s1", error: null }]);
+  });
+
+  it("a redeploy without the field keeps the mode; to private resets it with a reason", async () => {
+    await deploy("u1", ok);
+    await grantAndEnable();
+    await deploy("u1", { ...ok, title: "Again" });
+    expect(await getSpace("s1")).toMatchObject({ title: "Again", accessMode: "owner" });
+    expect(await offRows()).toEqual([]);
+    await deploy("u1", { ...ok, visibility: "private" });
+    expect((await getSpace("s1"))!.accessMode).toBe("viewer");
+    expect((await offRows()).map((r) => [r.tool, r.error ?? null])).toEqual([["space:s1 (reason: audience set to only me)", null]]);
+  });
+
+  describe("widening the audience of a delegated Space is portal-only", () => {
+    const WIDEN = {
+      error: "DELEGATION_PORTAL_ONLY",
+      message:
+        "This Space runs with your delegated access. Widen who can open it in the portal (Space > Sharing), or turn delegated access off first.",
+    };
+    const usersSpace = { ...ok, visibility: "users", users: ["qa@example.com"] };
+    const setup = async () => {
+      await deploy("u1", usersSpace);
+      await grantAndEnable();
+    };
+    const unchanged = async () => {
+      expect(await getSpace("s1")).toMatchObject({ visibility: "users", accessMode: "owner" });
+      expect(await getShares("s1")).toEqual(["qa@example.com"]);
+    };
+
+    it("update_space users -> org", async () => {
+      await setup();
+      expect(await update("u1", { name: "s1", visibility: "org" })).toEqual(WIDEN);
+      await unchanged();
+    });
+
+    it("update_space add_users with someone new", async () => {
+      await setup();
+      expect(await update("u1", { name: "s1", add_users: ["ops@example.com"] })).toEqual(WIDEN);
+      await unchanged();
+    });
+
+    it("update_space users replace that adds anyone, even while removing others", async () => {
+      await setup();
+      expect(await update("u1", { name: "s1", users: ["ops@example.com"] })).toEqual(WIDEN);
+      await unchanged();
+    });
+
+    it("deploy_space to org, or with a users list holding someone new", async () => {
+      await setup();
+      expect(await deploy("u1", { ...ok, title: "Again" })).toEqual(WIDEN);
+      expect(await deploy("u1", { ...usersSpace, users: ["qa@example.com", "ops@example.com"] })).toEqual(WIDEN);
+      await unchanged();
+    });
+
+    it("narrowing stays allowed: removing people, org -> users, private, and the same list again", async () => {
+      await deploy("u1", { ...usersSpace, users: ["qa@example.com", "ops@example.com"] });
+      await grantAndEnable();
+      expect((await update("u1", { name: "s1", remove_users: ["ops@example.com"] })).applied).toMatchObject({ delegate_access: true });
+      expect((await update("u1", { name: "s1", add_users: ["qa@example.com"] })).applied).toMatchObject({ delegate_access: true });
+      expect((await deploy("u1", { ...usersSpace, title: "Again" })).delegate_access).toBe(true);
+      expect(await getShares("s1")).toEqual(["qa@example.com"]);
+    });
+
+    it("org -> users narrows and is allowed", async () => {
+      await deploy("u1", ok);
+      await grantAndEnable();
+      const r = await update("u1", { name: "s1", visibility: "users", users: ["qa@example.com"] });
+      expect(r.applied).toMatchObject({ visibility: "users", delegate_access: true });
+    });
+
+    it("turning it off in the same call allows the widening, and so does private", async () => {
+      await setup();
+      expect((await update("u1", { name: "s1", visibility: "org", delegate_access: false })).applied).toMatchObject({
+        visibility: "org",
+        delegate_access: false,
+      });
+      await grantAndEnable();
+      expect((await update("u1", { name: "s1", visibility: "private" })).applied).toMatchObject({ visibility: "private" });
+    });
+
+    it("a Space not delegated widens freely", async () => {
+      await deploy("u1", usersSpace);
+      expect((await update("u1", { name: "s1", visibility: "org" })).applied).toMatchObject({ visibility: "org" });
+    });
+  });
+
+  it("update_space to private resets with a reason", async () => {
+    await deploy("u1", ok);
+    await grantAndEnable();
+    await update("u1", { name: "s1", visibility: "private" });
+    expect((await getSpace("s1"))!.accessMode).toBe("viewer");
+    expect((await offRows()).map((r) => [r.action, r.tool, r.error ?? null])).toEqual([
+      ["SPACE_DELEGATION_OFF", "space:s1 (reason: audience set to only me)", null],
+    ]);
+  });
+
+  it("update_space changing tools on a delegated Space is allowed and reports it paused", async () => {
+    await deploy("u1", ok);
+    await grantAndEnable();
+    const r = await update("u1", { name: "s1", tools: ["acme_list_items", "acme_fail"] });
+    expect(r.applied.tools).toEqual(["acme_fail", "acme_list_items"]);
+    expect(r.delegation_suspended).toBe(true);
+    expect(r.note).toBe("Delegated access is paused until you confirm the new tool list in the portal.");
+    expect((await getSpace("s1"))!.accessMode).toBe("owner");
+    // A change that leaves the confirmed list alone says nothing about it.
+    const plain = await update("u1", { name: "s1", tools: ["acme_list_items"], title: "T2" });
+    expect(plain.delegation_suspended).toBeUndefined();
+    expect(plain.note).toBeUndefined();
+  });
+
+  it("a failed audit write does not fail update_space, and the mode is saved", async () => {
+    await deploy("u1", ok);
+    await grantAndEnable();
+    vi.spyOn(auditLogger, "log").mockRejectedValue(new Error("audit store down"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const r = await update("u1", { name: "s1", delegate_access: false });
+      expect(r.error).toBeUndefined();
+      expect((await getSpace("s1"))!.accessMode).toBe("viewer");
+      expect(err).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("delegation_active is the effective state; delegate_access stays the stored one", async () => {
+    await deploy("u1", ok);
+    await grantAndEnable();
+    expect((await list("u1", {})).spaces[0]).toMatchObject({ delegate_access: true, delegation_active: true });
+    expect((await update("u1", { name: "s1", title: "T2" })).applied).toMatchObject({ delegate_access: true, delegation_active: true });
+    expect(await deploy("u1", { ...ok, title: "T3" })).toMatchObject({ delegate_access: true, delegation_active: true });
+    await db.run("DELETE FROM user_permissions WHERE user_id = ?", ["u1"]);
+    expect((await list("u1", {})).spaces[0]).toMatchObject({ delegate_access: true, delegation_active: false });
+    expect((await list("admin", { all: true })).spaces[0]).toMatchObject({ delegate_access: true, delegation_active: false });
+    expect((await update("u1", { name: "s1", title: "T4" })).applied).toMatchObject({ delegate_access: true, delegation_active: false });
+    expect(await deploy("u1", { ...ok, title: "T5" })).toMatchObject({ delegate_access: true, delegation_active: false });
+  });
+
+  it("list_spaces shows delegate_access and delegation_suspended", async () => {
+    await deploy("u1", ok);
+    let s = (await list("u1", {})).spaces[0];
+    expect(s).toMatchObject({ delegate_access: false, delegation_suspended: false });
+    await grantAndEnable();
+    s = (await list("u1", {})).spaces[0];
+    expect(s).toMatchObject({ delegate_access: true, delegation_suspended: false });
+    const redeployed = await deploy("u1", { ...ok, tools: ["acme_fail"] });
+    expect(redeployed).toMatchObject({ delegation_suspended: true, note: expect.stringContaining("paused") });
+    s = (await list("u1", {})).spaces[0];
+    expect(s).toMatchObject({ delegate_access: true, delegation_suspended: true });
+    const all = (await list("admin", { all: true })).spaces[0];
+    expect(all).toMatchObject({ delegate_access: true, delegation_suspended: true });
+  });
+
+  it("HOW_TO_BUILD names both access modes and the new error codes", () => {
+    const d = spacesPlugin.tools.find((t) => t.name === "deploy_space")!.description;
+    expect(d).toContain("the viewer's connections, or the owner's when the owner turned on delegated access in the portal");
+    expect(d).not.toMatch(/using THEIR connections/);
+    expect(d).toContain("DELEGATION_OFF");
+    expect(d).toContain("TOOL_NOT_DELEGABLE");
   });
 });

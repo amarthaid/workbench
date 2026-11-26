@@ -167,6 +167,16 @@ const SQLITE_SCHEMA = `
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (space_name, user_id, key)
   );
+
+  CREATE TABLE IF NOT EXISTS user_permissions (
+    user_id TEXT NOT NULL,
+    capability TEXT NOT NULL,
+    subject TEXT NOT NULL DEFAULT '',
+    effect TEXT NOT NULL,
+    granted_by TEXT NOT NULL,
+    granted_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, capability, subject)
+  );
 `;
 
 const POSTGRES_SCHEMA = `
@@ -319,6 +329,16 @@ const POSTGRES_SCHEMA = `
     updated_at BIGINT NOT NULL,
     PRIMARY KEY (space_name, user_id, key)
   );
+
+  CREATE TABLE IF NOT EXISTS user_permissions (
+    user_id TEXT NOT NULL,
+    capability TEXT NOT NULL,
+    subject TEXT NOT NULL DEFAULT '',
+    effect TEXT NOT NULL,
+    granted_by TEXT NOT NULL,
+    granted_at BIGINT NOT NULL,
+    PRIMARY KEY (user_id, capability, subject)
+  );
 `;
 
 async function initSqliteSchema(db: DbAdapter): Promise<void> {
@@ -344,6 +364,10 @@ async function initSqliteSchema(db: DbAdapter): Promise<void> {
     "ALTER TABLE audit_log ADD COLUMN auth_method TEXT",
     "ALTER TABLE audit_log ADD COLUMN client_id TEXT",
     "ALTER TABLE audit_log ADD COLUMN client_name TEXT",
+    "ALTER TABLE audit_log ADD COLUMN actor_user_id TEXT",
+    "ALTER TABLE audit_log ADD COLUMN actor_email TEXT",
+    "ALTER TABLE spaces ADD COLUMN access_mode TEXT NOT NULL DEFAULT 'viewer'",
+    "ALTER TABLE spaces ADD COLUMN delegated_tools_hash TEXT",
   ]) {
     try {
       await db.exec(stmt);
@@ -360,6 +384,13 @@ async function initSqliteSchema(db: DbAdapter): Promise<void> {
   try {
     await db.exec(
       "CREATE INDEX IF NOT EXISTS idx_users_api_key_sha ON users(api_key_sha) WHERE api_key_sha IS NOT NULL"
+    );
+  } catch { /* already exists */ }
+  // After the ALTERs: on an old database the column only exists from here.
+  // Partial: only delegated calls carry an actor.
+  try {
+    await db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_audit_actor_nn ON audit_log(actor_user_id, created_at) WHERE actor_user_id IS NOT NULL"
     );
   } catch { /* already exists */ }
 }
@@ -388,8 +419,13 @@ async function initPostgresSchema(db: DbAdapter): Promise<void> {
     ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS auth_method TEXT;
     ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS client_id TEXT;
     ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS client_name TEXT;
+    ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS actor_user_id TEXT;
+    ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS actor_email TEXT;
+    ALTER TABLE spaces ADD COLUMN IF NOT EXISTS access_mode TEXT NOT NULL DEFAULT 'viewer';
+    ALTER TABLE spaces ADD COLUMN IF NOT EXISTS delegated_tools_hash TEXT;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_keycloak_sub ON users(keycloak_sub) WHERE keycloak_sub IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_users_api_key_sha ON users(api_key_sha) WHERE api_key_sha IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_audit_actor_nn ON audit_log(actor_user_id, created_at) WHERE actor_user_id IS NOT NULL;
   `);
 }
 

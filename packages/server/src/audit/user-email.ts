@@ -23,6 +23,17 @@ export async function auditUserEmail(userId: string): Promise<string | null> {
   return email;
 }
 
+/**
+ * The actor of a delegated call and their email, or nothing when there is no
+ * actor. Shared by audit events and request log lines.
+ */
+export async function auditActorFields(
+  actorUserId: string | undefined
+): Promise<{ actor_user_id?: string; actor_email?: string | null }> {
+  if (!actorUserId) return {};
+  return { actor_user_id: actorUserId, actor_email: await auditUserEmail(actorUserId) };
+}
+
 /** Test seam. */
 export function resetAuditEmailCache(): void {
   cache.clear();

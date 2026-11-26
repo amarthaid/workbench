@@ -16,6 +16,10 @@ export interface SpaceSummary {
   /** Epoch ms. */
   updatedAt: number;
   mine: boolean;
+  /** Owner: the stored setting. Anyone else: whether it is in effect. */
+  delegate_access?: boolean;
+  /** On, but paused until the owner confirms a changed tool list. */
+  delegation_suspended?: boolean;
 }
 
 export interface SpaceTool {
@@ -28,6 +32,18 @@ export interface SpaceTool {
   description?: string;
   /** The tool no longer exists in the registry. */
   missing?: boolean;
+  /** False: refused when the Space runs with delegated access. */
+  delegable?: boolean;
+}
+
+/**
+ * Why a delegated Space cannot run calls right now. "owner_not_connected" is
+ * only shown to viewers: delegation is in effect, but the owner has not
+ * connected every integration the Space uses.
+ */
+export interface DelegationOff {
+  reason: "turned_off" | "tools_changed" | "owner_not_connected";
+  message: string;
 }
 
 export interface SpaceDetail {
@@ -43,14 +59,52 @@ export interface SpaceDetail {
   updatedAt: number;
   tools: SpaceTool[];
   consented: boolean;
+  /** What approving this screen approves; sent back with the approval. */
+  consent_hash?: string;
   appUrl: string;
+  /**
+   * Calls run with the owner's connections. The owner gets the stored
+   * setting; anyone else whether it is in effect.
+   */
+  delegate_access?: boolean;
+  /** On, but paused until the owner confirms the changed tool list. */
+  delegation_suspended?: boolean;
+  /** Set when delegated access is on but cannot run calls (or, for a viewer, the owner must connect first). */
+  delegation_off?: DelegationOff | null;
+  /** Owner only: the hash of this tool list, sent back to confirm it. */
+  tools_hash?: string;
+  /** Owner only: an admin allowed this user to delegate access. */
+  can_delegate?: boolean;
 }
+
+/**
+ * Error codes the Space routes answer with that the portal maps to its own
+ * copy. Others (CONSENT_REQUIRED, NOT_CONNECTED, ...) are handled where they
+ * occur.
+ */
+// DELEGATION_PORTAL_ONLY is intentionally not here: only an agent credential
+// gets it (an agent may not turn delegation on), and the portal never sends
+// one, so the portal has nothing to show for it.
+export const DELEGATION_ERROR_CODES = {
+  /** PATCH sharing: no admin grant, or an "Only me" audience. */
+  NOT_ALLOWED: "DELEGATION_NOT_ALLOWED",
+  /** PATCH sharing: the tool list changed since the owner reviewed it. */
+  TOOLS_CHANGED: "TOOLS_CHANGED",
+  /** POST call: delegation is on but turned off or paused. */
+  OFF: "DELEGATION_OFF",
+  /** POST call: this tool never runs with someone else's access. */
+  TOOL_NOT_DELEGABLE: "TOOL_NOT_DELEGABLE",
+} as const;
 
 export interface SpaceErrorBody {
   code: string;
   message: string;
   integration?: string;
   tool?: string;
+  /** DELEGATION_OFF: why. */
+  reason?: string;
+  /** NOT_CONNECTED on a delegated call: the owner must reconnect, not the viewer. */
+  delegated?: boolean;
 }
 
 /** A non-200 from /api/spaces, or a network failure (UPSTREAM_ERROR, status 0). */
@@ -60,6 +114,8 @@ export class SpaceApiError extends Error {
   readonly integration?: string;
   readonly tool?: string;
   readonly retryAfterMs?: number;
+  readonly reason?: string;
+  readonly delegated?: boolean;
 
   constructor(status: number, body: Partial<SpaceErrorBody> & { retryAfterMs?: number }) {
     super(body.message || body.code || "Request failed");
@@ -69,6 +125,8 @@ export class SpaceApiError extends Error {
     if (body.integration) this.integration = body.integration;
     if (body.tool) this.tool = body.tool;
     if (typeof body.retryAfterMs === "number") this.retryAfterMs = body.retryAfterMs;
+    if (typeof body.reason === "string") this.reason = body.reason;
+    if (body.delegated === true) this.delegated = true;
   }
 
   /** The shape the bridge sends back to a Space. */
@@ -78,6 +136,8 @@ export class SpaceApiError extends Error {
       message: this.message,
       ...(this.integration ? { integration: this.integration } : {}),
       ...(this.tool ? { tool: this.tool } : {}),
+      ...(this.reason ? { reason: this.reason } : {}),
+      ...(this.delegated ? { delegated: true } : {}),
     };
   }
 }
@@ -139,12 +199,17 @@ export function fetchSpace(name: string): Promise<SpaceDetail> {
 export interface SpaceSharing {
   visibility: SpaceVisibility;
   users: string[];
+  delegate_access: boolean;
+  delegation_suspended: boolean;
 }
 
 export interface SpaceSharingChange {
   visibility?: SpaceVisibility;
   add_users?: string[];
   remove_users?: string[];
+  /** true needs tools_hash: the hash of the tool list the owner reviewed. */
+  delegate_access?: boolean;
+  tools_hash?: string;
 }
 
 /** Owner only. add_users / remove_users leave everyone else on the list. */
@@ -152,8 +217,15 @@ export function updateSpaceSharing(name: string, change: SpaceSharingChange): Pr
   return request<SpaceSharing>(`/api/spaces/${seg(name)}/sharing`, { method: "PATCH", body: change });
 }
 
-export async function grantSpaceConsent(name: string): Promise<void> {
-  await request<{ ok: true }>(`/api/spaces/${seg(name)}/consent`, { method: "POST" });
+/**
+ * Approve the tools as shown: `consentHash` is the detail's `consent_hash`. A
+ * Space that changed since answers 409 CONSENT_CHANGED.
+ */
+export async function grantSpaceConsent(name: string, consentHash: string | undefined): Promise<void> {
+  await request<{ ok: true }>(`/api/spaces/${seg(name)}/consent`, {
+    method: "POST",
+    body: { consent_hash: consentHash },
+  });
 }
 
 export async function revokeSpaceConsent(name: string): Promise<void> {

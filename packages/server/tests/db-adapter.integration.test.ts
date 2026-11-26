@@ -14,12 +14,31 @@
  * pull request. Skipping silently would leave the backend this PR exists for
  * completely untested.
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import fs from "fs";
 import os from "os";
 import path from "path";
 import { applySchema, createDb } from "../src/db";
 import type { DbAdapter } from "../src/db-adapter";
+import { can, clearPermission, listPermissions, setPermission } from "../src/permissions/store";
+import { countDelegatedSpaces, delegationSuspended, getSpace, toolsHash, updateSpaceMeta, upsertSpace } from "../src/spaces/store";
+import { delegationFor, recordDelegationChange } from "../src/spaces/delegation";
+
+// Modules that use the process-wide `db` (the permissions store) run against
+// the backend under test by pointing this holder at it. Unset, the real `db`
+// answers, so nothing else in the process changes.
+const target = vi.hoisted(() => ({ current: null as DbAdapter | null }));
+vi.mock("../src/db", async (orig) => {
+  const real = await orig<typeof import("../src/db")>();
+  const db = new Proxy(real.db, {
+    get(fallback, key) {
+      const t = target.current ?? fallback;
+      const v = Reflect.get(t, key) as unknown;
+      return typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(t) : v;
+    },
+  });
+  return { ...real, db };
+});
 
 const PG_URL = process.env.TEST_POSTGRES_URL;
 
@@ -238,6 +257,210 @@ for (const backend of backends) {
 
         const results = await Promise.all([claim(), claim(), claim()]);
         expect(results.filter(Boolean)).toHaveLength(1);
+      });
+    });
+
+    // ON CONFLICT ... DO UPDATE with excluded.*, the LEFT JOIN, and BIGINT
+    // granted_at (a string from node-postgres) all differ by backend.
+    describe("permissions store", () => {
+      beforeAll(() => {
+        target.current = db;
+      });
+      afterAll(() => {
+        target.current = null;
+      });
+      beforeEach(async () => {
+        await db.run("DELETE FROM user_permissions");
+      });
+
+      it("upserts one rule, reads it through can(), and lists grantedAt as a number", async () => {
+        await db.run("INSERT INTO users (id, email) VALUES (?, ?)", ["user-admin", "admin@example.com"]);
+        const cap = "spaces.delegate_access";
+        expect(await can("u1", cap)).toBe(false);
+
+        await setPermission({ userId: "u1", capability: cap, effect: "allow", grantedBy: "user-admin" });
+        expect(await can("u1", cap)).toBe(true);
+        await setPermission({ userId: "u1", capability: cap, effect: "deny", grantedBy: "user-admin" });
+        expect(await can("u1", cap)).toBe(false);
+        await setPermission({ userId: "u1", capability: cap, effect: "allow", grantedBy: "user-admin" });
+
+        const rows = await db.all("SELECT * FROM user_permissions WHERE user_id = ?", ["u1"]);
+        expect(rows).toHaveLength(1);
+
+        const [view] = await listPermissions("u1");
+        expect(view).toMatchObject({ effect: "allow", source: "rule", grantedBy: "user-admin", grantedByEmail: "admin@example.com" });
+        expect(typeof view.grantedAt).toBe("number");
+        expect(view.grantedAt).toBeGreaterThan(0);
+
+        expect(await clearPermission("u1", cap)).toBe(true);
+        expect(await clearPermission("u1", cap)).toBe(false);
+      });
+    });
+
+    describe("audit actor columns", () => {
+      beforeAll(() => {
+        target.current = db;
+      });
+      afterAll(() => {
+        target.current = null;
+      });
+      beforeEach(async () => {
+        await db.run("DELETE FROM audit_log");
+      });
+
+      it("the db destination writes actor_user_id and actor_email", async () => {
+        const { DbDestination } = await import("../src/audit/destinations");
+        await new DbDestination().log({
+          user_id: "u1",
+          action: "EXECUTE",
+          success: true,
+          timestamp: "2026-01-01T00:00:00Z",
+          actor_user_id: "u2",
+          actor_email: "qa@example.com",
+        });
+        const row = await db.get<{ user_id: string; actor_user_id: string; actor_email: string }>(
+          "SELECT user_id, actor_user_id, actor_email FROM audit_log WHERE actor_user_id = ?",
+          ["u2"]
+        );
+        expect(row).toEqual({ user_id: "u1", actor_user_id: "u2", actor_email: "qa@example.com" });
+      });
+
+      it("indexes the actor partially, only rows that have one", async () => {
+        const def =
+          db.dialect === "sqlite"
+            ? (await db.get<{ sql: string }>("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?", ["idx_audit_actor_nn"]))?.sql
+            : (await db.get<{ indexdef: string }>("SELECT indexdef FROM pg_indexes WHERE indexname = ?", ["idx_audit_actor_nn"]))?.indexdef;
+        expect(def).toMatch(/actor_user_id IS NOT NULL/i);
+      });
+
+      it("Activity reads a delegated row from both sides; admin filters on either email", async () => {
+        const { listAuditEvents, listAllAuditEvents } = await import("../src/audit/query");
+        await db.run("INSERT INTO users (id, email) VALUES (?, ?), (?, ?)", ["u1", "dev@example.com", "u2", "qa@example.com"]);
+        await db.run(
+          `INSERT INTO audit_log (user_id, user_email, actor_user_id, actor_email, client_name, tool, action, success, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'EXECUTE', ?, ?), (?, NULL, NULL, NULL, NULL, ?, 'EXECUTE', ?, ?)`,
+          ["u1", "dev@example.com", "u2", "qa@example.com", "space:team-dash", "delegated", true, 200, "u3", "unrelated", true, 300]
+        );
+
+        const owner = await listAuditEvents({ userId: "u1", limit: 10 });
+        expect(owner.map((r) => r.delegation)).toEqual([
+          { direction: "for_me", other_email: "qa@example.com", space: "team-dash" },
+        ]);
+        const viewer = await listAuditEvents({ userId: "u2", limit: 10, status: "success", cursor: { createdAt: 250, id: 1e9 } });
+        expect(viewer.map((r) => r.delegation)).toEqual([
+          { direction: "by_me", other_email: "dev@example.com", space: "team-dash" },
+        ]);
+
+        const admin = await listAllAuditEvents({ limit: 10, email: "QA@example.com" });
+        expect(admin.map((r) => [r.tool, r.user_email, r.actor_email])).toEqual([["delegated", "dev@example.com", "qa@example.com"]]);
+      });
+    });
+
+    // A delegated call end to end below the route: the owner's token is read,
+    // and the audit row (through the logger's database destination) names
+    // both people.
+    describe("delegated execution", () => {
+      beforeAll(async () => {
+        target.current = db;
+        const { registerFixtures } = await import("./spaces/fixtures");
+        registerFixtures();
+      });
+      afterAll(() => {
+        target.current = null;
+      });
+
+      it("executeDelegated runs on the owner's token and audits both ids", async () => {
+        const { storeToken } = await import("../src/auth/tokens");
+        const { executeDelegated } = await import("../src/mcp/meta-tools");
+        const { runWithAuditContext } = await import("../src/audit/context");
+        await db.run("INSERT INTO users (id, email) VALUES (?, ?)", ["u1", "dev@example.com"]);
+        await db.run("INSERT INTO users (id, email) VALUES (?, ?)", ["u2", "qa@example.com"]);
+        await storeToken("u1", "acme-oauth", { accessToken: "tok-owner", scopes: "" });
+        await storeToken("u2", "acme-oauth", { accessToken: "tok-viewer", scopes: "" });
+        const out = await runWithAuditContext({ client_name: "space:s1" }, () =>
+          executeDelegated("u1", "u2", "acmeo_whoami", {})
+        );
+        expect(out).toEqual({ result: { token: "tok-owner" } });
+        const row = await db.get<Record<string, unknown>>(
+          "SELECT user_id, user_email, actor_user_id, actor_email, client_name, tool FROM audit_log WHERE action = 'EXECUTE'"
+        );
+        expect(row).toEqual({
+          user_id: "u1",
+          user_email: "dev@example.com",
+          actor_user_id: "u2",
+          actor_email: "qa@example.com",
+          client_name: "space:s1",
+          tool: "acmeo_whoami",
+        });
+      });
+    });
+
+    // The CASE with a NULL-able placeholder (PostgreSQL needs a type for it),
+    // ON CONFLICT ... RETURNING, and the read-then-upsert transaction.
+    describe("spaces access mode", () => {
+      beforeAll(() => {
+        target.current = db;
+      });
+      afterAll(() => {
+        target.current = null;
+      });
+      beforeEach(async () => {
+        await db.run("DELETE FROM spaces");
+      });
+      const base = { name: "s1", ownerId: "u1", title: "T", tools: ["acme_list"], visibility: "org" as const };
+
+      it("round-trips access_mode and delegated_tools_hash through the store", async () => {
+        expect(await upsertSpace(base)).toEqual({ result: "ok", modeReset: false });
+        expect(await getSpace("s1")).toMatchObject({ accessMode: "viewer", delegatedToolsHash: null });
+
+        const on = await updateSpaceMeta("s1", "u1", {
+          accessMode: "owner",
+          confirmDelegation: true,
+          expectedToolsHash: toolsHash(base.tools),
+        });
+        expect(on).toMatchObject({ modeReset: false });
+        expect(await getSpace("s1")).toMatchObject({ accessMode: "owner", delegatedToolsHash: toolsHash(base.tools) });
+        expect(await countDelegatedSpaces("u1")).toBe(1);
+
+        // Redeploy without a mode keeps it; another owner is refused.
+        expect(await upsertSpace({ ...base, tools: ["acme_other"] })).toEqual({ result: "ok", modeReset: false });
+        expect(delegationSuspended((await getSpace("s1"))!)).toBe(true);
+        expect(await upsertSpace({ ...base, ownerId: "u2" })).toEqual({ result: "taken", modeReset: false });
+
+        expect(await upsertSpace({ ...base, visibility: "private" })).toEqual({ result: "ok", modeReset: true });
+        expect(await getSpace("s1")).toMatchObject({ accessMode: "viewer", delegatedToolsHash: null });
+        expect(await countDelegatedSpaces("u1")).toBe(0);
+      });
+
+      // disabled_at is a nullable integer read raw, and the audit row is
+      // written through the logger's database destination.
+      it("delegationFor reads the owner row and permission; the change is audited", async () => {
+        await db.run("DELETE FROM users WHERE id IN ('u1', 'u2')");
+        await db.run("DELETE FROM user_permissions");
+        await db.run("DELETE FROM audit_log");
+        await db.run("INSERT INTO users (id, email) VALUES (?, ?)", ["u1", "dev@example.com"]);
+        await upsertSpace(base);
+        await updateSpaceMeta("s1", "u1", { accessMode: "owner", confirmDelegation: true, expectedToolsHash: toolsHash(base.tools) });
+        const s = (await getSpace("s1"))!;
+        expect(await delegationFor(s)).toMatchObject({ mode: "off", reason: "turned_off" });
+        await setPermission({ userId: "u1", capability: "spaces.delegate_access", effect: "allow", grantedBy: "admin" });
+        expect(await delegationFor(s)).toEqual({ mode: "owner", runAs: "u1" });
+        await db.run("UPDATE users SET disabled_at = ? WHERE id = ?", [1700000000, "u1"]);
+        expect(await delegationFor(s)).toMatchObject({ mode: "off", reason: "turned_off" });
+        await db.run("DELETE FROM users WHERE id = ?", ["u1"]);
+        expect(await delegationFor(s)).toMatchObject({ mode: "off", reason: "turned_off" });
+
+        await recordDelegationChange(s, "u1", "off", "audience set to only me");
+        const row = await db.get<{ user_id: string; action: string; tool: string; error: string | null }>(
+          "SELECT user_id, action, tool, error FROM audit_log WHERE action = ?",
+          ["SPACE_DELEGATION_OFF"]
+        );
+        expect(row).toEqual({
+          user_id: "u1",
+          action: "SPACE_DELEGATION_OFF",
+          tool: "space:s1 (reason: audience set to only me)",
+          error: null,
+        });
       });
     });
   });

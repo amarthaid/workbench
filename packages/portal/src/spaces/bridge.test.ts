@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { createSpaceBridge, type BridgeOptions, type ConfirmRequest, type FrameLike, MAX_CONFIRMATIONS } from "./bridge";
+import { createSpaceBridge, runsAsOwner, type BridgeOptions, type ConfirmRequest, type FrameLike, MAX_CONFIRMATIONS } from "./bridge";
 import { SpaceApiError, type SpaceCallBody, type SpaceDetail } from "../spaces-api";
 
 const SPACE: SpaceDetail = {
@@ -377,3 +377,101 @@ describe("me and kv", () => {
     expect(r.error).toEqual({ code: "TOO_LARGE", message: "too large" });
   });
 });
+
+describe("delegated access", () => {
+  const DELEGATED: SpaceDetail = {
+    ...SPACE,
+    delegate_access: true,
+    tools: [
+      ...SPACE.tools.map((t) => ({ ...t, delegable: true })),
+      { name: "github_set_token", integration: "github", integrationName: "GitHub", effect: "destructive", connected: true, delegable: false },
+    ],
+  };
+
+  it("runsAsOwner: a viewer of a delegated Space, never the owner", () => {
+    expect(runsAsOwner(DELEGATED)).toBe(true);
+    expect(runsAsOwner({ ...DELEGATED, mine: true })).toBe(false);
+    expect(runsAsOwner(SPACE)).toBe(false);
+  });
+
+  it("the confirmation names the owner whose access runs it", async () => {
+    const confirm = vi.fn(async (_r: ConfirmRequest) => true);
+    const { space } = started({ getSpace: () => DELEGATED, confirm });
+    await space.send("call", { integration: "github", tool: "merge_pr" }).reply;
+    expect(confirm.mock.calls[0][0].runAs).toBe("dev@example.com");
+  });
+
+  it("a non-delegated Space's confirmation names nobody", async () => {
+    const confirm = vi.fn(async (_r: ConfirmRequest) => true);
+    const { space } = started({ confirm });
+    await space.send("call", { integration: "github", tool: "merge_pr" }).reply;
+    expect(confirm.mock.calls[0][0]).not.toHaveProperty("runAs");
+  });
+
+  it("a tool that is not delegable is refused before any confirmation or call, with a banner", async () => {
+    const onToolNotDelegable = vi.fn();
+    const { space, api, opts } = started({ getSpace: () => DELEGATED, onToolNotDelegable });
+    const r = await space.send("call", { integration: "github", tool: "set_token" }).reply;
+    expect(r.error).toEqual({
+      code: "TOOL_NOT_DELEGABLE",
+      message: "github_set_token cannot run with someone else's access.",
+      integration: "github",
+      tool: "github_set_token",
+    });
+    expect(opts.confirm).not.toHaveBeenCalled();
+    expect(api.call).not.toHaveBeenCalled();
+    expect(onToolNotDelegable).toHaveBeenCalledWith("github_set_token", "github_set_token cannot run with someone else's access.");
+  });
+
+  it("the server's TOOL_NOT_DELEGABLE raises the same banner and keeps the bridge running", async () => {
+    const onToolNotDelegable = vi.fn();
+    const { space, api } = started({ getSpace: () => DELEGATED, onToolNotDelegable });
+    api.call.mockRejectedValueOnce(
+      new SpaceApiError(403, { code: "TOOL_NOT_DELEGABLE", message: "github_list_prs cannot run with someone else's access.", tool: "github_list_prs" })
+    );
+    await space.send("call", { integration: "github", tool: "list_prs" }).reply;
+    expect(onToolNotDelegable).toHaveBeenCalledWith("github_list_prs", "github_list_prs cannot run with someone else's access.");
+    expect((await space.send("me").reply).ok).toBe(true);
+  });
+
+  it("a delegated NOT_CONNECTED names the owner, with no connect banner", async () => {
+    const onOwnerNotConnected = vi.fn();
+    const { space, api, opts } = started({ getSpace: () => DELEGATED, onOwnerNotConnected });
+    api.call.mockRejectedValueOnce(
+      new SpaceApiError(409, { code: "NOT_CONNECTED", delegated: true, message: "dev@example.com needs to reconnect GitHub.", integration: "github" })
+    );
+    const r = await space.send("call", { integration: "github", tool: "list_prs" }).reply;
+    expect(r.error).toMatchObject({ code: "NOT_CONNECTED", delegated: true });
+    expect(onOwnerNotConnected).toHaveBeenCalledWith("github", "dev@example.com needs to reconnect GitHub.");
+    expect(opts.onNotConnected).not.toHaveBeenCalled();
+  });
+
+  it("OWNER_NOT_CONNECTED answers the Space, then stops the bridge like DELEGATION_OFF", async () => {
+    const onDelegationOff = vi.fn();
+    const onOwnerNotConnected = vi.fn();
+    const { space, api } = started({ getSpace: () => DELEGATED, onDelegationOff, onOwnerNotConnected });
+    api.call.mockRejectedValueOnce(
+      new SpaceApiError(409, { code: "OWNER_NOT_CONNECTED", reason: "owner_not_connected", message: "wait", integration: "github" })
+    );
+    const r = await space.send("call", { integration: "github", tool: "list_prs" }).reply;
+    expect(r.error).toMatchObject({ code: "OWNER_NOT_CONNECTED" });
+    expect(onDelegationOff).toHaveBeenCalledWith("owner_not_connected", "wait");
+    expect(onOwnerNotConnected).not.toHaveBeenCalled();
+    space.send("me");
+    await tick();
+    expect(space.replies).toHaveLength(1);
+  });
+
+  it.each(["turned_off", "tools_changed"] as const)("DELEGATION_OFF (%s) answers the Space, then stops the bridge", async (reason) => {
+    const onDelegationOff = vi.fn();
+    const { space, api } = started({ getSpace: () => DELEGATED, onDelegationOff });
+    api.call.mockRejectedValueOnce(new SpaceApiError(403, { code: "DELEGATION_OFF", reason, message: "off" }));
+    const r = await space.send("call", { integration: "github", tool: "list_prs" }).reply;
+    expect(r.error).toMatchObject({ code: "DELEGATION_OFF", reason });
+    expect(onDelegationOff).toHaveBeenCalledWith(reason, "off");
+    space.send("me");
+    await tick();
+    expect(space.replies).toHaveLength(1);
+  });
+});
+

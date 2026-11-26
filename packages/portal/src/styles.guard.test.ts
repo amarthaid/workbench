@@ -34,3 +34,27 @@ describe("portal stylesheet geometry", () => {
     }
   });
 });
+
+describe("switch and segmented control", () => {
+  const blocks = (needle: string) =>
+    css
+      .split("}")
+      .filter((block) => block.split("{")[0].includes(needle))
+      .map((block) => block.split("{")[1] ?? "");
+
+  it("draw their focus ring in the text colour, so it shows on an accent fill", () => {
+    for (const sel of [".ui-switch:focus-visible", ".ui-segmented button:focus-visible"]) {
+      const rules = blocks(sel).join(";");
+      expect(rules).toMatch(/outline:\s*2px solid var\(--text\)/);
+      expect(rules).not.toContain("var(--accent)");
+    }
+  });
+
+  it("use the --on-accent token, not a literal white, on the accent fill", () => {
+    for (const sel of [".ui-switch", ".ui-segmented"]) {
+      for (const rules of blocks(sel)) expect(rules).not.toMatch(/#fff\b/i);
+    }
+    expect(blocks(".ui-segmented button[aria-pressed=\"true\"]").join(";")).toContain("var(--on-accent)");
+  });
+});
+

@@ -54,6 +54,26 @@ The **Users** tab lists every user with their connection and custom-app counts, 
 - You cannot disable yourself or any email on `ADMIN_EMAILS`. Admins are managed by that variable, not here, and this also stops an admin locking everyone out.
 - Every action is written to the audit log with your account as the actor.
 
+### Per-user permissions
+
+**Permissions** on a user's row opens their per-user permissions. Each capability shows its default and offers two choices: the opposite of the default (**Allow** for a capability that is off by default) or **Default**. When an admin set it, the row says who and when ("Granted by admin@example.com, 26 Nov").
+
+| Capability | Default | What it allows |
+|---|---|---|
+| Delegate access in Spaces | off | The user can turn on [delegated access](../integrations/spaces.md#delegated-access) for their shared Spaces, so viewers run its tools with this user's connections |
+
+Setting **Delegate access in Spaces** back to Default while the user has Spaces using it asks first ("dev@example.com has 2 Spaces using delegated access. They will stop working for viewers until it is allowed again."). Their Spaces keep the setting: viewers get **Shared access is off**, and allowing it again resumes them. The permission is read on every call, so a change applies at once.
+
+The same, over the admin API (portal session of an admin only, like every `/api/admin/*` route):
+
+| Method and path | Purpose |
+|---|---|
+| `GET /api/admin/users/:id/permissions` | `{ permissions: [{ capability, label, description, default, effect, source, grantedBy, grantedByEmail, grantedAt }], delegatedSpaces }`; `source` is `rule` or `default`, `grantedAt` Unix seconds |
+| `PUT /api/admin/users/:id/permissions/:capability` | Body `{ effect }`. Only the opposite of the default is accepted (400 `invalid_effect` otherwise) |
+| `DELETE /api/admin/users/:id/permissions/:capability` | Back to the default |
+
+An unknown capability is 400 `unknown_capability`, an unknown user 404 `user_not_found`. Each change is audited as `ADMIN_PERMISSION_SET` or `ADMIN_PERMISSION_CLEAR` with your account as the actor.
+
 ## Instance config
 
 The **Config** tab holds three instance-wide settings:

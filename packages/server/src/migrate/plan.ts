@@ -24,6 +24,7 @@ export const TABLES = [
   "oauth_refresh_tokens",
   "pending_auth",
   "user_vaults",
+  "user_permissions",
 ] as const;
 
 /** Rows read from SQLite per round trip, and rows per INSERT sent to PostgreSQL. */

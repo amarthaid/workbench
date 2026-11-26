@@ -1,9 +1,11 @@
-// In-process token bucket for POST /api/spaces/:name/call: 60 calls per minute
-// per (viewer, Space). Per process, so approximate under CLUSTER_ENABLED or
-// several replicas.
+// In-process token buckets for POST /api/spaces/:name/call: 60 calls per
+// minute per (viewer, Space), and for a delegated Space also 300 per minute
+// per (owner, Space), so many viewers together cannot exhaust the owner's
+// upstream quota. Per process, so approximate under CLUSTER_ENABLED or several
+// replicas.
 
 export const RATE_CAPACITY = 60;
-const REFILL_PER_MS = RATE_CAPACITY / 60_000;
+export const OWNER_RATE_CAPACITY = 300;
 const MAX_BUCKETS = 10_000;
 
 interface Bucket {
@@ -23,23 +25,33 @@ export function _resetRateLimitForTest(): void {
 
 export type RateResult = { ok: true } | { ok: false; retryAfterMs: number };
 
-export function takeToken(userId: string, spaceName: string): RateResult {
-  const key = `${userId}\u0000${spaceName}`;
+/** `capacity` per minute, refilled continuously. */
+function take(key: string, capacity: number): RateResult {
+  const refillPerMs = capacity / 60_000;
   const t = now();
   let b = buckets.get(key);
   if (!b) {
     // Bound memory: a full map is dropped wholesale, which only ever errs on
     // the side of letting calls through.
     if (buckets.size >= MAX_BUCKETS) buckets.clear();
-    b = { tokens: RATE_CAPACITY, at: t };
+    b = { tokens: capacity, at: t };
     buckets.set(key, b);
   } else {
-    b.tokens = Math.min(RATE_CAPACITY, b.tokens + (t - b.at) * REFILL_PER_MS);
+    b.tokens = Math.min(capacity, b.tokens + (t - b.at) * refillPerMs);
     b.at = t;
   }
   if (b.tokens >= 1) {
     b.tokens -= 1;
     return { ok: true };
   }
-  return { ok: false, retryAfterMs: Math.max(1, Math.ceil((1 - b.tokens) / REFILL_PER_MS)) };
+  return { ok: false, retryAfterMs: Math.max(1, Math.ceil((1 - b.tokens) / refillPerMs)) };
+}
+
+export function takeToken(userId: string, spaceName: string): RateResult {
+  return take(`${userId}\u0000${spaceName}`, RATE_CAPACITY);
+}
+
+/** The owner's bucket for a delegated Space, keyed apart from every viewer's. */
+export function takeOwnerToken(ownerId: string, spaceName: string): RateResult {
+  return take(`owner\u0000${ownerId}\u0000${spaceName}`, OWNER_RATE_CAPACITY);
 }

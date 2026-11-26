@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
+  clearUserPermission,
   disableAdminUser,
+  getUserPermissions,
+  setUserPermission,
   enableAdminUser,
   fetchAdminActivity,
   fetchAdminInstance,
@@ -78,5 +81,59 @@ describe("admin fetchers", () => {
   it("an unrecognised error code falls back to a generic message", async () => {
     fetchMock.mockResolvedValue({ ok: false, status: 500, json: async () => ({ error: "weird" }) });
     await expect(enableAdminUser("u1")).rejects.toThrow("Action failed");
+  });
+
+  describe("user permissions", () => {
+    it("getUserPermissions reads the user's permissions with the bearer token", async () => {
+      const view = {
+        permissions: [
+          {
+            capability: "spaces.delegate_access",
+            label: "Delegate access in Spaces",
+            description: "d",
+            default: "deny",
+            effect: "allow",
+            source: "rule",
+            grantedBy: "admin",
+            grantedByEmail: "admin@example.com",
+            grantedAt: 1_700_000_000,
+          },
+        ],
+        delegatedSpaces: 2,
+      };
+      fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => view });
+      expect(await getUserPermissions("u 1")).toEqual(view);
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toBe("/api/admin/users/u%201/permissions");
+      expect((init.headers as Record<string, string>).Authorization).toBe("Bearer tok-abc");
+    });
+
+    it("setUserPermission PUTs the effect as JSON", async () => {
+      await setUserPermission("u1", "spaces.delegate_access", "allow");
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toBe("/api/admin/users/u1/permissions/spaces.delegate_access");
+      expect(init.method).toBe("PUT");
+      expect(JSON.parse(init.body)).toEqual({ effect: "allow" });
+      expect((init.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
+    });
+
+    it("clearUserPermission is a bodyless DELETE with no Content-Type", async () => {
+      await clearUserPermission("u1", "spaces.delegate_access");
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toBe("/api/admin/users/u1/permissions/spaces.delegate_access");
+      expect(init.method).toBe("DELETE");
+      expect(init.body).toBeUndefined();
+      expect((init.headers as Record<string, string>).Authorization).toBe("Bearer tok-abc");
+      expect((init.headers as Record<string, string>)["Content-Type"]).toBeUndefined();
+    });
+
+    it("a refused permission change throws a readable message", async () => {
+      fetchMock.mockResolvedValue({ ok: false, status: 400, json: async () => ({ error: "invalid_effect" }) });
+      await expect(setUserPermission("u1", "spaces.delegate_access", "deny")).rejects.toThrow(
+        "That permission can only be allowed or set back to the default."
+      );
+      fetchMock.mockResolvedValue({ ok: false, status: 404, json: async () => ({ error: "user_not_found" }) });
+      await expect(clearUserPermission("gone", "spaces.delegate_access")).rejects.toThrow("That user no longer exists.");
+    });
   });
 });

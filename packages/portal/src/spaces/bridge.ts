@@ -9,7 +9,7 @@
 // so a later document in the frame can neither call nor read replies. A second
 // load is treated as a navigation and stops the bridge.
 
-import { SpaceApiError, type SpaceCallBody, type SpaceDetail, type SpaceErrorBody, type SpaceTool } from "../spaces-api";
+import { SpaceApiError, type DelegationOff, type SpaceCallBody, type SpaceDetail, type SpaceErrorBody, type SpaceTool } from "../spaces-api";
 
 export interface FrameLike {
   addEventListener(type: "load", listener: () => void): void;
@@ -32,6 +32,8 @@ export interface ConfirmRequest {
   integrationName: string;
   description?: string;
   args: unknown;
+  /** Set when the call runs with someone else's access: their email. */
+  runAs?: string;
 }
 
 export interface BridgeOptions {
@@ -43,6 +45,15 @@ export interface BridgeOptions {
   /** Show the confirm modal. Called one at a time; resolves true on Allow. */
   confirm(request: ConfirmRequest): Promise<boolean>;
   onNotConnected?(integration: string, integrationName: string): void;
+  /**
+   * NOT_CONNECTED on a delegated call: the owner's connection is missing.
+   * The viewer cannot fix it, so there is no connect action.
+   */
+  onOwnerNotConnected?(integration: string, message: string): void;
+  /** DELEGATION_OFF: shared access was turned off, or paused for a tool change. The bridge stops. */
+  onDelegationOff?(reason: DelegationOff["reason"], message: string): void;
+  /** TOOL_NOT_DELEGABLE: this tool never runs with someone else's access. */
+  onToolNotDelegable?(tool: string, message: string): void;
   onConsentRequired?(): void;
   onPaused?(): void;
   onNavigatedAway?(): void;
@@ -71,6 +82,19 @@ function fail(code: string, message: string, extra: Partial<SpaceErrorBody> = {}
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/**
+ * Whether this viewer's calls run with the owner's access. The owner opening
+ * their own Space always runs as themselves, whatever the setting.
+ */
+export function runsAsOwner(space: SpaceDetail): boolean {
+  return !space.mine && space.delegate_access === true;
+}
+
+/** The server's wording, for a refusal the shell makes before asking. */
+export function notDelegableMessage(tool: string): string {
+  return `${tool} cannot run with someone else's access.`;
 }
 
 export function isDestructive(tool: SpaceTool): boolean {
@@ -153,12 +177,14 @@ export function createSpaceBridge(opts: BridgeOptions): SpaceBridge {
   }
 
   async function confirmOrDeny(tool: SpaceTool, args: unknown) {
+    const space = opts.getSpace();
     const allowed = await requestConfirm({
       tool: tool.name,
       integration: tool.integration,
       integrationName: tool.integrationName || tool.integration,
       ...(tool.description ? { description: tool.description } : {}),
       args,
+      ...(runsAsOwner(space) ? { runAs: space.ownerEmail } : {}),
     });
     if (!allowed) {
       fail("DENIED", paused ? "This Space was paused" : "The viewer denied this action", {
@@ -179,6 +205,11 @@ export function createSpaceBridge(opts: BridgeOptions): SpaceBridge {
         integration,
         tool: payload.tool,
       });
+    }
+    // The server refuses it too; refusing here first means the viewer is never
+    // asked to confirm a call that cannot run.
+    if (runsAsOwner(opts.getSpace()) && tool.delegable === false) {
+      fail("TOOL_NOT_DELEGABLE", notDelegableMessage(tool.name), { integration, tool: tool.name });
     }
     const args = payload.args;
     // Built from scratch: nothing the Space sent besides integration, tool
@@ -247,11 +278,32 @@ export function createSpaceBridge(opts: BridgeOptions): SpaceBridge {
       opts.onConsentRequired?.();
       return;
     }
+    if (error.code === "DELEGATION_OFF") {
+      dispose();
+      opts.onDelegationOff?.(error.reason === "tools_changed" ? "tools_changed" : "turned_off", error.message);
+      return;
+    }
+    // The owner is missing a connection the Space uses: the Space is closed to
+    // viewers until they reconnect, so it stops like a delegation that is off.
+    if (error.code === "OWNER_NOT_CONNECTED") {
+      dispose();
+      opts.onDelegationOff?.("owner_not_connected", error.message);
+      return;
+    }
+    if (error.code === "TOOL_NOT_DELEGABLE" && type === "call") {
+      const tool = error.tool ?? (isObject(payload) && typeof payload.tool === "string" ? payload.tool : "");
+      opts.onToolNotDelegable?.(tool, error.message);
+      return;
+    }
     if (error.code === "NOT_CONNECTED" && type === "call") {
       const space = opts.getSpace();
       const integration =
         error.integration ?? (isObject(payload) && typeof payload.integration === "string" ? payload.integration : "");
       if (!integration) return;
+      if (error.delegated) {
+        opts.onOwnerNotConnected?.(integration, error.message);
+        return;
+      }
       const name = space.tools.find((t) => t.integration === integration)?.integrationName || integration;
       opts.onNotConnected?.(integration, name);
     }

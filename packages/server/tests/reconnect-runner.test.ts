@@ -612,6 +612,28 @@ describe("ensureCookieSession", () => {
     expect(openPrivateTab).not.toHaveBeenCalled();
   });
 
+  it("autoReconnect false: a dead session is not connected and nothing runs, not even the fast path", async () => {
+    await updateReconnectState(U, I, { deadAt: Date.now() });
+    live.cookies = [goodCookie];
+    probeStatus = 200;
+    expect(await ensureCookieSession(U, I, { autoReconnect: false })).toBe(false);
+    expect(openPrivateTab).not.toHaveBeenCalled();
+    expect(__deps.probe).not.toHaveBeenCalled();
+    expect((await getReconnectState(U, I)).deadAt).toBeTypeOf("number");
+  });
+
+  it("autoReconnect false: expired cookies are not connected and nothing runs", async () => {
+    await storeCookies(U, I, { domain: "app.example.com", cookies: [{ ...goodCookie, value: "tok-old", expires: 1 }], capturedAt: 1 });
+    expect(await ensureCookieSession(U, I, { autoReconnect: false })).toBe(false);
+    expect(openPrivateTab).not.toHaveBeenCalled();
+    expect(__deps.probe).not.toHaveBeenCalled();
+  });
+
+  it("autoReconnect false: a live session is still connected", async () => {
+    expect(await ensureCookieSession(U, I, { autoReconnect: false })).toBe(true);
+    expect(openPrivateTab).not.toHaveBeenCalled();
+  });
+
   it("no cookie row: no run", async () => {
     await db.run("DELETE FROM connections WHERE user_id = ?", [U]);
     expect(await ensureCookieSession(U, I)).toBe(false);

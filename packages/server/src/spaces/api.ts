@@ -1,18 +1,23 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { effectOf } from "@a-workbench/shared";
-import { noteRequestAuth, currentAuditContext } from "../audit/context";
+import { noteRequestAuth, currentAuditContext, runWithAuditContext } from "../audit/context";
+import { auditLogger } from "../audit/logger";
 import { verifySession } from "../auth/session";
 import { getUserById } from "../auth/users";
 import { getToken } from "../auth/tokens";
 import { hasValidCookies } from "../auth/cookie";
 import { registry, type PluginTool } from "../plugins/registry";
 import { isInternalIntegration } from "../plugins/internal-names";
-import { executeSingle } from "../mcp/meta-tools";
+import { executeDelegated, executeSingle } from "../mcp/meta-tools";
+import { can } from "../permissions/store";
 import { canView, type Viewer } from "./access";
+import { delegationFor, mayEnableDelegation, recordDelegationChange, recordModeReset, type DelegationState } from "./delegation";
 import {
   changeShares,
+  delegationSuspended,
   getShares,
   getSpace,
+  consentHash,
   grantConsent,
   hasConsent,
   hasFiles,
@@ -25,12 +30,13 @@ import {
   ownerEmailOf,
   parseEmails,
   revokeConsent,
+  toolsHash,
   updateSpaceMeta,
   type Space,
   type Visibility,
 } from "./store";
 import { mintSig } from "./sig";
-import { takeToken } from "./rate-limit";
+import { takeOwnerToken, takeToken } from "./rate-limit";
 
 // The portal API behind the Space shell. Portal session only: the shell is the
 // one place a human drives a Space, and an agent credential (API key, OAuth
@@ -53,6 +59,11 @@ interface ErrorBody {
   integration?: string;
   tool?: string;
   retryAfterMs?: number;
+  // DELEGATION_OFF: why ("turned_off" | "tools_changed"); OWNER_NOT_CONNECTED
+  // on a call: "owner_not_connected", the same reason the detail shows.
+  reason?: string;
+  // NOT_CONNECTED on a delegated call: the owner must reconnect, not the viewer.
+  delegated?: boolean;
 }
 
 function fail(reply: FastifyReply, status: number, body: ErrorBody) {
@@ -100,6 +111,20 @@ async function unconnectedIntegrations(space: Space, userId: string): Promise<st
     if (!(await isConnected(tool.integration, userId))) seen.set(tool.integration, integ.displayName ?? tool.integration);
   }
   return [...seen.values()];
+}
+
+/**
+ * For a viewer of a delegated Space (delegation in effect, viewer not the
+ * owner): why they cannot enter it yet, when the owner is missing a connection
+ * for any integration the Space uses (same rule as unconnectedIntegrations).
+ * It names the missing integrations, which a viewer needs to understand why
+ * they are held; it says nothing of the owner's permission or account.
+ */
+async function ownerNotConnectedMessage(space: Space, ownerId: string): Promise<string | null> {
+  const missing = await unconnectedIntegrations(space, ownerId);
+  if (missing.length === 0) return null;
+  const ownerEmail = (await ownerEmailOf(space.ownerId)) ?? "The owner";
+  return `${ownerEmail} needs to reconnect ${missing.join(", ")} before this Space can be used.`;
 }
 
 /**
@@ -169,6 +194,11 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
         for (const s of await listAllSpaces()) {
           if (!hasFiles(s.name)) continue;
           if (!(await canView(s, viewer))) continue;
+          const mine = s.ownerId === viewer.userId;
+          // Same rule as the detail: the owner sees the stored mode, anyone
+          // else only whether it is in effect. Viewer-mode Spaces skip the
+          // permission read.
+          const delegation = mine || s.accessMode !== "owner" ? null : await delegationFor(s);
           out.push({
             name: s.name,
             title: s.title,
@@ -176,7 +206,11 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
             ownerEmail: s.ownerEmail,
             visibility: s.visibility,
             updatedAt: s.updatedAt,
-            mine: s.ownerId === viewer.userId,
+            mine,
+            delegate_access: mine ? s.accessMode === "owner" : delegation?.mode === "owner",
+            delegation_suspended: mine
+              ? delegationSuspended(s)
+              : delegation?.mode === "off" && delegation.reason === "tools_changed",
           });
         }
         return { spaces: out };
@@ -187,6 +221,17 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
         const space = await openable(request.params.name, viewer);
         if (!space) return notFound(reply);
         const mine = space.ownerId === viewer.userId;
+        // Read the owner's permission once: for can_delegate and for the mode.
+        const ownerCanDelegate = mine ? await can(viewer.userId, "spaces.delegate_access") : undefined;
+        const delegation = await delegationFor(space, { ownerCanDelegate });
+        // Delegated: the tools run with the owner's connections, so that is
+        // what "connected" reports.
+        const connectedAs = delegation.mode === "owner" ? delegation.runAs : viewer.userId;
+        // A viewer of a delegated Space is held at a gate (not the consent
+        // screen) until the owner has connected everything the Space uses.
+        // The owner opening their own Space gets the ordinary connect gate.
+        const ownerGate =
+          !mine && delegation.mode === "owner" ? await ownerNotConnectedMessage(space, delegation.runAs) : null;
 
         const tools = [];
         for (const name of space.tools) {
@@ -201,6 +246,7 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
               connected: false,
               description: "",
               missing: true,
+              delegable: false,
             });
             continue;
           }
@@ -209,8 +255,9 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
             integration: tool.integration,
             integrationName: integ.displayName ?? tool.integration,
             effect: effectOf(tool),
-            connected: await isConnected(tool.integration, viewer.userId),
+            connected: await isConnected(tool.integration, connectedAs),
             description: tool.description ?? "",
+            delegable: tool.delegable !== false,
           });
         }
 
@@ -225,7 +272,27 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           updatedAt: space.updatedAt,
           tools,
           consented: await hasConsent(space, viewer.userId),
+          // What the viewer approves when they approve this screen; sent back
+          // with the approval.
+          consent_hash: consentHash(space, viewer.userId),
           appUrl: `/s/${space.name}/app/${mintSig(space.name, viewer.userId)}/`,
+          // The owner sees the stored mode; anyone else only whether it is in
+          // effect. A viewer sees whether it is paused (tools changed) or off,
+          // never the owner's permission or account state.
+          delegate_access: mine ? space.accessMode === "owner" : delegation.mode === "owner",
+          delegation_suspended: mine
+            ? delegationSuspended(space)
+            : delegation.mode === "off" && delegation.reason === "tools_changed",
+          // Set when a viewer cannot use the Space: delegation off or paused,
+          // or (viewers only) "owner_not_connected" while delegation is in effect.
+          delegation_off:
+            delegation.mode === "off"
+              ? { reason: delegation.reason, message: delegation.message }
+              : ownerGate
+                ? { reason: "owner_not_connected" as const, message: ownerGate }
+                : null,
+          // Owner only: the hash of the list shown, sent back to confirm it.
+          ...(mine ? { tools_hash: toolsHash(space.tools), can_delegate: ownerCanDelegate === true } : {}),
         };
       });
 
@@ -237,7 +304,7 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
       // can open it but do not own it.
       scope.patch<{
         Params: { name: string };
-        Body: { visibility?: unknown; add_users?: unknown; remove_users?: unknown };
+        Body: { visibility?: unknown; add_users?: unknown; remove_users?: unknown; delegate_access?: unknown; tools_hash?: unknown };
       }>("/:name/sharing", async (request, reply) => {
         const viewer = viewerOf(request);
         const space = await openable(request.params.name, viewer);
@@ -245,7 +312,13 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
         if (space.ownerId !== viewer.userId) {
           return fail(reply, 403, { code: "FORBIDDEN", message: "Only the owner can change who can open this Space." });
         }
-        const body = (request.body ?? {}) as { visibility?: unknown; add_users?: unknown; remove_users?: unknown };
+        const body = (request.body ?? {}) as {
+          visibility?: unknown;
+          add_users?: unknown;
+          remove_users?: unknown;
+          delegate_access?: unknown;
+          tools_hash?: unknown;
+        };
 
         let visibility: Visibility = space.visibility;
         if (body.visibility !== undefined) {
@@ -267,7 +340,23 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           remove = e.emails;
         }
 
+        if (body.delegate_access !== undefined && typeof body.delegate_access !== "boolean") {
+          return fail(reply, 400, { code: "INVALID_ARGS", message: "delegate_access must be true or false" });
+        }
+        if (body.tools_hash !== undefined && typeof body.tools_hash !== "string") {
+          return fail(reply, 400, { code: "INVALID_ARGS", message: "tools_hash must be a string" });
+        }
+        const delegate = body.delegate_access as boolean | undefined;
+        const reviewedHash = body.tools_hash as string | undefined;
+        if (delegate === true && reviewedHash === undefined) {
+          return fail(reply, 400, { code: "INVALID_ARGS", message: "tools_hash is required to turn on delegated access." });
+        }
+
         // Validate the outcome before writing anything.
+        if (delegate === true) {
+          const check = await mayEnableDelegation(viewer.userId, visibility);
+          if (!check.ok) return fail(reply, 403, { code: check.code, message: check.message });
+        }
         if (visibility === "users") {
           const removed = new Set(remove);
           const projected = new Set([...(await getShares(space.name)), ...add].filter((x) => !removed.has(x)));
@@ -276,9 +365,37 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           }
         }
 
-        if (visibility !== space.visibility) {
-          const updated = await updateSpaceMeta(space.name, viewer.userId, { visibility });
+        // Write when the audience or the mode changes, or on a confirm (true
+        // while already on is the re-confirm after a tool change).
+        let current: Space = space;
+        const modeOff = delegate === false && space.accessMode === "owner";
+        // true on a Space already on, unpaused, for the same list: nothing to
+        // confirm (a double submit), so no confirm and no second ON row.
+        const reconfirm =
+          delegate === true &&
+          !(space.accessMode === "owner" && !delegationSuspended(space) && reviewedHash === toolsHash(space.tools));
+        if (visibility !== space.visibility || reconfirm || modeOff) {
+          const updated = await updateSpaceMeta(space.name, viewer.userId, {
+            visibility,
+            ...(reconfirm
+              ? { accessMode: "owner" as const, confirmDelegation: true, expectedToolsHash: reviewedHash }
+              : delegate === false
+                ? { accessMode: "viewer" as const }
+                : {}),
+          });
+          if (updated === "conflict") {
+            return fail(reply, 409, { code: "CONFLICT", message: "This Space changed meanwhile. Try again." });
+          }
+          if (updated === "tools_changed") {
+            return fail(reply, 409, { code: "TOOLS_CHANGED", message: "The tool list changed. Review it again." });
+          }
           if (!updated) return fail(reply, 403, { code: "FORBIDDEN", message: "Only the owner can change who can open this Space." });
+          current = updated.space;
+          if (reconfirm) {
+            await recordDelegationChange(current, viewer.userId, "on");
+          } else if (updated.modeReset) {
+            await recordModeReset(current, viewer.userId, delegate === false);
+          }
         }
         let users = await getShares(space.name);
         if (add.length > 0 || remove.length > 0) {
@@ -291,14 +408,39 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           }
           users = changed;
         }
-        return { visibility, users };
+        return {
+          visibility,
+          users,
+          delegate_access: current.accessMode === "owner",
+          delegation_suspended: delegationSuspended(current),
+        };
       });
 
-      scope.post<{ Params: { name: string } }>("/:name/consent", async (request, reply) => {
+      // The approval names what the viewer was shown (`consent_hash` from the
+      // detail). If the Space changed since (tools, mode, owner), the screen
+      // they approved is not this Space any more: refuse, and the portal
+      // shows the new one.
+      scope.post<{ Params: { name: string }; Body: { consent_hash?: unknown } }>("/:name/consent", async (request, reply) => {
         const viewer = viewerOf(request);
         const space = await openable(request.params.name, viewer);
         if (!space) return notFound(reply);
-        const unconnected = await unconnectedIntegrations(space, viewer.userId);
+        const shown = (request.body as { consent_hash?: unknown } | undefined)?.consent_hash;
+        if (typeof shown !== "string" || shown !== consentHash(space, viewer.userId)) {
+          return fail(reply, 409, { code: "CONSENT_CHANGED", message: "This Space changed. Review it again." });
+        }
+        // A delegated Space runs with the owner's connections, so the viewer has
+        // nothing to connect; the consent they give is for that mode (the hash
+        // covers it). While delegation is in effect the owner must have
+        // connected everything the Space uses, or nobody else may approve it.
+        // Ordinary Spaces (and the owner's own view) need the viewer's
+        // connections instead.
+        const delegatedForViewer = space.accessMode === "owner" && space.ownerId !== viewer.userId;
+        if (delegatedForViewer) {
+          const delegation = await delegationFor(space);
+          const held = delegation.mode === "owner" ? await ownerNotConnectedMessage(space, delegation.runAs) : null;
+          if (held) return fail(reply, 409, { code: "OWNER_NOT_CONNECTED", message: held });
+        }
+        const unconnected = delegatedForViewer ? [] : await unconnectedIntegrations(space, viewer.userId);
         if (unconnected.length > 0) {
           return fail(reply, 409, {
             code: "INTEGRATION_NOT_CONNECTED",
@@ -347,9 +489,94 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           return fail(reply, 404, { code: "TOOL_UNAVAILABLE", message: `${toolName} is not available.`, tool: toolName });
         }
 
-        // 5. Destructive calls need the shell's own confirmation.
+        // 5. The viewer's rate limit, before anything that can be refused and
+        // audited: a page looping on a refusal (a paused delegated Space)
+        // is held to the same 60 a minute, so it cannot flood the owner's
+        // audit log. Rate limiting itself is never audited; it is what bounds
+        // the log.
+        const viewerRate = takeToken(viewer.userId, space.name);
+        if (!viewerRate.ok) {
+          return fail(reply, 429, {
+            code: "RATE_LIMITED",
+            message: "Too many calls. Try again shortly.",
+            retryAfterMs: viewerRate.retryAfterMs,
+            integration: tool.integration,
+            tool: toolName,
+          });
+        }
+
+        // 6. Delegation. Decided per call; an owner mode that is no longer valid
+        // is refused, never run with the viewer's own access instead. The
+        // owner opening their own Space is never delegation: it is their own
+        // access, so it costs no lookup.
+        const delegation: DelegationState =
+          space.ownerId === viewer.userId ? { mode: "viewer" } : await delegationFor(space);
+        const actor = delegation.mode === "viewer" ? undefined : viewer.userId;
+        // Every delegated refusal from here on (rate limiting aside) is audited, as the owner's row
+        // with the viewer as actor, so "every call is audited" holds for
+        // refusals too. The actor goes in a copy of the request's audit
+        // context, scoped to this write (the AsyncLocalStorage scope ends when
+        // it returns). A failed write is logged and the refusal still answers,
+        // as with recordDelegationChange.
+        const refuse = async (status: number, err: ErrorBody) => {
+          if (actor) {
+            try {
+              await runWithAuditContext(
+                { ...(currentAuditContext() ?? {}), client_name: `space:${space.name}`, actor_user_id: actor },
+                () =>
+                  auditLogger.log({
+                    user_id: space.ownerId,
+                    integration: tool.integration,
+                    tool: toolName,
+                    action: "EXECUTE",
+                    success: false,
+                    error: err.code,
+                  })
+              );
+            } catch (e) {
+              console.error(
+                `[spaces] audit of refused delegated call failed: space=${space.name} tool=${toolName} code=${err.code}: ` +
+                  (e instanceof Error ? e.message : String(e))
+              );
+            }
+          }
+          return fail(reply, status, err);
+        };
+        if (delegation.mode === "off") {
+          return refuse(403, {
+            code: "DELEGATION_OFF",
+            reason: delegation.reason,
+            message: delegation.message,
+            integration: tool.integration,
+            tool: toolName,
+          });
+        }
+        // The owner is missing a connection the Space uses: the Space is closed
+        // to viewers, whichever tool was asked for, before anything runs.
+        if (delegation.mode === "owner" && actor) {
+          const held = await ownerNotConnectedMessage(space, delegation.runAs);
+          if (held) {
+            return refuse(409, {
+              code: "OWNER_NOT_CONNECTED",
+              reason: "owner_not_connected",
+              message: held,
+              integration: tool.integration,
+              tool: toolName,
+            });
+          }
+        }
+        if (actor && tool.delegable === false) {
+          return refuse(403, {
+            code: "TOOL_NOT_DELEGABLE",
+            message: `${toolName} cannot run with someone else's access.`,
+            integration: tool.integration,
+            tool: toolName,
+          });
+        }
+
+        // 7. Destructive calls need the shell's own confirmation.
         if (effectOf(tool) === "destructive" && body.confirmed !== true) {
-          return fail(reply, 428, {
+          return refuse(428, {
             code: "CONFIRMATION_REQUIRED",
             message: `${toolName} needs your confirmation.`,
             integration: tool.integration,
@@ -357,15 +584,16 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           });
         }
 
-        // 6. Arguments: an object, with no vault reference anywhere. Vault
-        // references are never resolved for a Space (step 8 passes an empty
-        // pre-substituted map); refusing them outright makes that loud.
+        // 8. Arguments: an object, with no vault reference anywhere. Vault
+        // references are never resolved for a Space (step 10 passes an empty
+        // pre-substituted map, and a delegated call never reads a vault);
+        // refusing them outright makes that loud.
         const args = body.args === undefined ? {} : body.args;
         if (!args || typeof args !== "object" || Array.isArray(args)) {
-          return fail(reply, 400, { code: "INVALID_ARGS", message: "args must be an object.", integration: tool.integration, tool: toolName });
+          return refuse(400, { code: "INVALID_ARGS", message: "args must be an object.", integration: tool.integration, tool: toolName });
         }
         if (containsVaultRef(args)) {
-          return fail(reply, 400, {
+          return refuse(400, {
             code: "INVALID_ARGS",
             message: "Vault references are not allowed in a Space.",
             integration: tool.integration,
@@ -373,24 +601,44 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           });
         }
 
-        // 7. Rate limit.
-        const rate = takeToken(viewer.userId, space.name);
-        if (!rate.ok) {
-          return fail(reply, 429, {
-            code: "RATE_LIMITED",
-            message: "Too many calls. Try again shortly.",
-            retryAfterMs: rate.retryAfterMs,
-            integration: tool.integration,
-            tool: toolName,
-          });
+        // 9. When delegated, the owner's bucket per Space too, so many viewers
+        // cannot exhaust the owner's upstream quota. Taken last, only for a
+        // call about to run; like the viewer's, not audited.
+        if (actor) {
+          const ownerRate = takeOwnerToken(space.ownerId, space.name);
+          if (!ownerRate.ok) {
+            return fail(reply, 429, {
+              code: "RATE_LIMITED",
+              message: "Too many calls. Try again shortly.",
+              retryAfterMs: ownerRate.retryAfterMs,
+              integration: tool.integration,
+              tool: toolName,
+            });
+          }
         }
 
-        // 8. Run as the viewer, attributed to the Space in the audit log.
+        // 10. Run as the viewer, or as the owner with the viewer as actor,
+        // attributed to the Space in the audit log.
         const audit = currentAuditContext();
         if (audit) audit.client_name = `space:${space.name}`;
-        const outcome = await executeSingle(viewer.userId, toolName, args as Record<string, unknown>, new Map());
+        const outcome = actor
+          ? await executeDelegated(space.ownerId, actor, toolName, args as Record<string, unknown>)
+          : await executeSingle(viewer.userId, toolName, args as Record<string, unknown>, new Map());
         if ("result" in outcome) return { result: outcome.result };
         if (outcome.error === "NOT_CONNECTED") {
+          if (actor) {
+            // The owner's connection, not the viewer's: no connect action for
+            // the viewer, and no fallback to their own.
+            const ownerEmail = (await ownerEmailOf(space.ownerId)) ?? "The owner";
+            const integrationName = registry.getIntegration(tool.integration)?.displayName ?? tool.integration;
+            return fail(reply, 409, {
+              code: "NOT_CONNECTED",
+              delegated: true,
+              message: `${ownerEmail} needs to reconnect ${integrationName}.`,
+              integration: tool.integration,
+              tool: toolName,
+            });
+          }
           return fail(reply, 409, {
             code: "NOT_CONNECTED",
             message: outcome.message ?? `${tool.integration} is not connected.`,

@@ -12,11 +12,12 @@ import {
   grantSpaceConsent,
   putSpaceKv,
   revokeSpaceConsent,
+  type DelegationOff,
   type SpaceDetail,
   type SpaceSharing,
   type SpaceTool,
 } from "../spaces-api";
-import { createSpaceBridge, type ConfirmRequest } from "../spaces/bridge";
+import { createSpaceBridge, runsAsOwner, type ConfirmRequest } from "../spaces/bridge";
 import { SpaceToolList } from "../spaces/ToolList";
 import { ConfirmActionModal } from "../spaces/ConfirmActionModal";
 import { SharingModal } from "../spaces/SharingModal";
@@ -59,7 +60,11 @@ function ConsentScreen({
   busy: boolean;
   error: string | null;
 }) {
-  const needed = unconnectedIntegrations(space.tools);
+  // A delegated Space runs with the owner's connections, so the viewer has
+  // nothing to connect and sees no connection state. An owner who is missing
+  // a connection holds the viewer at a full-page card before this screen.
+  const delegated = runsAsOwner(space);
+  const needed = delegated ? [] : unconnectedIntegrations(space.tools);
   const blocked = needed.length > 0;
   return (
     <div className="page-center page-center-stack">
@@ -68,11 +73,23 @@ function ConsentScreen({
         <h1 className="space-consent-title">{space.title}</h1>
         <p className="space-muted">by {space.ownerEmail}</p>
         {space.description && <p className="space-consent-desc">{space.description}</p>}
-        <p className="space-consent-explain">
-          This Space runs as you, with your connections. Approve the tools it can use below. Tools tagged Asks first
-          need your OK every time they run.
-        </p>
-        <SpaceToolList tools={space.tools} connectHref={(integration) => `/apps/${encodeURIComponent(integration)}`} />
+        {delegated ? (
+          <p className="space-consent-explain">
+            <strong>These tools run with {space.ownerEmail}'s access, not yours.</strong> Your own connections are not
+            used. Every call is logged under your name and theirs. Tools tagged Asks first need your OK every time they
+            run.
+          </p>
+        ) : (
+          <p className="space-consent-explain">
+            This Space runs as you, with your connections. Approve the tools it can use below. Tools tagged Asks first
+            need your OK every time they run.
+          </p>
+        )}
+        <SpaceToolList
+          tools={space.tools}
+          connectHref={delegated ? undefined : (integration) => `/apps/${encodeURIComponent(integration)}`}
+          hideConnection={delegated}
+        />
         {blocked && (
           <div className="space-consent-needs" role="status">
             <span>
@@ -92,6 +109,13 @@ function ConsentScreen({
   );
 }
 
+/** A notice across the top of a running Space. `connect` adds a Connect link. */
+interface Banner {
+  key: string;
+  text: string;
+  connect?: { integration: string; name: string };
+}
+
 interface Pending {
   request: ConfirmRequest;
   resolve: (allowed: boolean) => void;
@@ -104,8 +128,10 @@ function SpaceRunner({
   onRevoke,
   revoking,
   onSharingSaved,
+  onDelegationOff,
 }: {
   space: SpaceDetail;
+  onDelegationOff: (off: DelegationOff) => void;
   onConsentRequired: () => void;
   onStopped: (why: "paused" | "navigated") => void;
   onRevoke: () => void;
@@ -118,7 +144,8 @@ function SpaceRunner({
   // the frame, which the bridge rightly treats as a navigation.
   const [src] = useState(space.appUrl);
   const [pending, setPending] = useState<Pending | null>(null);
-  const [banners, setBanners] = useState<{ integration: string; name: string }[]>([]);
+  const [banners, setBanners] = useState<Banner[]>([]);
+  const addBanner = (b: Banner) => setBanners((prev) => (prev.some((x) => x.key === b.key) ? prev : [...prev, b]));
   const [menuOpen, setMenuOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [sharingOpen, setSharingOpen] = useState(false);
@@ -129,8 +156,8 @@ function SpaceRunner({
   const emailRef = useRef(user?.email ?? "");
   emailRef.current = user?.email ?? "";
   const pendingRef = useRef<Pending | null>(null);
-  const callbacks = useRef({ onConsentRequired, onStopped });
-  callbacks.current = { onConsentRequired, onStopped };
+  const callbacks = useRef({ onConsentRequired, onStopped, onDelegationOff });
+  callbacks.current = { onConsentRequired, onStopped, onDelegationOff };
 
   useEffect(() => {
     const frame = frameRef.current;
@@ -154,9 +181,15 @@ function SpaceRunner({
           setPending(p);
         }),
       onNotConnected: (integration, integrationName) =>
-        setBanners((prev) =>
-          prev.some((b) => b.integration === integration) ? prev : [...prev, { integration, name: integrationName }]
-        ),
+        addBanner({
+          key: `connect:${integration}`,
+          text: `${integrationName} is not connected, so this Space cannot use it.`,
+          connect: { integration, name: integrationName },
+        }),
+      // The owner's connection: only the owner can fix it, so no Connect link.
+      onOwnerNotConnected: (integration, message) => addBanner({ key: `owner:${integration}`, text: message }),
+      onToolNotDelegable: (tool, message) => addBanner({ key: `not-delegable:${tool}`, text: message }),
+      onDelegationOff: (reason, message) => callbacks.current.onDelegationOff({ reason, message }),
       onConsentRequired: () => callbacks.current.onConsentRequired(),
       onPaused: () => callbacks.current.onStopped("paused"),
       onNavigatedAway: () => callbacks.current.onStopped("navigated"),
@@ -187,7 +220,13 @@ function SpaceRunner({
           <span className="space-bar-owner">by {space.ownerEmail}</span>
         </div>
         <div className="space-bar-right">
-          <span className="space-bar-as">Running as you</span>
+          {runsAsOwner(space) ? (
+            <span className="space-bar-as space-bar-as-delegated" title={`Tools run with ${space.ownerEmail}'s access`}>
+              Using {space.ownerEmail}'s delegated access
+            </span>
+          ) : (
+            <span className="space-bar-as">Running as you</span>
+          )}
           <div className="space-menu">
             <Button
               variant="outline"
@@ -245,15 +284,17 @@ function SpaceRunner({
       {banners.length > 0 && (
         <div className="space-banners">
           {banners.map((b) => (
-            <div key={b.integration} className="space-banner" role="status">
-              <span>{b.name} is not connected, so this Space cannot use it.</span>
-              <a href={`/apps/${encodeURIComponent(b.integration)}`} target="_blank" rel="noopener">
-                Connect {b.name}
-              </a>
+            <div key={b.key} className="space-banner" role="status">
+              <span>{b.text}</span>
+              {b.connect && (
+                <a href={`/apps/${encodeURIComponent(b.connect.integration)}`} target="_blank" rel="noopener">
+                  Connect {b.connect.name}
+                </a>
+              )}
               <button
                 type="button"
                 className="ui-button ui-button-ghost ui-button-xs"
-                onClick={() => setBanners((prev) => prev.filter((x) => x.integration !== b.integration))}
+                onClick={() => setBanners((prev) => prev.filter((x) => x.key !== b.key))}
               >
                 Dismiss
               </button>
@@ -275,15 +316,13 @@ function SpaceRunner({
       <ConfirmActionModal request={pending?.request ?? null} onAllow={() => settle(true)} onDeny={() => settle(false)} />
 
       <Modal open={toolsOpen} onClose={() => setToolsOpen(false)} title="Tools this Space can use" size="lg">
-        <SpaceToolList tools={space.tools} />
+        <SpaceToolList tools={space.tools} hideConnection={runsAsOwner(space)} />
       </Modal>
 
       {space.mine && (
         <SharingModal
           open={sharingOpen}
-          spaceName={space.name}
-          visibility={space.visibility}
-          users={space.users ?? []}
+          space={space}
           onClose={() => setSharingOpen(false)}
           onSaved={onSharingSaved}
         />
@@ -299,6 +338,9 @@ export default function SpaceShell() {
   const queryKey = ["space", name];
   const [stopped, setStopped] = useState<Stopped>(null);
   const [mountKey, setMountKey] = useState(0);
+  // Set when a call answered DELEGATION_OFF while the Space was running.
+  const [offDuringRun, setOffDuringRun] = useState<DelegationOff | null>(null);
+  const [retrying, setRetrying] = useState(false);
 
   const { data, error, isLoading, refetch } = useQuery({
     queryKey,
@@ -322,10 +364,17 @@ export default function SpaceShell() {
     queryClient.setQueryData<SpaceDetail>(queryKey, (d) => (d ? { ...d, consented } : d));
 
   const approve = useMutation({
-    mutationFn: () => grantSpaceConsent(name),
-    // The viewer's connections changed since this page loaded: show the new state.
+    mutationFn: () => grantSpaceConsent(name, data?.consent_hash),
+    // The viewer's connections, or the Space itself, changed since this page
+    // loaded: show the new state.
     onError: (e) => {
-      if (e instanceof SpaceApiError && e.code === "INTEGRATION_NOT_CONNECTED") void refetch();
+      // OWNER_NOT_CONNECTED: the refetched detail carries the waiting card.
+      if (
+        e instanceof SpaceApiError &&
+        (e.code === "INTEGRATION_NOT_CONNECTED" || e.code === "CONSENT_CHANGED" || e.code === "OWNER_NOT_CONNECTED")
+      ) {
+        void refetch();
+      }
     },
     onSuccess: () => {
       setStopped(null);
@@ -362,6 +411,50 @@ export default function SpaceShell() {
     );
   }
 
+  // A viewer of a delegated Space whose shared access is off, or whose owner
+  // has not connected everything it uses: nothing in it can run, and their own
+  // access is never used instead. Shown before consent too.
+  const off = offDuringRun ?? (!data.mine && data.delegation_off ? data.delegation_off : null);
+  if (off) {
+    return (
+      <CenterCard>
+        <h1 className="space-card-title">
+          {off.reason === "tools_changed"
+            ? "Space paused"
+            : off.reason === "owner_not_connected"
+              ? "Waiting for the owner"
+              : "Shared access is off"}
+        </h1>
+        <p className="space-muted">{off.message}</p>
+        <div className="space-consent-actions">
+          <Button
+            variant="outline"
+            disabled={retrying}
+            onClick={async () => {
+              setRetrying(true);
+              // A refused Approve (the owner was not connected) is not news once
+              // the consent screen comes back.
+              approve.reset();
+              try {
+                const r = await refetch();
+                // Back on (or never delegated any more): run the Space again.
+                if (r.data && !r.data.delegation_off) {
+                  setOffDuringRun(null);
+                  setMountKey((k) => k + 1);
+                }
+              } finally {
+                setRetrying(false);
+              }
+            }}
+          >
+            {retrying ? "Checking..." : "Try again"}
+          </Button>
+          <Link to="/spaces" className="ui-button ui-button-primary ui-button-md">Go to Spaces</Link>
+        </div>
+      </CenterCard>
+    );
+  }
+
   if (!data.consented) {
     return (
       <ConsentScreen
@@ -371,6 +464,8 @@ export default function SpaceShell() {
           approve.error
             ? approve.error instanceof SpaceApiError && approve.error.code === "INTEGRATION_NOT_CONNECTED"
               ? approve.error.message
+              : approve.error instanceof SpaceApiError && approve.error.code === "CONSENT_CHANGED"
+                ? "This Space changed. Review it again."
               : "Could not record your approval. Try again."
             : null
         }
@@ -410,11 +505,14 @@ export default function SpaceShell() {
       space={data}
       revoking={revoke.isPending}
       onRevoke={() => revoke.mutate()}
-      onSharingSaved={(sharing) => {
-        queryClient.setQueryData<SpaceDetail>(queryKey, (d) => (d ? { ...d, ...sharing } : d));
+      onSharingSaved={() => {
+        // Read the whole detail again: a save can change more than the fields
+        // it answers with (the mode, the pause, the owner's own consent).
+        void queryClient.invalidateQueries({ queryKey });
         void queryClient.invalidateQueries({ queryKey: ["spaces"] });
       }}
       onStopped={setStopped}
+      onDelegationOff={setOffDuringRun}
       onConsentRequired={() => {
         // The author changed the tool list: ask again, over the new list.
         setConsented(false);

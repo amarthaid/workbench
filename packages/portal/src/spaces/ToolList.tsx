@@ -32,13 +32,23 @@ function groupTools(tools: SpaceTool[]): Group[] {
 
 // The declared tools, one box per integration, each tagged with what it does.
 // Used by the consent screen and by the running Space's "View tools".
+// `delegation`: the list an owner lends; a tool that never runs with someone
+// else's access is tagged Owner only.
 export function SpaceToolList({
   tools,
   connectHref,
+  delegation = false,
+  hideConnection = false,
 }: {
   tools: SpaceTool[];
   /** When set, an unconnected integration gets a Connect link to this URL. */
   connectHref?: (integration: string) => string;
+  delegation?: boolean;
+  /**
+   * No connection state at all: a viewer of a delegated Space, whose tools run
+   * with the owner's connections, has nothing to connect.
+   */
+  hideConnection?: boolean;
 }) {
   const groups = groupTools(tools);
   if (groups.length === 0) {
@@ -51,7 +61,7 @@ export function SpaceToolList({
           key={g.integration}
           title={g.integrationName}
           action={
-            g.connected ? (
+            hideConnection ? null : g.connected ? (
               connectHref ? <Badge variant="green">Connected</Badge> : null
             ) : (
               <span className="space-tool-connect">
@@ -80,6 +90,7 @@ export function SpaceToolList({
                 </span>
                 <span className="space-tool-tags">
                   {t.missing && <Badge variant="neutral">Missing</Badge>}
+                  {delegation && !t.missing && t.delegable === false && <Badge variant="neutral">Owner only</Badge>}
                   <Badge variant={effect.variant}>{effect.label}</Badge>
                 </span>
               </BoxRow>

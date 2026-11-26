@@ -156,6 +156,10 @@ export interface ToolDefinition {
   // Optional for backward compatibility with third-party plugins. An
   // unlabelled tool is treated as "destructive" (see effectOf).
   effect?: ToolEffect;
+  // false: refused when a Space runs with its owner's access (delegated
+  // access), e.g. tools that rewrite their own stored credential. Unset means
+  // delegable.
+  delegable?: boolean;
 }
 
 /** A tool's effective side-effect label: unlabelled tools count as destructive. */
@@ -182,12 +186,16 @@ export interface AuditEvent {
     | "ADMIN_USER_DISABLE"
     | "ADMIN_USER_ENABLE"
     | "ADMIN_KEY_REVOKE"
+    | "ADMIN_PERMISSION_SET"
+    | "ADMIN_PERMISSION_CLEAR"
     | "ADMIN_INTEGRATION_SET"
     | "ADMIN_CUSTOM_APPS_POLICY"
     | "ADMIN_BROWSER_BLOCKLIST"
     | "CURL_SESSION"
     | "CURL_REQUEST"
-    | "ADMIN_AUDIT_PAYLOAD_VIEW";
+    | "ADMIN_AUDIT_PAYLOAD_VIEW"
+    | "SPACE_DELEGATION_ON"
+    | "SPACE_DELEGATION_OFF";
   success: boolean;
   error?: string;
   /** The user's email when the event was written (null if unknown). */
@@ -200,6 +208,13 @@ export interface AuditEvent {
   /** OAuth client, for auth_method "oauth". The name is self-declared at registration. */
   client_id?: string;
   client_name?: string;
+  /**
+   * Who triggered the call when it ran on someone else's access (a delegated
+   * Space): user_id is whose access ran, actor_user_id is the viewer. Absent
+   * on ordinary calls.
+   */
+  actor_user_id?: string;
+  actor_email?: string | null;
   /** AUDIT_PAYLOAD: sanitised JSON text of the arguments the agent sent, capped. */
   args?: string;
   args_truncated?: boolean;

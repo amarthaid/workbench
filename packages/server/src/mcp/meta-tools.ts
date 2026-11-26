@@ -23,7 +23,7 @@ import { signConnectToken } from "../auth/connect-token";
 import { signCurlToken } from "../auth/curl-session";
 import { resolveVaultRefs, scrubVaultValues, scrubString, VaultRefError, VaultScrubError } from "../vault/interpolate";
 import { touchUsed } from "../vault/store";
-import { requestLogFields } from "../audit/context";
+import { requestLogFields, currentAuditContext, runWithAuditContext } from "../audit/context";
 import { redactInlineSecrets } from "../audit/payload";
 import { rememberSubstituted, recentSubstituted } from "../vault/recent";
 
@@ -32,6 +32,9 @@ import { rememberSubstituted, recentSubstituted } from "../vault/recent";
 // can't drift between the two copies.
 const CONNECT_DESCRIPTION =
   "Begin connecting an integration. Returns a connectionId and a workbench URL for the user to open. The user must be signed in to workbench as the same account this agent is connected to; the link will not work for anyone else. Call wait_for_connection afterward.";
+
+/** What a delegated call's result shows in place of an owner's vault value. */
+export const REDACTED_MARKER = "[redacted]";
 
 // A ring value shorter than this only scrubs as a whole-string match, never
 // as a substring inside unrelated prose — see the `substringOk` build below.
@@ -292,18 +295,65 @@ const executeToolsInput = z
     });
   });
 
+const NO_RECONNECT = { autoReconnect: false } as const;
+
+// Runs as `userId` with that user's full power: vault, custom apps, cookie
+// auto-reconnect. Never call it on someone else's behalf (a delegated Space
+// call): use executeDelegated, which drops those and records the actor.
 export async function executeSingle(
   userId: string,
   toolName: string,
   rawArgs: Record<string, unknown>,
   preSubstituted?: Map<string, string>
 ): Promise<ExecResult> {
+  // An ordinary call never carries an actor, even inside a scope that has one.
+  const audit = currentAuditContext();
+  if (audit?.actor_user_id !== undefined) {
+    const { actor_user_id: _actor, ...rest } = audit;
+    return runWithAuditContext(rest, () => runSingle(userId, toolName, rawArgs, preSubstituted));
+  }
+  return runSingle(userId, toolName, rawArgs, preSubstituted);
+}
+
+/**
+ * Run a tool on `ownerId`'s access for `actorUserId` (a delegated Space: the
+ * owner's connections, the viewer's request). The only way to run with an
+ * actor. Audit rows and request log lines carry the actor, and nothing runs on
+ * the owner's behalf beyond the tool's own call: no cookie auto-reconnect
+ * (which types the stored login into their browser), no vault lookup or
+ * substitution (values the owner recently used are still scrubbed from the
+ * result, but redacted to "[redacted]", never named), no custom-app fallback. A token refresh on expiry or 401 still
+ * happens: it renews the same grant and is audited as the owner.
+ *
+ * The actor lives in a copy of the request's audit context, scoped to this
+ * call by AsyncLocalStorage: the scope ends when the call returns, and the
+ * shared request context is never written.
+ */
+export async function executeDelegated(
+  ownerId: string,
+  actorUserId: string,
+  toolName: string,
+  rawArgs: Record<string, unknown>
+): Promise<ExecResult> {
+  return runWithAuditContext({ ...(currentAuditContext() ?? {}), actor_user_id: actorUserId }, () =>
+    runSingle(ownerId, toolName, rawArgs, undefined, { actorUserId })
+  );
+}
+
+async function runSingle(
+  userId: string,
+  toolName: string,
+  rawArgs: Record<string, unknown>,
+  preSubstituted?: Map<string, string>,
+  opts?: { actorUserId?: string }
+): Promise<ExecResult> {
+  const actor = opts?.actorUserId;
   // What the audit log may record of the arguments (AUDIT_PAYLOAD): the ones
   // the agent sent, `{{vault:…}}` references unresolved. Never for the vault's
   // own tools, whose arguments are the secrets themselves.
   const auditArgs = toolName.startsWith("vault_") ? undefined : rawArgs;
   const targetTool = registry.getTool(toolName);
-  if (!targetTool) {
+  if (!targetTool && !actor) {
     const appTool = await getToolForUser(userId, toolName);
     if (appTool) return executeCustomAppSingle(userId, appTool, rawArgs, preSubstituted);
   }
@@ -330,7 +380,9 @@ export async function executeSingle(
         integ?.auth.type === "none"
           ? true
           : integ?.auth.type === "cookie"
-            ? await ensureCookieSession(userId, targetTool.integration)
+            ? await (actor
+                ? ensureCookieSession(userId, targetTool.integration, NO_RECONNECT)
+                : ensureCookieSession(userId, targetTool.integration))
             : !!(await getToken(userId, targetTool.integration));
 
       if (!isConnected) {
@@ -357,14 +409,16 @@ export async function executeSingle(
       // `preSubstituted` means the caller (compose) already resolved them in
       // its own single pass; scanning again here would resolve refs that
       // arrived inside an earlier step's output.
+      // With an actor the owner's vault is never read or touched: references
+      // stay literal.
       let effectiveArgs: Record<string, unknown> = rawArgs ?? {};
       let substituted = new Map<string, string>();
-      if (preSubstituted) {
+      if (!actor && preSubstituted) {
         substituted = preSubstituted;
         if (substituted.size > 0) {
           void touchUsed(userId, [...substituted.keys()]).catch(() => undefined);
         }
-      } else if (!toolName.startsWith("vault_")) {
+      } else if (!actor && !toolName.startsWith("vault_")) {
         try {
           const resolved = await resolveVaultRefs(userId, effectiveArgs);
           effectiveArgs = resolved.args;
@@ -396,6 +450,11 @@ export async function executeSingle(
       // mid-session) still scrubs the stale value too, not just the fresh
       // one.
       const recent = recentSubstituted(userId);
+      // With an actor the reader is not the vault's owner: a value the owner
+      // recently used is still scrubbed, but to a fixed marker, so the
+      // viewer learns neither the value nor the secret's name (a name would
+      // also confirm a guessed value).
+      const marker = actor ? REDACTED_MARKER : undefined;
       if (substituted.size > 0) rememberSubstituted(userId, substituted);
 
       // ONE combined list for scrubString/scrubVaultValues below, not two
@@ -457,7 +516,7 @@ export async function executeSingle(
             duration_ms: Date.now() - start,
           });
           return {
-            error: `Invalid arguments for ${toolName}: ${scrubString(parsed.error?.message ?? "schema mismatch", scrubEntries, substringOk)}`,
+            error: `Invalid arguments for ${toolName}: ${scrubString(parsed.error?.message ?? "schema mismatch", scrubEntries, substringOk, marker)}`,
           };
         }
         parsedArgs = parsed.data;
@@ -465,7 +524,7 @@ export async function executeSingle(
         // Unexpected throw during schema parsing (e.g. a malformed schema).
         // Don't swallow silently: record it observably, then fall through
         // with raw args so execution still proceeds.
-        const err = scrubString(e instanceof Error ? e.message : String(e), scrubEntries, substringOk);
+        const err = scrubString(e instanceof Error ? e.message : String(e), scrubEntries, substringOk, marker);
         await auditLogger.log({
           user_id: userId,
           integration: targetTool.integration,
@@ -479,11 +538,14 @@ export async function executeSingle(
       }
 
       try {
-        const toolCtx = await createContext(userId, targetTool.integration);
+        const toolCtx = actor
+          ? await createContext(userId, targetTool.integration, NO_RECONNECT)
+          : await createContext(userId, targetTool.integration);
         const result = scrubVaultValues(
           await targetTool.handler(toolCtx, parsedArgs as Record<string, unknown>),
           scrubEntries,
-          substringOk
+          substringOk,
+          marker
         );
         const duration_ms = Date.now() - start;
         await auditLogger.log({
@@ -547,7 +609,7 @@ export async function executeSingle(
           toolExecutionDuration.observe({ integration: targetTool.integration, tool: toolName, success: "false" }, durationS);
           return { error: e.code };
         }
-        const err = scrubString(e instanceof Error ? e.message : String(e), scrubEntries, substringOk);
+        const err = scrubString(e instanceof Error ? e.message : String(e), scrubEntries, substringOk, marker);
         const duration_ms = Date.now() - start;
         await auditLogger.log({
           user_id: userId,

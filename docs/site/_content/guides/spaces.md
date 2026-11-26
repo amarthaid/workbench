@@ -12,6 +12,7 @@ A Space is a static site with one extra: a small SDK that lets the page call wor
 - Bundle or inline every asset. Scripts, styles, images and fonts load only from the Space itself (relative URLs like `./app.js` work) or inline; CDNs and web fonts are blocked.
 - Declare every tool the page calls in `deploy_space`'s `tools`. Anything else is refused with `TOOL_NOT_DECLARED`.
 - Expect the viewer to approve the tool list once, and to confirm every `destructive` call. A denied call rejects with `DENIED`.
+- Calls use the viewer's connections, unless you turn on [delegated access](../integrations/spaces.md#delegated-access) in the portal: then they use yours. Render `DELEGATION_OFF` and `TOOL_NOT_DELEGABLE` errors in the page like any other.
 
 ## The SDK
 

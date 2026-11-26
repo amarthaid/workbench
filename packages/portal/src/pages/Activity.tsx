@@ -8,6 +8,7 @@ import { Tabs } from "../components/ui/Tabs";
 import { Select } from "../components/ui/Input";
 import { Button } from "../components/ui/Button";
 import { ActivityTable, integrationLookup } from "../components/ActivityTable";
+import { fetchSpaces } from "../spaces-api";
 
 const PAGE_SIZE = 50;
 
@@ -98,6 +99,15 @@ export default function Activity() {
   }, [data, older]);
   const integrations = (registry?.integrations ?? []) as IntegrationSummary[];
 
+  // Delegated rows name a Space by its name; show its title when this viewer
+  // can still see it. Fetched only when such a row is on screen.
+  const hasDelegated = events.some((e) => e.delegation?.space);
+  const { data: spaces } = useQuery({ queryKey: ["spaces"], queryFn: fetchSpaces, enabled: hasDelegated });
+  const spaceTitle = useMemo(() => {
+    const titles = new Map((spaces ?? []).map((s) => [s.name, s.title]));
+    return (name: string) => titles.get(name) ?? name;
+  }, [spaces]);
+
   return (
     <>
       <PageHeader
@@ -137,7 +147,7 @@ export default function Activity() {
         ) : events.length === 0 ? (
           <EmptyState message="No tool calls recorded yet." />
         ) : (
-          <ActivityTable events={events} caption="Tool call history" appFor={appFor} />
+          <ActivityTable events={events} caption="Tool call history" appFor={appFor} spaceTitle={spaceTitle} />
         )}
       </Box>
 

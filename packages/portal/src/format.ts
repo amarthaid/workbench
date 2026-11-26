@@ -19,6 +19,15 @@ export function dayLabel(unixSeconds: number, now: Date = new Date()): string {
   return isoDate(then);
 }
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** "26 Nov", with the year when it is not this year: "26 Nov 2025". */
+export function shortDate(unixSeconds: number, now: Date = new Date()): string {
+  const d = new Date(unixSeconds * 1000);
+  const base = `${d.getDate()} ${MONTHS[d.getMonth()]}`;
+  return d.getFullYear() === now.getFullYear() ? base : `${base} ${d.getFullYear()}`;
+}
+
 export function timeLabel(unixSeconds: number): string {
   const d = new Date(unixSeconds * 1000);
   return `${`${d.getHours()}`.padStart(2, "0")}:${`${d.getMinutes()}`.padStart(2, "0")}`;

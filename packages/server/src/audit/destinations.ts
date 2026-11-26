@@ -24,6 +24,8 @@ export class DbDestination implements AuditDestination {
       event.auth_method ?? null,
       event.client_id ?? null,
       event.client_name ?? null,
+      event.actor_user_id ?? null,
+      event.actor_email ?? null,
       event.integration ?? null,
       event.tool ?? null,
       event.action,
@@ -35,8 +37,8 @@ export class DbDestination implements AuditDestination {
       Math.floor(new Date(event.timestamp).getTime() / 1000),
     ];
     const insert = `INSERT INTO audit_log (user_id, user_email, source_ip, user_agent, auth_method, client_id, client_name,
-         integration, tool, action, success, error, duration_ms, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+         actor_user_id, actor_email, integration, tool, action, success, error, duration_ms, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
     if (!hasPayload) {
       await db.run(insert, params);
       return;

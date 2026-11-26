@@ -11,6 +11,10 @@
   --radius-sm: 6px;
   --radius: 6px;
   --radius-lg: 6px;
+  /* Text and marks drawn on an --accent fill. The same in both themes: the
+     dark theme's lighter accent still carries white, as the primary button
+     always has. Redefine it under the dark selectors if that changes. */
+  --on-accent: #fff;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -261,7 +265,7 @@ body {
 .ui-button-lg { font-size: 15px; padding: var(--s-12) var(--s-24); }
 .ui-button-xl { font-size: 16px; padding: var(--s-12) var(--s-32); }
 
-.ui-button-primary { background: var(--accent); color: #fff; }
+.ui-button-primary { background: var(--accent); color: var(--on-accent); }
 .ui-button-primary:hover:not(:disabled) { background: var(--accent-hover); }
 
 .ui-button-secondary { background: var(--surface); color: var(--accent); border-color: var(--accent); }
@@ -295,6 +299,68 @@ body {
 .ui-badge-red { background: var(--danger-soft); color: var(--danger); }
 .ui-badge-yellow { background: var(--warn-soft); color: var(--warn); }
 .ui-badge-neutral { background: var(--bg-sunk); color: var(--text-3); }
+
+/* ui/Switch. One radius here too: the track is a rounded rectangle, not a
+   capsule (see the geometry note at the top and styles.guard.test.ts). */
+.ui-switch {
+  position: relative;
+  flex: none;
+  width: 36px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-sunk);
+  cursor: pointer;
+  transition: background-color .15s ease, border-color .15s ease;
+}
+.ui-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  transition: transform .15s ease;
+}
+.ui-switch.is-on { background: var(--accent); border-color: var(--accent); }
+.ui-switch.is-on .ui-switch-thumb { transform: translateX(16px); border-color: transparent; background: var(--on-accent); }
+/* The ring sits outside the control, on the page, in the text colour: it
+   reads on both the off and the on (accent) track, in both themes. */
+.ui-switch:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.ui-switch:disabled { cursor: not-allowed; opacity: .5; }
+
+/* ui/Segmented: a choice of two or three, as pressed buttons in one frame. */
+.ui-segmented {
+  display: inline-flex;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.ui-segmented button {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  padding: var(--s-4) var(--s-16);
+  cursor: pointer;
+  position: relative;
+}
+/* No overflow clipping on the frame (it would cut the focus ring), so the end
+   buttons carry the inner corners themselves. */
+.ui-segmented button:first-child { border-radius: calc(var(--radius) - 1px) 0 0 calc(var(--radius) - 1px); }
+.ui-segmented button:last-child { border-radius: 0 calc(var(--radius) - 1px) calc(var(--radius) - 1px) 0; }
+.ui-segmented button + button { border-left: 1px solid var(--border); }
+.ui-segmented button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+.ui-segmented button:disabled { cursor: not-allowed; opacity: .6; }
+/* Outside the button and in the text colour, so it shows on the pressed
+   (accent) button as well as the unpressed one, in both themes. */
+.ui-segmented button:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; z-index: 1; }
 
 /* ui/Input, ui/Select */
 .ui-input {
@@ -918,6 +984,14 @@ body {
 .wb-toolbar-controls .ui-input { width: auto; }
 .wb-toolbar-controls input.ui-input { min-width: 220px; }
 
+/* Admin > Users: the per-user permissions panel, opened under its row. */
+.ui-table tbody tr.wb-perm-tr td { background: var(--bg-sunk); padding: var(--s-12) var(--s-16); }
+.wb-perm-panel .ui-box { background: var(--surface); }
+.wb-perm-row { justify-content: space-between; align-items: center; }
+.wb-perm-text { display: grid; gap: var(--s-2); min-width: 0; }
+.wb-perm-label { font-size: 14px; color: var(--text); }
+.wb-perm-desc { font-size: 12px; color: var(--text-3); }
+
 /* An inline form: input and submit side by side, not stacked as block children. */
 .wb-toolbar-form {
   display: flex;
@@ -1037,6 +1111,16 @@ body {
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.wb-cell-delegation {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-8);
+  margin-top: var(--s-4);
+  font-size: 12px;
+  color: var(--text-2);
 }
 
 .wb-cell-error {
@@ -1232,7 +1316,7 @@ body {
    The gallery reuses the app grid. The shell (/s/:name) is full screen and
    outside the app shell: a thin bar the Space cannot draw over, then the
    sandboxed frame filling the rest. */
-.space-gallery-cell { align-items: flex-start; }
+.space-gallery-cell { flex-direction: column; align-items: stretch; }
 .space-gallery-link { align-items: flex-start; }
 .space-gallery-desc {
   font-size: 13px;
@@ -1242,7 +1326,7 @@ body {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.space-gallery-badges { display: flex; gap: var(--s-4); }
+.space-gallery-badges { display: flex; flex-wrap: wrap; gap: var(--s-4); }
 .space-example-prompt {
   font-family: var(--mono);
   font-size: 12px;
@@ -1327,6 +1411,18 @@ body {
 .space-bar-owner { color: var(--text-3); white-space: nowrap; }
 .space-bar-right { display: flex; align-items: center; gap: var(--s-12); flex: none; }
 .space-bar-as { color: var(--ok); font-size: 12px; }
+/* Replaces "Running as you" when calls run with the owner's access. */
+.space-bar-as-delegated {
+  color: var(--warn);
+  background: var(--warn-soft);
+  border: 1px solid var(--warn-line);
+  border-radius: var(--radius);
+  padding: 2px var(--s-8);
+  max-width: 45vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .space-menu { position: relative; }
 .space-menu-list {
@@ -1433,6 +1529,34 @@ body {
   opacity: .7;
 }
 .space-share-pill-x:hover { opacity: 1; }
+
+/* "Delegate my access" in the sharing dialog, and the warning that lists
+   what it lends. */
+.space-share-delegate {
+  display: grid;
+  gap: var(--s-12);
+  margin-bottom: var(--s-12);
+  padding-top: var(--s-12);
+  border-top: 1px solid var(--border);
+}
+.space-share-delegate-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--s-16); }
+.space-share-delegate-text { display: grid; gap: 2px; min-width: 0; }
+.space-share-delegate-text .space-share-choice-label { font-weight: 500; }
+.space-share-choice-label.is-disabled { color: var(--text-3); }
+.space-warn-box {
+  display: grid;
+  gap: var(--s-8);
+  padding: var(--s-12);
+  border: 1px solid var(--warn-line);
+  border-radius: var(--radius);
+  background: var(--warn-soft);
+}
+.space-warn-box .ui-box { background: var(--surface); }
+.space-warn-title { font-size: 13px; font-weight: 600; color: var(--warn); }
+.space-warn-text { font-size: 13px; color: var(--text-2); }
+.space-warn-actions { display: flex; justify-content: flex-end; }
+.space-delegate-confirm { display: grid; gap: var(--s-12); font-size: 14px; color: var(--text-2); }
+.space-delegate-confirm strong { color: var(--text); }
 
 .space-banners { flex: none; display: grid; }
 .space-banner {

@@ -1,7 +1,7 @@
 import { AuditEvent } from "@a-workbench/shared";
 import { AuditDestination, createDestination } from "./destinations";
 import { captureValue, payloadLimits, payloadMode, redactInlineSecrets } from "./payload";
-import { auditUserEmail } from "./user-email";
+import { auditActorFields, auditUserEmail } from "./user-email";
 import { currentAuditContext } from "./context";
 import { oauthClientName } from "./client-name";
 
@@ -20,6 +20,8 @@ export type AuditInput = Omit<
   | "auth_method"
   | "client_id"
   | "client_name"
+  | "actor_user_id"
+  | "actor_email"
   | "args"
   | "args_truncated"
   | "args_bytes"
@@ -54,6 +56,7 @@ export class AuditLogger {
       if (ctx.user_agent) fullEvent.user_agent = ctx.user_agent;
       if (ctx.auth_method) fullEvent.auth_method = ctx.auth_method;
       if (ctx.client_id) fullEvent.client_id = ctx.client_id;
+      Object.assign(fullEvent, await auditActorFields(ctx.actor_user_id));
       // An explicit name (a Space's "space:<name>") wins over the OAuth lookup.
       if (ctx.client_name) {
         fullEvent.client_name = ctx.client_name;

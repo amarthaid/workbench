@@ -519,6 +519,17 @@ export interface ActivityEvent {
   duration_ms: number | null;
   /** Unix seconds. */
   created_at: number;
+  /**
+   * A Space call that ran with delegated access. `for_me`: someone used my
+   * access; `by_me`: I used someone else's. Null for an ordinary call.
+   */
+  delegation?: ActivityDelegation | null;
+}
+
+export interface ActivityDelegation {
+  direction: "by_me" | "for_me";
+  other_email: string | null;
+  space: string | null;
 }
 
 export interface ActivityPage {
@@ -933,6 +944,8 @@ const ADMIN_ACTION_MESSAGES: Record<string, string> = {
   invalid_policy: "That policy is not valid.",
   invalid_body: "That request is not valid.",
   invalid_domains: "Some entries are not valid domains",
+  unknown_capability: "That permission is not known to this server.",
+  invalid_effect: "That permission can only be allowed or set back to the default.",
 };
 
 // Bodyless POST: auth header only. A Content-Type of application/json with no
@@ -964,6 +977,46 @@ async function throwIfAdminActionFailed(res: Response): Promise<void> {
 export const disableAdminUser = (id: string) => adminPost(`/api/admin/users/${encodeURIComponent(id)}/disable`);
 export const enableAdminUser = (id: string) => adminPost(`/api/admin/users/${encodeURIComponent(id)}/enable`);
 export const revokeAdminUserKey = (id: string) => adminPost(`/api/admin/users/${encodeURIComponent(id)}/revoke-key`);
+
+// ─── Admin user permissions ──────────────────────────────────────────────
+export type PermissionEffect = "allow" | "deny";
+
+export interface AdminPermission {
+  capability: string;
+  label: string;
+  description: string;
+  default: PermissionEffect;
+  effect: PermissionEffect;
+  /** "rule": an admin set it; "default": follows the instance setting. */
+  source: "default" | "rule";
+  grantedBy: string | null;
+  grantedByEmail: string | null;
+  /** Unix seconds, null when no rule is set. */
+  grantedAt: number | null;
+}
+
+export interface AdminUserPermissions {
+  permissions: AdminPermission[];
+  /** Spaces this user currently shares with delegated access. */
+  delegatedSpaces: number;
+}
+
+const permissionPath = (id: string, capability?: string) =>
+  `/api/admin/users/${encodeURIComponent(id)}/permissions` +
+  (capability === undefined ? "" : `/${encodeURIComponent(capability)}`);
+
+export const getUserPermissions = (id: string) =>
+  adminGet<AdminUserPermissions>(permissionPath(id), "permissions");
+
+/** Only the opposite of the capability's default is accepted. */
+export const setUserPermission = (id: string, capability: string, effect: PermissionEffect) =>
+  adminPut(permissionPath(id, capability), { effect });
+
+/** Back to the default. Bodyless: auth header only. */
+export async function clearUserPermission(id: string, capability: string): Promise<void> {
+  const res = await fetch(`${API_URL}${permissionPath(id, capability)}`, { method: "DELETE", headers: authHeaders() });
+  await throwIfAdminActionFailed(res);
+}
 
 // ─── Admin config ────────────────────────────────────────────────────────
 export interface AdminConfig {

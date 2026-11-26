@@ -59,16 +59,28 @@ describe("spaces api", () => {
     expect(err.status).toBe(404);
   });
 
-  it.each([
-    ["grant", grantSpaceConsent, "POST"],
-    ["revoke", revokeSpaceConsent, "DELETE"],
-  ] as const)("%s consent is a bodyless %s with no Content-Type", async (_n, fn, method) => {
-    await fn("pr-timeline");
+  it("revoke consent is a bodyless DELETE with no Content-Type", async () => {
+    await revokeSpaceConsent("pr-timeline");
     const { url, init } = lastCall();
     expect(url).toBe("/api/spaces/pr-timeline/consent");
-    expect(init.method).toBe(method);
+    expect(init.method).toBe("DELETE");
     expect(init.body).toBeUndefined();
     expect(init.headers).toEqual({ Authorization: "Bearer tok-abc" });
+  });
+
+  it("grant consent POSTs the consent_hash the viewer was shown", async () => {
+    await grantSpaceConsent("pr-timeline", "h-shown");
+    const { url, init } = lastCall();
+    expect(url).toBe("/api/spaces/pr-timeline/consent");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({ consent_hash: "h-shown" });
+  });
+
+  it("a changed Space answers CONSENT_CHANGED", async () => {
+    fetchMock.mockResolvedValue(respond(409, { code: "CONSENT_CHANGED", message: "This Space changed. Review it again." }));
+    const err = (await grantSpaceConsent("s", "old").catch((e) => e)) as SpaceApiError;
+    expect(err.status).toBe(409);
+    expect(err.code).toBe("CONSENT_CHANGED");
   });
 
   it("updateSpaceSharing PATCHes the change and returns the saved settings", async () => {
@@ -80,6 +92,62 @@ describe("spaces api", () => {
     expect(init.headers).toEqual({ Authorization: "Bearer tok-abc", "Content-Type": "application/json" });
     expect(JSON.parse(init.body as string)).toEqual({ add_users: ["qa@example.com"] });
     expect(saved).toEqual({ visibility: "users", users: ["qa@example.com"] });
+  });
+
+  it("updateSpaceSharing sends delegate_access with the reviewed tools_hash", async () => {
+    fetchMock.mockResolvedValueOnce(
+      respond(200, { visibility: "org", users: [], delegate_access: true, delegation_suspended: false })
+    );
+    const saved = await updateSpaceSharing("s1", { visibility: "org", delegate_access: true, tools_hash: "h1" });
+    expect(JSON.parse(lastCall().init.body as string)).toEqual({ visibility: "org", delegate_access: true, tools_hash: "h1" });
+    expect(saved).toEqual({ visibility: "org", users: [], delegate_access: true, delegation_suspended: false });
+  });
+
+  it.each([
+    [403, "DELEGATION_NOT_ALLOWED"],
+    [409, "TOOLS_CHANGED"],
+    [409, "CONFLICT"],
+  ])("updateSpaceSharing surfaces %i %s with its code", async (status, code) => {
+    fetchMock.mockResolvedValue(respond(status, { code, message: "m" }));
+    const err = (await updateSpaceSharing("s1", { delegate_access: true, tools_hash: "h" }).catch((e) => e)) as SpaceApiError;
+    expect(err).toBeInstanceOf(SpaceApiError);
+    expect(err.status).toBe(status);
+    expect(err.code).toBe(code);
+  });
+
+  it("fetchSpace passes the delegation fields through", async () => {
+    const body = {
+      name: "s1",
+      delegate_access: true,
+      delegation_suspended: false,
+      delegation_off: null,
+      tools_hash: "h1",
+      can_delegate: true,
+      tools: [{ name: "acme_set_secret", delegable: false }],
+    };
+    fetchMock.mockResolvedValue(respond(200, body));
+    expect(await fetchSpace("s1")).toEqual(body);
+  });
+
+  it("keeps DELEGATION_OFF's reason and a delegated NOT_CONNECTED for the bridge", async () => {
+    fetchMock.mockResolvedValue(
+      respond(403, { code: "DELEGATION_OFF", reason: "tools_changed", message: "paused", integration: "acme", tool: "t" })
+    );
+    let err = (await callSpaceTool("s", { tool: "t" }).catch((e) => e)) as SpaceApiError;
+    expect(err.reason).toBe("tools_changed");
+    expect(err.toBody()).toEqual({ code: "DELEGATION_OFF", message: "paused", integration: "acme", tool: "t", reason: "tools_changed" });
+
+    fetchMock.mockResolvedValue(
+      respond(409, { code: "NOT_CONNECTED", delegated: true, message: "dev@example.com needs to reconnect Acme.", tool: "t" })
+    );
+    err = (await callSpaceTool("s", { tool: "t" }).catch((e) => e)) as SpaceApiError;
+    expect(err.delegated).toBe(true);
+    expect(err.toBody()).toMatchObject({ code: "NOT_CONNECTED", delegated: true });
+
+    fetchMock.mockResolvedValue(respond(403, { code: "TOOL_NOT_DELEGABLE", message: "t cannot run with someone else's access." }));
+    err = (await callSpaceTool("s", { tool: "t" }).catch((e) => e)) as SpaceApiError;
+    expect(err.code).toBe("TOOL_NOT_DELEGABLE");
+    expect(err.delegated).toBeUndefined();
   });
 
   it("callSpaceTool posts JSON and returns the result", async () => {

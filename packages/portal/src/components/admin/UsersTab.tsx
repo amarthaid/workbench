@@ -1,25 +1,136 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  clearUserPermission,
   disableAdminUser,
   enableAdminUser,
   fetchAdminUsers,
+  getUserPermissions,
   revokeAdminUserKey,
+  setUserPermission,
+  type AdminPermission,
   type AdminUser,
 } from "../../api";
 import { useAuth } from "../../context/AuthContext";
-import { dayLabel, relativeTime } from "../../format";
+import { dayLabel, relativeTime, shortDate } from "../../format";
 import { Badge } from "../ui/Badge";
-import { Box } from "../ui/Box";
+import { Box, BoxRow } from "../ui/Box";
 import { Button } from "../ui/Button";
 import { DataTable } from "../ui/DataTable";
 import { EmptyState } from "../ui/EmptyState";
 import { Input } from "../ui/Input";
 import { Modal } from "../ui/Modal";
+import { Segmented } from "../ui/Segmented";
 import { ADMIN_STALE_MS, CardBody } from "./CardBody";
 
 type Action = { kind: "disable" | "enable" | "revoke"; id: string };
 type Confirm = { kind: "disable" | "revoke"; user: AdminUser };
+
+// The capability whose reset strands Spaces that use it. Resetting it while
+// the user has delegated Spaces asks first.
+const DELEGATE_CAPABILITY = "spaces.delegate_access";
+
+const COLUMNS = 8;
+
+function opposite(p: AdminPermission) {
+  return p.default === "deny" ? "allow" : "deny";
+}
+
+/**
+ * One user's per-capability permissions: Allow (or Deny, for a default-allow
+ * capability) or Default. Only the opposite of the default can be set; Default
+ * removes the rule.
+ */
+function PermissionsPanel({ user, label }: { user: AdminUser; label: string }) {
+  const qc = useQueryClient();
+  const queryKey = ["admin", "users", user.id, "permissions"];
+  const { data, isLoading, isError } = useQuery({ queryKey, queryFn: () => getUserPermissions(user.id) });
+  const [error, setError] = useState<string | null>(null);
+  const [confirmReset, setConfirmReset] = useState<AdminPermission | null>(null);
+
+  const change = useMutation({
+    mutationFn: ({ p, to }: { p: AdminPermission; to: "rule" | "default" }) =>
+      to === "rule" ? setUserPermission(user.id, p.capability, opposite(p)) : clearUserPermission(user.id, p.capability),
+    onSuccess: () => {
+      setError(null);
+      setConfirmReset(null);
+      void qc.invalidateQueries({ queryKey });
+    },
+    onError: (e) => {
+      setConfirmReset(null);
+      setError(e instanceof Error ? e.message : "Action failed");
+    },
+  });
+
+  const choose = (p: AdminPermission, to: "rule" | "default") => {
+    if (to === "default" && p.capability === DELEGATE_CAPABILITY && (data?.delegatedSpaces ?? 0) > 0) {
+      setConfirmReset(p);
+      return;
+    }
+    change.mutate({ p, to });
+  };
+
+  const n = data?.delegatedSpaces ?? 0;
+  return (
+    <div className="wb-perm-panel">
+      <Box title="Permissions" action="Default follows the instance setting">
+        <CardBody isLoading={isLoading} isError={isError} label="permissions">
+          {error && <div className="ui-form-error" role="alert">{error}</div>}
+          {data?.permissions.map((p) => {
+            const rule = opposite(p);
+            return (
+              <BoxRow key={p.capability} className="wb-perm-row">
+                <div className="wb-perm-text">
+                  <span className="wb-perm-label">{p.label}</span>
+                  <span className="wb-perm-desc">{p.description}</span>
+                  <span className="wb-perm-desc">
+                    {p.source === "rule"
+                      ? `${rule === "allow" ? "Granted" : "Denied"} by ${p.grantedByEmail ?? p.grantedBy ?? "an admin"}${
+                          p.grantedAt ? `, ${shortDate(p.grantedAt)}` : ""
+                        }`
+                      : `Default: ${p.default === "allow" ? "on" : "off"}`}
+                  </span>
+                </div>
+                <Segmented
+                  label={`${p.label} for ${label}`}
+                  value={p.source === "rule" ? "rule" : "default"}
+                  disabled={change.isPending}
+                  options={[
+                    { value: "rule", label: rule === "allow" ? "Allow" : "Deny" },
+                    { value: "default", label: "Default" },
+                  ]}
+                  onChange={(to) => choose(p, to)}
+                />
+              </BoxRow>
+            );
+          })}
+        </CardBody>
+      </Box>
+      <Modal
+        open={confirmReset !== null}
+        onClose={() => setConfirmReset(null)}
+        title="Remove permission"
+        footer={
+          <>
+            <Button variant="outline" onClick={() => setConfirmReset(null)}>Cancel</Button>
+            <Button
+              variant="danger"
+              disabled={change.isPending}
+              onClick={() => confirmReset && change.mutate({ p: confirmReset, to: "default" })}
+            >
+              Set to Default
+            </Button>
+          </>
+        }
+      >
+        <p>
+          {label} has {n} {n === 1 ? "Space" : "Spaces"} using delegated access. They will stop working for viewers
+          until it is allowed again.
+        </p>
+      </Modal>
+    </div>
+  );
+}
 
 export default function UsersTab() {
   const qc = useQueryClient();
@@ -47,6 +158,7 @@ export default function UsersTab() {
   });
 
   const [query, setQuery] = useState("");
+  const [expanded, setExpanded] = useState<string | null>(null);
 
   const label = (u: AdminUser) => u.email ?? u.id;
   const all = data?.users ?? [];
@@ -99,8 +211,10 @@ export default function UsersTab() {
             >
               {users.map((u) => {
                 const disabled = u.disabled_at !== null;
+                const open = expanded === u.id;
                 return (
-                  <tr key={u.id}>
+                  <Fragment key={u.id}>
+                  <tr>
                     <td>{label(u)}</td>
                     <td>{dayLabel(u.created_at)}</td>
                     <td>{u.last_activity ? relativeTime(u.last_activity) : "—"}</td>
@@ -112,6 +226,16 @@ export default function UsersTab() {
                     </td>
                     <td>
                       <div className="wb-toolbar-form">
+                        <Button
+                          variant={open ? "secondary" : "outline"}
+                          size="sm"
+                          aria-expanded={open}
+                          aria-controls={open ? `perm-${u.id}` : undefined}
+                          aria-label={`Permissions for ${label(u)}`}
+                          onClick={() => setExpanded(open ? null : u.id)}
+                        >
+                          Permissions
+                        </Button>
                         {u.has_api_key && (
                           <Button
                             variant="outline"
@@ -147,6 +271,14 @@ export default function UsersTab() {
                       </div>
                     </td>
                   </tr>
+                  {open && (
+                    <tr id={`perm-${u.id}`} className="wb-perm-tr">
+                      <td colSpan={COLUMNS}>
+                        <PermissionsPanel user={u} label={label(u)} />
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 );
               })}
             </DataTable>

@@ -14,7 +14,12 @@ vi.mock("../api", () => ({
   UNSTORED_MESSAGE: "This deployment sends audit events somewhere other than its database, so there is nothing to show here. Add db to AUDIT_LOG_DEST (the default) to record them.",
 }));
 
-import { fetchActivity } from "../api";
+vi.mock("../spaces-api", () => ({
+  fetchSpaces: vi.fn(async () => [{ name: "sprint-board", title: "Sprint Board" }]),
+}));
+
+import { fetchActivity, type ActivityDelegation } from "../api";
+import { fetchSpaces } from "../spaces-api";
 
 const now = new Date();
 const NOW = Math.floor(now.getTime() / 1000);
@@ -123,5 +128,58 @@ describe("Activity", () => {
       await screen.findByText(/This deployment sends audit events somewhere other than its database/)
     ).toBeInTheDocument();
     expect(screen.getByText(/AUDIT_LOG_DEST/)).toBeInTheDocument();
+  });
+
+  describe("delegated calls", () => {
+    const row = (id: number, delegation: ActivityDelegation | null) => ({
+      id,
+      integration: "acme",
+      tool: `acme_tool_${id}`,
+      action: "EXECUTE",
+      success: true,
+      error: null,
+      duration_ms: 10,
+      created_at: NOW,
+      delegation,
+    });
+
+    it("tags them and says who used whose access, with the Space's title", async () => {
+      vi.mocked(fetchActivity).mockResolvedValue({
+        stored: true,
+        next_cursor: null,
+        events: [
+          row(10, { direction: "for_me", other_email: "qa@example.com", space: "sprint-board" }),
+          row(11, { direction: "by_me", other_email: "dev@example.com", space: "sprint-board" }),
+          row(12, null),
+        ],
+      });
+      renderPage();
+      const forMe = (await screen.findByText("acme_tool_10")).closest("tr")!;
+      expect(forMe).toHaveTextContent("Delegated");
+      expect(await screen.findByText("qa@example.com used your access via Sprint Board")).toBeInTheDocument();
+      expect(screen.getByText("You used dev@example.com's access via Sprint Board")).toBeInTheDocument();
+      expect(screen.getByText("acme_tool_12").closest("tr")).not.toHaveTextContent("Delegated");
+      expect(screen.getAllByText("Delegated")).toHaveLength(2);
+    });
+
+    it("leaves out the Space when there is none, and falls back to its name when not visible", async () => {
+      vi.mocked(fetchActivity).mockResolvedValue({
+        stored: true,
+        next_cursor: null,
+        events: [
+          row(20, { direction: "for_me", other_email: "qa@example.com", space: null }),
+          row(21, { direction: "by_me", other_email: "dev@example.com", space: "gone-space" }),
+        ],
+      });
+      renderPage();
+      expect(await screen.findByText("qa@example.com used your access")).toBeInTheDocument();
+      expect(await screen.findByText("You used dev@example.com's access via gone-space")).toBeInTheDocument();
+    });
+
+    it("does not fetch the Spaces list when no row is delegated", async () => {
+      renderPage();
+      await screen.findByText("acme_search");
+      expect(fetchSpaces).not.toHaveBeenCalled();
+    });
   });
 });

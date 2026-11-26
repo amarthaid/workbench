@@ -59,8 +59,18 @@ async function resolveAtlassianCloudId(
   return match.id;
 }
 
+export interface CreateContextOptions {
+  // false: a dead cookie session is returned as is, never revived through the
+  // reconnect recipe (a call made on someone else's behalf, a delegated Space).
+  autoReconnect?: boolean;
+}
+
 // Pre-fetch connection config so getConfig() can stay synchronous on ToolContext.
-export async function createContext(userId: string, integration: string): Promise<ToolContext> {
+export async function createContext(
+  userId: string,
+  integration: string,
+  opts?: CreateContextOptions
+): Promise<ToolContext> {
   const rawConfig = await getConnectionConfig(userId, integration);
   let parsedConfig: Record<string, unknown> = {};
   if (rawConfig) {
@@ -145,7 +155,7 @@ export async function createContext(userId: string, integration: string): Promis
         const res = await send();
         const session = integrationConfig.auth.session;
         if (!session || !matchesDead(res, session.dead, url)) return res;
-        if (!integrationConfig.auth.reconnect) {
+        if (!integrationConfig.auth.reconnect || opts?.autoReconnect === false) {
           await updateReconnectState(userId, integration, { deadAt: Date.now() });
           return res;
         }
