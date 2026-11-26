@@ -35,6 +35,7 @@ export function splitEmails(text: string): string[] {
 }
 
 const LENT = "Viewers can call these with your access, with any input.";
+const WIDEN = "Everyone signed in will be able to use your access.";
 
 /** Copy for a refused save. TOOLS_CHANGED is handled by the caller. */
 function saveErrorMessage(e: unknown, choice: SpaceVisibility): string {
@@ -48,18 +49,54 @@ function saveErrorMessage(e: unknown, choice: SpaceVisibility): string {
   return e.message;
 }
 
-export function SharingModal({
-  open,
-  space,
-  onClose,
-  onSaved,
-}: {
+interface SharingProps {
   open: boolean;
-  /** The owner's view of the Space. */
+  /** The owner's view of the Space, as the page has it. */
   space: SpaceDetail;
   onClose: () => void;
   onSaved: (sharing: SpaceSharing) => void;
-}) {
+}
+
+/**
+ * Reads the Space again each time it opens, so the tool list, its hash and
+ * the paused state are never the page's possibly stale copy: the owner must
+ * confirm exactly the list the server holds.
+ */
+export function SharingModal({ open, space, onClose, onSaved }: SharingProps) {
+  const [fresh, setFresh] = useState<SpaceDetail | null>(null);
+  const [loadError, setLoadError] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    setFresh(null);
+    setLoadError(false);
+    fetchSpace(space.name)
+      .then((d) => live && setFresh(d))
+      .catch(() => live && setLoadError(true));
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  if (!open) return null;
+  if (!fresh) {
+    return (
+      <Modal open onClose={onClose} title="Sharing" size="lg" className="space-share-modal">
+        {loadError ? (
+          <div className="ui-form-error">Could not load the sharing settings. Close and try again.</div>
+        ) : (
+          <div className="ui-loading">Loading sharing settings...</div>
+        )}
+      </Modal>
+    );
+  }
+  return <SharingForm space={fresh} onClose={onClose} onSaved={onSaved} />;
+}
+
+function SharingForm({ space, onClose, onSaved }: Omit<SharingProps, "open">) {
+  const open = true;
   const visibility = space.visibility;
   const users = space.users ?? [];
   const wasOn = space.delegate_access === true;
@@ -78,24 +115,6 @@ export function SharingModal({
   const [latest, setLatest] = useState<SpaceDetail>(space);
   const [step, setStep] = useState<"edit" | "confirm">("edit");
   const [notice, setNotice] = useState<string | null>(null);
-
-  // Start from the saved settings each time the dialog opens, and only then:
-  // the parent passes a fresh `users` array on every render, so depending on it
-  // would wipe the owner's unsaved edits whenever the page re-renders.
-  useEffect(() => {
-    if (!open) return;
-    setChoice(visibility);
-    setList(users);
-    setDraft("");
-    setPills([]);
-    setInputError(null);
-    setSaveError(null);
-    setDelegate(wasOn);
-    setLatest(space);
-    setStep("edit");
-    setNotice(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
 
   // Turn text into pills. Everything before the last separator becomes a pill;
   // the remainder stays in the box unless `all` (Enter, Add, blur).
@@ -141,9 +160,12 @@ export function SharingModal({
   const showDelegate = canDelegate || wasOn;
   const isPrivate = choice === "private";
   const suspended = wasOn && latest.delegation_suspended === true;
-  // Turning it on needs the second step; resuming a paused one goes through
-  // "Confirm tools".
-  const needsConfirm = delegate && !wasOn;
+  // Opening a delegated Space to everyone signed in lends the access to more
+  // people: the same review as turning it on. Narrowing needs nothing.
+  const widening = wasOn && delegate && visibility !== "org" && choice === "org";
+  // Turning it on, or widening it, needs the second step; resuming a paused
+  // one goes through "Confirm tools".
+  const needsConfirm = delegate && (!wasOn || widening);
 
   const chooseAudience = (v: SpaceVisibility) => {
     setChoice(v);
@@ -152,6 +174,12 @@ export function SharingModal({
   };
 
   const submit = async (confirmDelegation: boolean) => {
+    if (confirmDelegation && !latest.tools_hash) {
+      // Never confirm a list without its hash: the server would refuse it, and
+      // an empty hash must not be what is sent.
+      setSaveError("Reload this Space and try again.");
+      return;
+    }
     const before = new Set(users);
     const after = new Set(list);
     const add_users = list.filter((e) => !before.has(e));
@@ -161,7 +189,7 @@ export function SharingModal({
       ...(add_users.length ? { add_users } : {}),
       ...(remove_users.length ? { remove_users } : {}),
       ...(confirmDelegation
-        ? { delegate_access: true, tools_hash: latest.tools_hash ?? "" }
+        ? { delegate_access: true, tools_hash: latest.tools_hash }
         : wasOn && !delegate
           ? { delegate_access: false }
           : {}),
@@ -384,9 +412,10 @@ export function SharingModal({
             />
           </div>
 
-          {delegate && !wasOn && (
+          {delegate && (!wasOn || (widening && !suspended)) && (
             <div className="space-warn-box" role="note">
               <p className="space-warn-title">{LENT}</p>
+              {widening && <p className="space-warn-text"><strong>{WIDEN}</strong></p>}
               {notice && <p className="space-warn-text"><strong>{notice}</strong></p>}
               <p className="space-warn-text">
                 This is every tool the Space declares, reads included. The Space's page does not limit what a viewer can
@@ -401,6 +430,7 @@ export function SharingModal({
               <p className="space-warn-title">The tool list changed. Review and confirm to resume.</p>
               {notice && <p className="space-warn-text"><strong>{notice}</strong></p>}
               <p className="space-warn-text">Delegation is paused. {LENT}</p>
+              {widening && <p className="space-warn-text"><strong>{WIDEN}</strong></p>}
               <SpaceToolList tools={latest.tools} delegation />
               <div className="space-warn-actions">
                 <Button

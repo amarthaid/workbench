@@ -206,7 +206,9 @@ describe("SpaceShell", () => {
       await frame();
       fireEvent.click(screen.getByRole("button", { name: "Menu" }));
       fireEvent.click(screen.getByRole("menuitem", { name: "Sharing" }));
-      return screen.findByRole("dialog");
+      // The dialog reads the Space again before it shows the form.
+      await screen.findByText("Who can open this Space");
+      return screen.getByRole("dialog");
     };
 
     it("is offered to the owner only", async () => {
@@ -287,6 +289,21 @@ describe("SpaceShell", () => {
       expect(within(dialog).getByText("a@example.com")).toBeInTheDocument();
       fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
       await waitFor(() => expect(updateSpaceSharing).toHaveBeenCalledWith("pr-timeline", { add_users: ["a@example.com"] }));
+    });
+
+    it("reads the Space again when Sharing opens, and again after a save", async () => {
+      vi.mocked(fetchSpace).mockResolvedValue(space({ mine: true, visibility: "private", users: [] }));
+      vi.mocked(updateSpaceSharing).mockResolvedValue({ visibility: "org", users: [], delegate_access: false, delegation_suspended: false });
+      renderShell();
+      await frame();
+      expect(fetchSpace).toHaveBeenCalledTimes(1);
+      const dialog = await openSharing();
+      expect(fetchSpace).toHaveBeenCalledTimes(2);
+      fireEvent.click(within(dialog).getByLabelText(/Everyone signed in/));
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      // The detail is invalidated, not patched with the save's partial answer.
+      await waitFor(() => expect(fetchSpace).toHaveBeenCalledTimes(3));
     });
 
     it("shows the server's error and keeps the dialog open", async () => {
@@ -540,6 +557,31 @@ describe("SpaceShell", () => {
       expect((r.error as { code: string }).code).toBe("DELEGATION_OFF");
       expect(await screen.findByRole("heading", { name: "Shared access is off" })).toBeInTheDocument();
       expect(screen.queryByTitle("PR timeline")).not.toBeInTheDocument();
+    });
+
+    it("Try again on the card runs the Space again once delegation is back", async () => {
+      vi.mocked(fetchSpace).mockResolvedValue(delegated());
+      vi.mocked(callSpaceTool).mockRejectedValueOnce(
+        new SpaceApiError(403, { code: "DELEGATION_OFF", reason: "turned_off", message: "This Space's shared access was turned off." })
+      );
+      renderShell();
+      const { send } = await handshake();
+      await send("call", { integration: "github", tool: "list_prs" });
+      await screen.findByRole("heading", { name: "Shared access is off" });
+
+      // Still off: the card stays, with the server's message.
+      vi.mocked(fetchSpace).mockResolvedValue(
+        delegated({ delegate_access: false, delegation_off: { reason: "turned_off", message: "This Space's shared access was turned off." } })
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+      await waitFor(() => expect(fetchSpace).toHaveBeenCalledTimes(2));
+      expect(await screen.findByRole("heading", { name: "Shared access is off" })).toBeInTheDocument();
+
+      // Back on: the Space runs again.
+      vi.mocked(fetchSpace).mockResolvedValue(delegated());
+      fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
+      expect(await frame()).toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Shared access is off" })).not.toBeInTheDocument();
     });
 
     it("a tool that cannot be delegated shows a banner and never asks or calls", async () => {

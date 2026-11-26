@@ -76,6 +76,9 @@ export interface SpaceDetail {
  * copy. Others (CONSENT_REQUIRED, NOT_CONNECTED, ...) are handled where they
  * occur.
  */
+// DELEGATION_PORTAL_ONLY is intentionally not here: only an agent credential
+// gets it (an agent may not turn delegation on), and the portal never sends
+// one, so the portal has nothing to show for it.
 export const DELEGATION_ERROR_CODES = {
   /** PATCH sharing: no admin grant, or an "Only me" audience. */
   NOT_ALLOWED: "DELEGATION_NOT_ALLOWED",

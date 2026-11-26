@@ -346,6 +346,7 @@ export default function SpaceShell() {
   const [mountKey, setMountKey] = useState(0);
   // Set when a call answered DELEGATION_OFF while the Space was running.
   const [offDuringRun, setOffDuringRun] = useState<DelegationOff | null>(null);
+  const [retrying, setRetrying] = useState(false);
 
   const { data, error, isLoading, refetch } = useQuery({
     queryKey,
@@ -418,6 +419,25 @@ export default function SpaceShell() {
         <h1 className="space-card-title">{off.reason === "tools_changed" ? "Space paused" : "Shared access is off"}</h1>
         <p className="space-muted">{off.message}</p>
         <div className="space-consent-actions">
+          <Button
+            variant="outline"
+            disabled={retrying}
+            onClick={async () => {
+              setRetrying(true);
+              try {
+                const r = await refetch();
+                // Back on (or never delegated any more): run the Space again.
+                if (r.data && !r.data.delegation_off) {
+                  setOffDuringRun(null);
+                  setMountKey((k) => k + 1);
+                }
+              } finally {
+                setRetrying(false);
+              }
+            }}
+          >
+            {retrying ? "Checking..." : "Try again"}
+          </Button>
           <Link to="/spaces" className="ui-button ui-button-primary ui-button-md">Go to Spaces</Link>
         </div>
       </CenterCard>
@@ -472,8 +492,10 @@ export default function SpaceShell() {
       space={data}
       revoking={revoke.isPending}
       onRevoke={() => revoke.mutate()}
-      onSharingSaved={(sharing) => {
-        queryClient.setQueryData<SpaceDetail>(queryKey, (d) => (d ? { ...d, ...sharing } : d));
+      onSharingSaved={() => {
+        // Read the whole detail again: a save can change more than the fields
+        // it answers with (the mode, the pause, the owner's own consent).
+        void queryClient.invalidateQueries({ queryKey });
         void queryClient.invalidateQueries({ queryKey: ["spaces"] });
       }}
       onStopped={setStopped}

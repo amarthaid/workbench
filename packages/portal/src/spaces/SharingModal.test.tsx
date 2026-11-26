@@ -51,10 +51,13 @@ const saved = (over: Record<string, unknown> = {}) => ({
 let onSaved: Mock<(sharing: SpaceSharing) => void>;
 let onClose: Mock<() => void>;
 
-function open(s: SpaceDetail = space()) {
+/** Opens the dialog; `s` is what the server holds when it reads the Space again. */
+async function open(s: SpaceDetail = space(), stale: SpaceDetail = s) {
   onSaved = vi.fn<(sharing: SpaceSharing) => void>();
   onClose = vi.fn<() => void>();
-  render(<SharingModal open space={s} onClose={onClose} onSaved={onSaved} />);
+  vi.mocked(fetchSpace).mockResolvedValue(s);
+  render(<SharingModal open space={stale} onClose={onClose} onSaved={onSaved} />);
+  await screen.findByText("Who can open this Space");
   return screen.getByRole("dialog");
 }
 
@@ -66,14 +69,14 @@ beforeEach(() => {
 });
 
 describe("SharingModal: Delegate my access", () => {
-  it("is hidden without the admin permission", () => {
-    open(space({ can_delegate: false }));
+  it("is hidden without the admin permission", async () => {
+    await open(space({ can_delegate: false }));
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
     expect(screen.queryByText("Delegate my access")).not.toBeInTheDocument();
   });
 
-  it("starts off, with what it means, and lists nothing until turned on", () => {
-    const dialog = open();
+  it("starts off, with what it means, and lists nothing until turned on", async () => {
+    const dialog = await open();
     expect(theSwitch()).toHaveAttribute("aria-checked", "false");
     expect(theSwitch()).toBeEnabled();
     expect(dialog).toHaveTextContent(
@@ -82,14 +85,14 @@ describe("SharingModal: Delegate my access", () => {
     expect(within(dialog).queryByText("jira_search")).not.toBeInTheDocument();
   });
 
-  it("is disabled on Only me, with a hint", () => {
-    const dialog = open(space({ visibility: "private" }));
+  it("is disabled on Only me, with a hint", async () => {
+    const dialog = await open(space({ visibility: "private" }));
     expect(theSwitch()).toBeDisabled();
     expect(dialog).toHaveTextContent("Share with specific people or everyone signed in to delegate access.");
   });
 
-  it("choosing Only me turns it off in the dialog too", () => {
-    const dialog = open();
+  it("choosing Only me turns it off in the dialog too", async () => {
+    const dialog = await open();
     fireEvent.click(theSwitch());
     expect(theSwitch()).toHaveAttribute("aria-checked", "true");
     fireEvent.click(within(dialog).getByLabelText(/Only me/));
@@ -98,8 +101,8 @@ describe("SharingModal: Delegate my access", () => {
     expect(within(dialog).queryByText("jira_search")).not.toBeInTheDocument();
   });
 
-  it("turning it on lists every declared tool with its effect, reads included", () => {
-    const dialog = open();
+  it("turning it on lists every declared tool with its effect, reads included", async () => {
+    const dialog = await open();
     fireEvent.click(theSwitch());
     const warning = within(dialog).getByRole("note");
     expect(warning).toHaveTextContent("Viewers can call these with your access, with any input.");
@@ -114,7 +117,7 @@ describe("SharingModal: Delegate my access", () => {
   });
 
   it("Save asks a second time, and Back returns without saving", async () => {
-    const dialog = open();
+    const dialog = await open();
     fireEvent.click(theSwitch());
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
     const confirm = screen.getByRole("dialog");
@@ -132,7 +135,7 @@ describe("SharingModal: Delegate my access", () => {
   });
 
   it("Delegate access saves the mode with the reviewed tools_hash, with the audience change", async () => {
-    const dialog = open(space({ visibility: "private" }));
+    const dialog = await open(space({ visibility: "private" }));
     fireEvent.click(within(dialog).getByLabelText(/Everyone signed in/));
     fireEvent.click(theSwitch());
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
@@ -148,15 +151,15 @@ describe("SharingModal: Delegate my access", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("names the people when shared with specific people", () => {
-    const dialog = open(space({ visibility: "users", users: ["qa@example.com", "ops@example.com"] }));
+  it("names the people when shared with specific people", async () => {
+    const dialog = await open(space({ visibility: "users", users: ["qa@example.com", "ops@example.com"] }));
     fireEvent.click(theSwitch());
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
     expect(screen.getByRole("dialog")).toHaveTextContent("The 2 people you shared Sprint Board with will run its tools as you");
   });
 
   it("already on: a plain Save sends no mode, and turning it off sends false without a second step", async () => {
-    let dialog = open(space({ delegate_access: true }));
+    let dialog = await open(space({ delegate_access: true }));
     expect(theSwitch()).toHaveAttribute("aria-checked", "true");
     expect(within(dialog).queryByRole("note")).not.toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
@@ -164,14 +167,14 @@ describe("SharingModal: Delegate my access", () => {
 
     vi.clearAllMocks();
     document.body.innerHTML = "";
-    dialog = open(space({ delegate_access: true }));
+    dialog = await open(space({ delegate_access: true }));
     fireEvent.click(theSwitch());
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(updateSpaceSharing).toHaveBeenCalledWith("sprint-board", { delegate_access: false }));
   });
 
   it("on, then Only me: saves the private audience with the mode off", async () => {
-    const dialog = open(space({ delegate_access: true }));
+    const dialog = await open(space({ delegate_access: true }));
     fireEvent.click(within(dialog).getByLabelText(/Only me/));
     expect(theSwitch()).toHaveAttribute("aria-checked", "false");
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
@@ -184,7 +187,7 @@ describe("SharingModal: Delegate my access", () => {
     const paused = () => space({ delegate_access: true, delegation_suspended: true, tools_hash: "hash-2" });
 
     it("says so, lists the tools, and Confirm tools goes through the second step", async () => {
-      const dialog = open(paused());
+      const dialog = await open(paused());
       const box = within(dialog).getByRole("note");
       expect(box).toHaveTextContent("The tool list changed. Review and confirm to resume.");
       expect(box).toHaveTextContent("Delegation is paused. Viewers can call these with your access, with any input.");
@@ -197,7 +200,7 @@ describe("SharingModal: Delegate my access", () => {
     });
 
     it("a plain Save leaves it paused", async () => {
-      const dialog = open(paused());
+      const dialog = await open(paused());
       fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
       await waitFor(() => expect(updateSpaceSharing).toHaveBeenCalledWith("sprint-board", {}));
     });
@@ -208,13 +211,13 @@ describe("SharingModal: Delegate my access", () => {
       new SpaceApiError(409, { code: "TOOLS_CHANGED", message: "The tool list changed. Review it again." })
     );
     const newTool = { name: "github_delete_repo", integration: "github", integrationName: "GitHub", effect: "destructive", connected: true, delegable: true };
+    const dialog = await open();
     vi.mocked(fetchSpace).mockResolvedValue(space({ tools: [...TOOLS, newTool], tools_hash: "hash-3" }));
-    const dialog = open();
     fireEvent.click(theSwitch());
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
     fireEvent.click(screen.getByRole("button", { name: "Delegate access" }));
     expect(await screen.findByText(/The tool list changed while you were reviewing it/)).toBeInTheDocument();
-    expect(fetchSpace).toHaveBeenCalledWith("sprint-board");
+    expect(fetchSpace).toHaveBeenCalledTimes(2);
     const note = within(screen.getByRole("dialog")).getByRole("note");
     expect(within(note).getByText("github_delete_repo")).toBeInTheDocument();
 
@@ -230,7 +233,7 @@ describe("SharingModal: Delegate my access", () => {
     ["DELEGATION_NOT_ALLOWED", 403, "An admin has not allowed you to delegate access. Ask an admin to allow it."],
   ])("%s shows a clear message and keeps the dialog open", async (code, status, text) => {
     vi.mocked(updateSpaceSharing).mockRejectedValueOnce(new SpaceApiError(status, { code, message: "server text" }));
-    const dialog = open();
+    const dialog = await open();
     fireEvent.click(theSwitch());
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
     fireEvent.click(screen.getByRole("button", { name: "Delegate access" }));
@@ -238,12 +241,76 @@ describe("SharingModal: Delegate my access", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it("permission revoked while on: shown so it can be turned off, but not back on", () => {
-    const dialog = open(space({ delegate_access: true, can_delegate: false }));
+  it("permission revoked while on: shown so it can be turned off, but not back on", async () => {
+    const dialog = await open(space({ delegate_access: true, can_delegate: false }));
     expect(dialog).toHaveTextContent("An admin removed your permission to delegate access");
     expect(theSwitch()).toBeEnabled();
     fireEvent.click(theSwitch());
     expect(theSwitch()).toHaveAttribute("aria-checked", "false");
     expect(theSwitch()).toBeDisabled();
   });
+
+  it("reads the Space again on open, so a stale page copy is never what is confirmed", async () => {
+    // The page still thinks delegation runs; the server says it is paused on a new list.
+    const dialog = await open(
+      space({ delegate_access: true, delegation_suspended: true, tools_hash: "hash-new" }),
+      space({ delegate_access: true, tools_hash: "hash-old" })
+    );
+    expect(fetchSpace).toHaveBeenCalledWith("sprint-board");
+    fireEvent.click(within(within(dialog).getByRole("note")).getByRole("button", { name: "Confirm tools" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delegate access" }));
+    await waitFor(() =>
+      expect(updateSpaceSharing).toHaveBeenCalledWith("sprint-board", { delegate_access: true, tools_hash: "hash-new" })
+    );
+  });
+
+  it("says so when the Space cannot be read again", async () => {
+    vi.mocked(fetchSpace).mockRejectedValue(new SpaceApiError(0, { code: "UPSTREAM_ERROR", message: "x" }));
+    render(<SharingModal open space={space()} onClose={vi.fn()} onSaved={vi.fn()} />);
+    expect(await screen.findByText("Could not load the sharing settings. Close and try again.")).toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+  });
+
+  describe("changing the audience while on", () => {
+    it("widening to everyone signed in shows the warning again and asks a second time", async () => {
+      const dialog = await open(space({ visibility: "users", users: ["qa@example.com"], delegate_access: true }));
+      expect(within(dialog).queryByRole("note")).not.toBeInTheDocument();
+      fireEvent.click(within(dialog).getByLabelText(/Everyone signed in/));
+      const note = within(dialog).getByRole("note");
+      expect(note).toHaveTextContent("Viewers can call these with your access, with any input.");
+      expect(note).toHaveTextContent("Everyone signed in will be able to use your access.");
+      for (const t of TOOLS) expect(within(note).getByText(t.name)).toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+      expect(screen.getByRole("heading", { name: "Delegate your access?" })).toBeInTheDocument();
+      expect(updateSpaceSharing).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Delegate access" }));
+      await waitFor(() =>
+        expect(updateSpaceSharing).toHaveBeenCalledWith("sprint-board", {
+          visibility: "org",
+          delegate_access: true,
+          tools_hash: "hash-1",
+        })
+      );
+    });
+
+    it("narrowing from everyone signed in to specific people saves without a second step", async () => {
+      vi.mocked(updateSpaceSharing).mockResolvedValue(saved({ visibility: "users", users: ["qa@example.com"] }));
+      const dialog = await open(space({ visibility: "org", users: ["qa@example.com"], delegate_access: true }));
+      fireEvent.click(within(dialog).getByLabelText(/Specific people/));
+      expect(within(dialog).queryByRole("note")).not.toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(updateSpaceSharing).toHaveBeenCalledWith("sprint-board", { visibility: "users" }));
+      expect(screen.queryByRole("heading", { name: "Delegate your access?" })).not.toBeInTheDocument();
+    });
+  });
+
+  it("without a tools_hash in the detail, sends nothing and asks for a reload", async () => {
+    const dialog = await open(space({ tools_hash: undefined }));
+    fireEvent.click(theSwitch());
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delegate access" }));
+    expect(await screen.findByText("Reload this Space and try again.")).toBeInTheDocument();
+    expect(updateSpaceSharing).not.toHaveBeenCalled();
+  });
 });
+
