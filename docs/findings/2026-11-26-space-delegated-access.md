@@ -74,6 +74,13 @@ The owner's own calls always run as the owner, so for the owner the hash is
 the tool list alone. Without that exemption the owner was sent back to the
 consent screen of their own Space every time they flipped the switch.
 
+The approval is also bound to the screen the viewer saw. The detail returns
+`consent_hash` (the viewer's own hash), and `POST /consent` must send it
+back: a Space that changed in between (an owner turning delegation on while
+the viewer reads "runs as you") answers `409 CONSENT_CHANGED`, and the portal
+redraws the consent screen. Without it, approving a stale screen would record
+consent to whatever the Space had just become.
+
 ## Only the owner, in the portal, for a reviewed list
 
 The dangerous actor here is the owner's own agent. An agent that reads a

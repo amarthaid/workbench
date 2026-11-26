@@ -37,6 +37,7 @@ function space(overrides: Partial<SpaceDetail> = {}): SpaceDetail {
     visibility: "org",
     updatedAt: 1_700_000_000_000,
     consented: true,
+    consent_hash: "h1",
     appUrl: "/s/pr-timeline/app/sig-abc/",
     tools: [
       { name: "github_list_prs", integration: "github", integrationName: "GitHub", effect: "read", connected: true, description: "List PRs" },
@@ -186,11 +187,31 @@ describe("SpaceShell", () => {
       renderShell();
       fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
       const iframe = await frame();
-      expect(grantSpaceConsent).toHaveBeenCalledWith("pr-timeline");
+      expect(grantSpaceConsent).toHaveBeenCalledWith("pr-timeline", "h1");
       expect(iframe.getAttribute("sandbox")).toBe("allow-scripts allow-forms");
       expect(iframe.getAttribute("allow")).toBe("");
       expect(iframe.getAttribute("referrerpolicy")).toBe("no-referrer");
       expect(iframe.getAttribute("src")).toBe("/s/pr-timeline/app/sig-abc/");
+    });
+
+    it("a Space that changed before Approve: says so and shows the new list to approve", async () => {
+      vi.mocked(grantSpaceConsent).mockRejectedValueOnce(
+        new SpaceApiError(409, { code: "CONSENT_CHANGED", message: "This Space changed. Review it again." })
+      );
+      renderShell();
+      fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+      const changed = space({
+        consented: false,
+        consent_hash: "h2",
+        tools: [...space().tools, { name: "github_delete_repo", integration: "github", integrationName: "GitHub", effect: "destructive", connected: true }],
+      });
+      vi.mocked(fetchSpace).mockResolvedValue(changed);
+      expect(await screen.findByText("This Space changed. Review it again.")).toBeInTheDocument();
+      expect(await screen.findByText("github_delete_repo")).toBeInTheDocument();
+      expect(screen.queryByTitle("PR timeline")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      await waitFor(() => expect(grantSpaceConsent).toHaveBeenLastCalledWith("pr-timeline", "h2"));
+      expect(await frame()).toBeInTheDocument();
     });
 
     it("Cancel goes back to the gallery", async () => {

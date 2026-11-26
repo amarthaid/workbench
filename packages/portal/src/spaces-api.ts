@@ -55,6 +55,8 @@ export interface SpaceDetail {
   updatedAt: number;
   tools: SpaceTool[];
   consented: boolean;
+  /** What approving this screen approves; sent back with the approval. */
+  consent_hash?: string;
   appUrl: string;
   /**
    * Calls run with the owner's connections. The owner gets the stored
@@ -211,8 +213,15 @@ export function updateSpaceSharing(name: string, change: SpaceSharingChange): Pr
   return request<SpaceSharing>(`/api/spaces/${seg(name)}/sharing`, { method: "PATCH", body: change });
 }
 
-export async function grantSpaceConsent(name: string): Promise<void> {
-  await request<{ ok: true }>(`/api/spaces/${seg(name)}/consent`, { method: "POST" });
+/**
+ * Approve the tools as shown: `consentHash` is the detail's `consent_hash`. A
+ * Space that changed since answers 409 CONSENT_CHANGED.
+ */
+export async function grantSpaceConsent(name: string, consentHash: string | undefined): Promise<void> {
+  await request<{ ok: true }>(`/api/spaces/${seg(name)}/consent`, {
+    method: "POST",
+    body: { consent_hash: consentHash },
+  });
 }
 
 export async function revokeSpaceConsent(name: string): Promise<void> {

@@ -74,10 +74,16 @@ async function disconnectOauthIntegration(user: string) {
   await db.run("DELETE FROM connections WHERE user_id = ? AND integration = ?", [user, "acme-oauth"]);
 }
 
-/** Approve as a viewer who has connected everything the Space needs. */
+async function shownConsentHash(user: string, name = "s1"): Promise<string> {
+  const detail = await app.inject({ method: "GET", url: `/api/spaces/${name}`, headers: as(user) });
+  return detail.statusCode === 200 ? detail.json().consent_hash : "none";
+}
+
+/** Approve what the viewer was shown (consent_hash from the detail), as a viewer who has connected everything the Space needs. */
 async function consent(user: string, name = "s1") {
   await connectOauthIntegration(user);
-  return app.inject({ method: "POST", url: `/api/spaces/${name}/consent`, headers: as(user) });
+  const consent_hash = await shownConsentHash(user, name);
+  return app.inject({ method: "POST", url: `/api/spaces/${name}/consent`, headers: as(user), payload: { consent_hash } });
 }
 
 beforeAll(async () => {
@@ -522,15 +528,46 @@ describe("consent", () => {
   });
 
   it("POST refuses with 409 until every integration the Space uses is connected", async () => {
-    const refused = await app.inject({ method: "POST", url: "/api/spaces/s1/consent", headers: as("u2") });
+    const refused = await app.inject({ method: "POST", url: "/api/spaces/s1/consent", headers: as("u2"), payload: { consent_hash: await shownConsentHash("u2") } });
     expect(refused.statusCode).toBe(409);
     expect(refused.json()).toMatchObject({ code: "INTEGRATION_NOT_CONNECTED" });
     expect(refused.json().message).toContain("Acme OAuth");
     expect((await app.inject({ method: "GET", url: "/api/spaces/s1", headers: as("u2") })).json().consented).toBe(false);
 
     await connectOauthIntegration("u2");
-    const ok = await app.inject({ method: "POST", url: "/api/spaces/s1/consent", headers: as("u2") });
+    const ok = await app.inject({ method: "POST", url: "/api/spaces/s1/consent", headers: as("u2"), payload: { consent_hash: await shownConsentHash("u2") } });
     expect(ok.json()).toEqual({ ok: true });
+  });
+
+  it("binds the approval to what the viewer was shown: consent_hash, 409 CONSENT_CHANGED otherwise", async () => {
+    await connectOauthIntegration("u2");
+    const post = (payload?: Record<string, unknown>) =>
+      app.inject({ method: "POST", url: "/api/spaces/s1/consent", headers: as("u2"), ...(payload ? { payload } : {}) });
+    const shown = (await app.inject({ method: "GET", url: "/api/spaces/s1", headers: as("u2") })).json().consent_hash;
+    expect(shown).toMatch(/^[0-9a-f]{64}$/);
+
+    for (const res of [await post(), await post({}), await post({ consent_hash: 42 }), await post({ consent_hash: "0".repeat(64) })]) {
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ code: "CONSENT_CHANGED", message: "This Space changed. Review it again." });
+    }
+    // The Space changes between showing the screen and approving it.
+    await updateSpaceMeta("s1", "u1", { tools: [...TOOLS, "acme_extra"] });
+    expect((await post({ consent_hash: shown })).json().code).toBe("CONSENT_CHANGED");
+    expect((await app.inject({ method: "GET", url: "/api/spaces/s1", headers: as("u2") })).json().consented).toBe(false);
+
+    const now = (await app.inject({ method: "GET", url: "/api/spaces/s1", headers: as("u2") })).json().consent_hash;
+    expect(now).not.toBe(shown);
+    expect((await post({ consent_hash: now })).json()).toEqual({ ok: true });
+  });
+
+  it("consent_hash is per viewer: the owner's ignores the access mode", async () => {
+    const hashOf = async (user: string) => (await app.inject({ method: "GET", url: "/api/spaces/s1", headers: as(user) })).json().consent_hash;
+    const owner = await hashOf("u1");
+    const viewer = await hashOf("u2");
+    expect(owner).not.toBe(viewer);
+    await updateSpaceMeta("s1", "u1", { accessMode: "owner", confirmDelegation: true, expectedToolsHash: toolsHash(TOOLS) });
+    expect(await hashOf("u1")).toBe(owner);
+    expect(await hashOf("u2")).not.toBe(viewer);
   });
 
   it("a change of access mode invalidates it, both ways", async () => {

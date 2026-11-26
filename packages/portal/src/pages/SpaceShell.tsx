@@ -370,10 +370,13 @@ export default function SpaceShell() {
     queryClient.setQueryData<SpaceDetail>(queryKey, (d) => (d ? { ...d, consented } : d));
 
   const approve = useMutation({
-    mutationFn: () => grantSpaceConsent(name),
-    // The viewer's connections changed since this page loaded: show the new state.
+    mutationFn: () => grantSpaceConsent(name, data?.consent_hash),
+    // The viewer's connections, or the Space itself, changed since this page
+    // loaded: show the new state.
     onError: (e) => {
-      if (e instanceof SpaceApiError && e.code === "INTEGRATION_NOT_CONNECTED") void refetch();
+      if (e instanceof SpaceApiError && (e.code === "INTEGRATION_NOT_CONNECTED" || e.code === "CONSENT_CHANGED")) {
+        void refetch();
+      }
     },
     onSuccess: () => {
       setStopped(null);
@@ -453,6 +456,8 @@ export default function SpaceShell() {
           approve.error
             ? approve.error instanceof SpaceApiError && approve.error.code === "INTEGRATION_NOT_CONNECTED"
               ? approve.error.message
+              : approve.error instanceof SpaceApiError && approve.error.code === "CONSENT_CHANGED"
+                ? "This Space changed. Review it again."
               : "Could not record your approval. Try again."
             : null
         }

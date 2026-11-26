@@ -141,9 +141,9 @@ Used by the portal shell. Portal session JWT only (`Authorization: Bearer`); API
 | Method and path | Purpose |
 |---|---|
 | `GET /api/spaces` | Spaces the viewer can open, newest first, with `delegate_access` and `delegation_suspended` |
-| `GET /api/spaces/:name` | Metadata, tools with `effect`, `connected` and `delegable`, `consented`, `appUrl`, `delegate_access`, `delegation_suspended`, `delegation_off`; the owner also gets `tools_hash` and `can_delegate` |
+| `GET /api/spaces/:name` | Metadata, tools with `effect`, `connected` and `delegable`, `consented`, `consent_hash`, `appUrl`, `delegate_access`, `delegation_suspended`, `delegation_off`; the owner also gets `tools_hash` and `can_delegate` |
 | `PATCH /api/spaces/:name/sharing` | Owner only: change `visibility`, add or remove people, and turn delegated access on or off (`{ visibility?, add_users?, remove_users?, delegate_access?, tools_hash? }`), same rules as `update_space`; answers `{ visibility, users, delegate_access, delegation_suspended }` |
-| `POST`, `DELETE /api/spaces/:name/consent` | Approve or revoke the current tool list. Approving is refused with 409 `INTEGRATION_NOT_CONNECTED` while the viewer has not connected an integration the Space uses (not checked for a delegated Space, which uses the owner's connections) |
+| `POST`, `DELETE /api/spaces/:name/consent` | Approve (`{ consent_hash }` from the detail) or revoke. A missing hash, or a Space that changed since it was shown, is 409 `CONSENT_CHANGED`. Approving is refused with 409 `INTEGRATION_NOT_CONNECTED` while the viewer has not connected an integration the Space uses (not checked for a delegated Space, which uses the owner's connections) |
 | `POST /api/spaces/:name/call` | Run a declared tool as the viewer |
 | `GET /api/spaces/:name/kv`, `GET`, `PUT`, `DELETE /api/spaces/:name/kv/:key` | Per-viewer key-value store |
 

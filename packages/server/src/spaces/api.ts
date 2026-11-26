@@ -17,6 +17,7 @@ import {
   delegationSuspended,
   getShares,
   getSpace,
+  consentHash,
   grantConsent,
   hasConsent,
   hasFiles,
@@ -251,6 +252,9 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           updatedAt: space.updatedAt,
           tools,
           consented: await hasConsent(space, viewer.userId),
+          // What the viewer approves when they approve this screen; sent back
+          // with the approval.
+          consent_hash: consentHash(space, viewer.userId),
           appUrl: `/s/${space.name}/app/${mintSig(space.name, viewer.userId)}/`,
           // The owner sees the stored mode; anyone else only whether it is in
           // effect, so a viewer cannot infer why it is off.
@@ -384,11 +388,23 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
         };
       });
 
-      scope.post<{ Params: { name: string } }>("/:name/consent", async (request, reply) => {
+      // The approval names what the viewer was shown (`consent_hash` from the
+      // detail). If the Space changed since (tools, mode, owner), the screen
+      // they approved is not this Space any more: refuse, and the portal
+      // shows the new one.
+      scope.post<{ Params: { name: string }; Body: { consent_hash?: unknown } }>("/:name/consent", async (request, reply) => {
         const viewer = viewerOf(request);
         const space = await openable(request.params.name, viewer);
         if (!space) return notFound(reply);
-        const unconnected = await unconnectedIntegrations(space, viewer.userId);
+        const shown = (request.body as { consent_hash?: unknown } | undefined)?.consent_hash;
+        if (typeof shown !== "string" || shown !== consentHash(space, viewer.userId)) {
+          return fail(reply, 409, { code: "CONSENT_CHANGED", message: "This Space changed. Review it again." });
+        }
+        // A delegated Space runs with the owner's connections, so the viewer has
+        // nothing to connect; the consent they give is for that mode (the hash
+        // covers it). Ordinary Spaces still need every integration connected.
+        const delegatedForViewer = space.accessMode === "owner" && space.ownerId !== viewer.userId;
+        const unconnected = delegatedForViewer ? [] : await unconnectedIntegrations(space, viewer.userId);
         if (unconnected.length > 0) {
           return fail(reply, 409, {
             code: "INTEGRATION_NOT_CONNECTED",

@@ -59,16 +59,28 @@ describe("spaces api", () => {
     expect(err.status).toBe(404);
   });
 
-  it.each([
-    ["grant", grantSpaceConsent, "POST"],
-    ["revoke", revokeSpaceConsent, "DELETE"],
-  ] as const)("%s consent is a bodyless %s with no Content-Type", async (_n, fn, method) => {
-    await fn("pr-timeline");
+  it("revoke consent is a bodyless DELETE with no Content-Type", async () => {
+    await revokeSpaceConsent("pr-timeline");
     const { url, init } = lastCall();
     expect(url).toBe("/api/spaces/pr-timeline/consent");
-    expect(init.method).toBe(method);
+    expect(init.method).toBe("DELETE");
     expect(init.body).toBeUndefined();
     expect(init.headers).toEqual({ Authorization: "Bearer tok-abc" });
+  });
+
+  it("grant consent POSTs the consent_hash the viewer was shown", async () => {
+    await grantSpaceConsent("pr-timeline", "h-shown");
+    const { url, init } = lastCall();
+    expect(url).toBe("/api/spaces/pr-timeline/consent");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({ consent_hash: "h-shown" });
+  });
+
+  it("a changed Space answers CONSENT_CHANGED", async () => {
+    fetchMock.mockResolvedValue(respond(409, { code: "CONSENT_CHANGED", message: "This Space changed. Review it again." }));
+    const err = (await grantSpaceConsent("s", "old").catch((e) => e)) as SpaceApiError;
+    expect(err.status).toBe(409);
+    expect(err.code).toBe("CONSENT_CHANGED");
   });
 
   it("updateSpaceSharing PATCHes the change and returns the saved settings", async () => {
