@@ -198,12 +198,13 @@ describe("SpaceShell", () => {
       vi.mocked(grantSpaceConsent).mockRejectedValueOnce(
         new SpaceApiError(409, { code: "CONSENT_CHANGED", message: "This Space changed. Review it again." })
       );
+      vi.mocked(fetchSpace).mockResolvedValue(connectedSpace());
       renderShell();
       fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
       const changed = space({
         consented: false,
         consent_hash: "h2",
-        tools: [...space().tools, { name: "github_delete_repo", integration: "github", integrationName: "GitHub", effect: "destructive", connected: true }],
+        tools: [...connectedSpace().tools, { name: "github_delete_repo", integration: "github", integrationName: "GitHub", effect: "destructive", connected: true }],
       });
       vi.mocked(fetchSpace).mockResolvedValue(changed);
       expect(await screen.findByText("This Space changed. Review it again.")).toBeInTheDocument();
@@ -212,6 +213,19 @@ describe("SpaceShell", () => {
       fireEvent.click(screen.getByRole("button", { name: "Approve" }));
       await waitFor(() => expect(grantSpaceConsent).toHaveBeenLastCalledWith("pr-timeline", "h2"));
       expect(await frame()).toBeInTheDocument();
+    });
+
+    it("a delegated Space never asks the viewer to connect: it names who must reconnect instead", async () => {
+      vi.mocked(fetchSpace).mockResolvedValue(space({ consented: false, delegate_access: true }));
+      renderShell();
+      const approve = await screen.findByRole("button", { name: "Approve" });
+      expect(approve).toBeEnabled();
+      expect(screen.getByText(/These tools run with owner@example.com's access, not yours/)).toBeInTheDocument();
+      expect(screen.getByText("owner@example.com needs to reconnect Bitbucket. Calls to those tools will fail until they do.")).toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Connect" })).not.toBeInTheDocument();
+      expect(screen.queryByText(/to continue\./)).not.toBeInTheDocument();
+      fireEvent.click(approve);
+      await waitFor(() => expect(grantSpaceConsent).toHaveBeenCalledWith("pr-timeline", "h1"));
     });
 
     it("Cancel goes back to the gallery", async () => {

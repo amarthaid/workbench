@@ -37,7 +37,6 @@ import { config } from "../../src/config";
 import { db } from "../../src/db";
 import { installAuditContext } from "../../src/audit/context";
 import { signSession } from "../../src/auth/session";
-import { storeToken } from "../../src/auth/tokens";
 import { setApiKey } from "../../src/auth/users";
 import { setUserDisabled } from "../../src/auth/user-status";
 import { registerSpaceApiRoutes, containsVaultRef } from "../../src/spaces/api";
@@ -70,6 +69,19 @@ async function connectOauthIntegration(user: string) {
   await storeToken(user, "acme-oauth", { accessToken: "tok-abc", scopes: "" });
 }
 
+/** Everything the test Space uses: the OAuth fixture and the cookie fixture. */
+async function connectAllIntegrations(user: string) {
+  // Keep a token a test seeded on purpose (the delegation tests tell owner and
+  // viewer apart by it).
+  const has = await db.get("SELECT 1 AS n FROM connections WHERE user_id = ? AND integration = ?", [user, "acme-oauth"]);
+  if (!has) await connectOauthIntegration(user);
+  await storeCookies(user, "acme-cookie", {
+    domain: "app.example.com",
+    cookies: [{ name: "sid", value: `sid-${user}`, domain: "app.example.com", path: "/", expires: 9999999999 }],
+    capturedAt: 1,
+  });
+}
+
 async function disconnectOauthIntegration(user: string) {
   await db.run("DELETE FROM connections WHERE user_id = ? AND integration = ?", [user, "acme-oauth"]);
 }
@@ -81,7 +93,7 @@ async function shownConsentHash(user: string, name = "s1"): Promise<string> {
 
 /** Approve what the viewer was shown (consent_hash from the detail), as a viewer who has connected everything the Space needs. */
 async function consent(user: string, name = "s1") {
-  await connectOauthIntegration(user);
+  await connectAllIntegrations(user);
   const consent_hash = await shownConsentHash(user, name);
   return app.inject({ method: "POST", url: `/api/spaces/${name}/consent`, headers: as(user), payload: { consent_hash } });
 }
@@ -527,6 +539,21 @@ describe("consent", () => {
     expect((await consent("u3")).statusCode).toBe(404);
   });
 
+  it("a delegated Space lets a viewer approve without connecting anything (it runs on the owner's connections)", async () => {
+    await setPermission({ userId: "u1", capability: "spaces.delegate_access", effect: "allow", grantedBy: "admin" });
+    await updateSpaceMeta("s1", "u1", { accessMode: "owner", confirmDelegation: true, expectedToolsHash: toolsHash(TOOLS) });
+    // u2 has no acme-oauth connection.
+    const ok = await app.inject({ method: "POST", url: "/api/spaces/s1/consent", headers: as("u2"), payload: { consent_hash: await shownConsentHash("u2") } });
+    expect(ok.json()).toEqual({ ok: true });
+    expect((await app.inject({ method: "GET", url: "/api/spaces/s1", headers: as("u2") })).json().consented).toBe(true);
+
+    // Back to the viewer's own connections: the gate applies again.
+    await updateSpaceMeta("s1", "u1", { accessMode: "viewer" });
+    const refused = await app.inject({ method: "POST", url: "/api/spaces/s1/consent", headers: as("u2"), payload: { consent_hash: await shownConsentHash("u2") } });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().code).toBe("INTEGRATION_NOT_CONNECTED");
+  });
+
   it("POST refuses with 409 until every integration the Space uses is connected", async () => {
     const refused = await app.inject({ method: "POST", url: "/api/spaces/s1/consent", headers: as("u2"), payload: { consent_hash: await shownConsentHash("u2") } });
     expect(refused.statusCode).toBe(409);
@@ -534,13 +561,13 @@ describe("consent", () => {
     expect(refused.json().message).toContain("Acme OAuth");
     expect((await app.inject({ method: "GET", url: "/api/spaces/s1", headers: as("u2") })).json().consented).toBe(false);
 
-    await connectOauthIntegration("u2");
+    await connectAllIntegrations("u2");
     const ok = await app.inject({ method: "POST", url: "/api/spaces/s1/consent", headers: as("u2"), payload: { consent_hash: await shownConsentHash("u2") } });
     expect(ok.json()).toEqual({ ok: true });
   });
 
   it("binds the approval to what the viewer was shown: consent_hash, 409 CONSENT_CHANGED otherwise", async () => {
-    await connectOauthIntegration("u2");
+    await connectAllIntegrations("u2");
     const post = (payload?: Record<string, unknown>) =>
       app.inject({ method: "POST", url: "/api/spaces/s1/consent", headers: as("u2"), ...(payload ? { payload } : {}) });
     const shown = (await app.inject({ method: "GET", url: "/api/spaces/s1", headers: as("u2") })).json().consent_hash;
