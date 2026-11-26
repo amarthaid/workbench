@@ -446,19 +446,23 @@ export async function getConsentHash(name: string, userId: string): Promise<stri
 }
 
 /**
- * What a viewer approves: the tool list, whose connections the calls run with
- * (access mode) and whose Space it is (owner). Any change to one re-asks.
+ * What `viewerId` approves. A viewer approves the tool list, whose connections
+ * the calls run with (access mode) and whose Space it is (owner): a change to
+ * any of them re-asks. The owner's own calls always run as the owner, so the
+ * mode means nothing to them: only a change to the tool list re-asks, and
+ * turning delegation on or off does not.
  */
-export function consentHash(space: Space): string {
-  return crypto
-    .createHash("sha256")
-    .update(JSON.stringify([toolsHash(space.tools), space.accessMode, space.ownerId]))
-    .digest("hex");
+export function consentHash(space: Space, viewerId: string): string {
+  const parts =
+    viewerId === space.ownerId
+      ? [toolsHash(space.tools), "owner-self"]
+      : [toolsHash(space.tools), space.accessMode, space.ownerId];
+  return crypto.createHash("sha256").update(JSON.stringify(parts)).digest("hex");
 }
 
-/** True when the viewer consented to exactly the Space's current tools, mode and owner. */
+/** True when this user consented to exactly what consentHash covers for them now. */
 export async function hasConsent(space: Space, userId: string): Promise<boolean> {
-  return (await getConsentHash(space.name, userId)) === consentHash(space);
+  return (await getConsentHash(space.name, userId)) === consentHash(space, userId);
 }
 
 // The column is still named tools_hash; it holds consentHash(space).
@@ -466,7 +470,7 @@ export async function grantConsent(space: Space, userId: string): Promise<void> 
   await db.run(
     `INSERT INTO space_consents (space_name, user_id, tools_hash, granted_at) VALUES (?, ?, ?, ?)
      ON CONFLICT (space_name, user_id) DO UPDATE SET tools_hash = excluded.tools_hash, granted_at = excluded.granted_at`,
-    [space.name, userId, consentHash(space), now()]
+    [space.name, userId, consentHash(space, userId), now()]
   );
 }
 

@@ -549,6 +549,35 @@ describe("consent", () => {
     expect(back.json().code).toBe("CONSENT_REQUIRED");
   });
 
+  it("the owner keeps consent when they turn delegation on and off from the portal", async () => {
+    await setPermission({ userId: "u1", capability: "spaces.delegate_access", effect: "allow", grantedBy: "admin" });
+    await consent("u1");
+    const detail = async () => (await app.inject({ method: "GET", url: "/api/spaces/s1", headers: as("u1") })).json();
+    const sharing = (payload: Record<string, unknown>) =>
+      app.inject({ method: "PATCH", url: "/api/spaces/s1/sharing", headers: as("u1"), payload });
+    const kv = () => app.inject({ method: "GET", url: "/api/spaces/s1/kv", headers: as("u1") });
+
+    expect((await sharing({ delegate_access: true, tools_hash: (await detail()).tools_hash })).statusCode).toBe(200);
+    expect((await detail()).consented).toBe(true);
+    expect((await call("u1", { tool: "acme_list_items" })).json().code).not.toBe("CONSENT_REQUIRED");
+    expect((await kv()).statusCode).toBe(200);
+
+    expect((await sharing({ delegate_access: false })).statusCode).toBe(200);
+    expect((await detail()).consented).toBe(true);
+    expect((await call("u1", { tool: "acme_list_items" })).json().code).not.toBe("CONSENT_REQUIRED");
+    expect((await kv()).statusCode).toBe(200);
+  });
+
+  it("the owner is re-asked when the tool list changes", async () => {
+    await consent("u1");
+    await updateSpaceMeta("s1", "u1", { tools: [...TOOLS, "acme_extra"] });
+    expect((await app.inject({ method: "GET", url: "/api/spaces/s1", headers: as("u1") })).json().consented).toBe(false);
+    const res = await call("u1", { tool: "acme_list_items" });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().code).toBe("CONSENT_REQUIRED");
+    expect((await app.inject({ method: "GET", url: "/api/spaces/s1/kv", headers: as("u1") })).json().code).toBe("CONSENT_REQUIRED");
+  });
+
   it("a change to the tool list invalidates it", async () => {
     await consent("u2");
     expect((await call("u2", { tool: "acme_list_items" })).statusCode).toBe(200);

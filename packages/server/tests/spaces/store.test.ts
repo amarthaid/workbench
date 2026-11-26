@@ -187,8 +187,8 @@ describe("spaces/store", () => {
       await upsertSpace({ name: "s1", ...base });
       const s = (await getSpace("s1"))!;
       await grantConsent(s, "v1");
-      expect(await getConsentHash("s1", "v1")).toBe(consentHash(s));
-      expect(consentHash(s)).not.toBe(toolsHash(s.tools));
+      expect(await getConsentHash("s1", "v1")).toBe(consentHash(s, "v1"));
+      expect(consentHash(s, "v1")).not.toBe(toolsHash(s.tools));
     });
 
     it("a viewer to owner flip invalidates it", async () => {
@@ -213,7 +213,33 @@ describe("spaces/store", () => {
       const s = (await getSpace("s1"))!;
       await grantConsent(s, "v1");
       expect(await hasConsent({ ...s, ownerId: "u9" }, "v1")).toBe(false);
-      expect(consentHash({ ...s, ownerId: "u9" })).not.toBe(consentHash(s));
+      expect(consentHash({ ...s, ownerId: "u9" }, "v1")).not.toBe(consentHash(s, "v1"));
+    });
+
+    it("the owner keeps consent across delegation toggles, both ways", async () => {
+      await upsertSpace({ name: "s1", ...base });
+      await grantConsent((await getSpace("s1"))!, "u1");
+      const on = (await meta(enableIn("s1")))!.space;
+      expect(await hasConsent(on, "u1")).toBe(true);
+      const off = (await meta(updateSpaceMeta("s1", "u1", { accessMode: "viewer" })))!.space;
+      expect(await hasConsent(off, "u1")).toBe(true);
+      // The owner's hash ignores the mode; a viewer's does not.
+      expect(consentHash(on, "u1")).toBe(consentHash(off, "u1"));
+      expect(consentHash(on, "v1")).not.toBe(consentHash(off, "v1"));
+    });
+
+    it("the owner is still re-asked when the tool list changes", async () => {
+      await upsertSpace({ name: "s1", ...base });
+      await grantConsent((await getSpace("s1"))!, "u1");
+      const changed = (await meta(updateSpaceMeta("s1", "u1", { tools: ["a_tool", "c_tool"] })))!.space;
+      expect(await hasConsent(changed, "u1")).toBe(false);
+    });
+
+    it("an owner's consent does not carry over once someone else owns it", async () => {
+      await upsertSpace({ name: "s1", ...base });
+      const s = (await getSpace("s1"))!;
+      await grantConsent(s, "u1");
+      expect(await hasConsent({ ...s, ownerId: "u9" }, "u1")).toBe(false);
     });
 
     it("a consent recorded as the bare tools hash (before this change) no longer counts", async () => {
