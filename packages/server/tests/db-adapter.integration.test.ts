@@ -14,12 +14,29 @@
  * pull request. Skipping silently would leave the backend this PR exists for
  * completely untested.
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import fs from "fs";
 import os from "os";
 import path from "path";
 import { applySchema, createDb } from "../src/db";
 import type { DbAdapter } from "../src/db-adapter";
+import { can, clearPermission, listPermissions, setPermission } from "../src/permissions/store";
+
+// Modules that use the process-wide `db` (the permissions store) run against
+// the backend under test by pointing this holder at it. Unset, the real `db`
+// answers, so nothing else in the process changes.
+const target = vi.hoisted(() => ({ current: null as DbAdapter | null }));
+vi.mock("../src/db", async (orig) => {
+  const real = await orig<typeof import("../src/db")>();
+  const db = new Proxy(real.db, {
+    get(fallback, key) {
+      const t = target.current ?? fallback;
+      const v = Reflect.get(t, key) as unknown;
+      return typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(t) : v;
+    },
+  });
+  return { ...real, db };
+});
 
 const PG_URL = process.env.TEST_POSTGRES_URL;
 
@@ -238,6 +255,43 @@ for (const backend of backends) {
 
         const results = await Promise.all([claim(), claim(), claim()]);
         expect(results.filter(Boolean)).toHaveLength(1);
+      });
+    });
+
+    // ON CONFLICT ... DO UPDATE with excluded.*, the LEFT JOIN, and BIGINT
+    // granted_at (a string from node-postgres) all differ by backend.
+    describe("permissions store", () => {
+      beforeAll(() => {
+        target.current = db;
+      });
+      afterAll(() => {
+        target.current = null;
+      });
+      beforeEach(async () => {
+        await db.run("DELETE FROM user_permissions");
+      });
+
+      it("upserts one rule, reads it through can(), and lists grantedAt as a number", async () => {
+        await db.run("INSERT INTO users (id, email) VALUES (?, ?)", ["user-admin", "admin@example.com"]);
+        const cap = "spaces.delegate_access";
+        expect(await can("u1", cap)).toBe(false);
+
+        await setPermission({ userId: "u1", capability: cap, effect: "allow", grantedBy: "user-admin" });
+        expect(await can("u1", cap)).toBe(true);
+        await setPermission({ userId: "u1", capability: cap, effect: "deny", grantedBy: "user-admin" });
+        expect(await can("u1", cap)).toBe(false);
+        await setPermission({ userId: "u1", capability: cap, effect: "allow", grantedBy: "user-admin" });
+
+        const rows = await db.all("SELECT * FROM user_permissions WHERE user_id = ?", ["u1"]);
+        expect(rows).toHaveLength(1);
+
+        const [view] = await listPermissions("u1");
+        expect(view).toMatchObject({ effect: "allow", source: "rule", grantedBy: "user-admin", grantedByEmail: "admin@example.com" });
+        expect(typeof view.grantedAt).toBe("number");
+        expect(view.grantedAt).toBeGreaterThan(0);
+
+        expect(await clearPermission("u1", cap)).toBe(true);
+        expect(await clearPermission("u1", cap)).toBe(false);
       });
     });
   });

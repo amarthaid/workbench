@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import Fastify from "fastify";
 
 vi.mock("../src/config", () => ({
@@ -35,6 +35,7 @@ vi.mock("../src/auth/users", async (orig) => ({
 import { registerAdminRoutes } from "../src/api/admin-routes";
 import { db } from "../src/db";
 import { can } from "../src/permissions/store";
+import { CAPABILITIES, type CapabilityDef } from "../src/permissions/capabilities";
 
 const ADMIN = { authorization: "Bearer admin-jwt" };
 const DEV = { authorization: "Bearer dev-jwt" };
@@ -113,6 +114,7 @@ describe("GET /api/admin/users/:id/permissions", () => {
         effect: "deny",
         source: "default",
         grantedBy: null,
+        grantedByEmail: null,
         grantedAt: null,
       },
     ]);
@@ -127,7 +129,7 @@ describe("PUT /api/admin/users/:id/permissions/:capability", () => {
     expect(await can("user-dev", CAP)).toBe(true);
 
     const view = JSON.parse((await call("GET", BASE)).body).permissions[0];
-    expect(view).toMatchObject({ capability: CAP, effect: "allow", source: "rule", grantedBy: "user-admin" });
+    expect(view).toMatchObject({ capability: CAP, effect: "allow", source: "rule", grantedBy: "user-admin", grantedByEmail: "admin@example.com" });
     expect(typeof view.grantedAt).toBe("number");
 
     expect(await auditRows()).toEqual([
@@ -143,11 +145,49 @@ describe("PUT /api/admin/users/:id/permissions/:capability", () => {
     expect(await auditRows()).toEqual([]);
   });
 
+  // spaces.delegate_access defaults to deny, so "deny" would be a no-op rule.
   it.each([[{ effect: "deny" }], [{ effect: "ALLOW" }], [{}], [null]])("400 invalid_effect for body %j", async (payload) => {
     const res = await call("PUT", `${BASE}/${CAP}`, ADMIN, payload);
     expect(res.statusCode).toBe(400);
     expect(JSON.parse(res.body)).toEqual({ error: "invalid_effect" });
     expect(await can("user-dev", CAP)).toBe(false);
+    expect(await auditRows()).toEqual([]);
+  });
+});
+
+describe("PUT on a capability that defaults to allow", () => {
+  const registry = CAPABILITIES as unknown as Record<string, CapabilityDef>;
+  const KEY = "test.default_allow";
+  beforeEach(() => {
+    registry[KEY] = { default: "allow", label: "Test", description: "Test capability." };
+  });
+  afterEach(() => {
+    delete registry[KEY];
+  });
+
+  it("accepts only deny, the opposite of the default", async () => {
+    const refused = await call("PUT", `${BASE}/${KEY}`, ADMIN, { effect: "allow" });
+    expect(refused.statusCode).toBe(400);
+    expect(JSON.parse(refused.body)).toEqual({ error: "invalid_effect" });
+    expect(await db.all("SELECT * FROM user_permissions")).toEqual([]);
+
+    const res = await call("PUT", `${BASE}/${KEY}`, ADMIN, { effect: "deny" });
+    expect(res.statusCode).toBe(200);
+    const row = await db.get<{ effect: string }>(
+      "SELECT effect FROM user_permissions WHERE user_id = ? AND capability = ?",
+      ["user-dev", KEY]
+    );
+    expect(row?.effect).toBe("deny");
+    expect((await auditRows()).map((r) => r.action)).toEqual(["ADMIN_PERMISSION_SET"]);
+  });
+});
+
+describe.each(["__proto__", "constructor", "toString"])("capability %s from Object.prototype", (key) => {
+  it.each([["PUT"], ["DELETE"]] as const)("%s is 400 unknown_capability, with no row and no audit", async (method) => {
+    const res = await call(method, `${BASE}/${key}`, ADMIN, method === "PUT" ? { effect: "allow" } : undefined);
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body)).toEqual({ error: "unknown_capability" });
+    expect(await db.all("SELECT * FROM user_permissions")).toEqual([]);
     expect(await auditRows()).toEqual([]);
   });
 });
@@ -167,6 +207,13 @@ describe("DELETE /api/admin/users/:id/permissions/:capability", () => {
       ["ADMIN_PERMISSION_SET", `admin.permission.set → dev@example.com ${CAP}`],
       ["ADMIN_PERMISSION_CLEAR", `admin.permission.clear → dev@example.com ${CAP}`],
     ]);
+  });
+
+  it("200 with no audit row when there was no rule to remove", async () => {
+    const res = await call("DELETE", `${BASE}/${CAP}`);
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({ ok: true });
+    expect(await auditRows()).toEqual([]);
   });
 
   it("400 unknown_capability for an undeclared capability", async () => {

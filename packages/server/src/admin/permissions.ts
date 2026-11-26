@@ -1,6 +1,6 @@
 import { db } from "../db";
 import { auditLogger } from "../audit/logger";
-import { capabilityDef } from "../permissions/capabilities";
+import { capabilityDef, type Effect } from "../permissions/capabilities";
 import { clearPermission, listPermissions, setPermission, type PermissionView } from "../permissions/store";
 import type { AdminActor } from "../api/admin-scope";
 
@@ -47,19 +47,23 @@ export async function getUserPermissions(id: string): Promise<PermissionsResult>
   return { ok: true, view: { permissions: await listPermissions(target.id), delegatedSpaces } };
 }
 
-// Only "allow" is accepted for now: the admin choice is Allow or Default.
+// The admin choice is the opposite of the default, or Default (DELETE). A rule
+// equal to the default would change nothing, so only the opposite effect is
+// accepted: "allow" for a default-deny capability, "deny" for a default-allow one.
 export async function grantPermission(
   actor: AdminActor,
   id: string,
   capability: string,
   body: unknown
 ): Promise<PermissionActionResult> {
-  if (!capabilityDef(capability)) return UNKNOWN_CAPABILITY;
+  const def = capabilityDef(capability);
+  if (!def) return UNKNOWN_CAPABILITY;
+  const accepted: Effect = def.default === "allow" ? "deny" : "allow";
   const effect = (body as { effect?: unknown } | null | undefined)?.effect;
-  if (effect !== "allow") return { ok: false, status: 400, error: "invalid_effect" };
+  if (effect !== accepted) return { ok: false, status: 400, error: "invalid_effect" };
   const target = await findUser(id);
   if (!target) return NOT_FOUND;
-  await setPermission({ userId: target.id, capability, effect, grantedBy: actor.userId });
+  await setPermission({ userId: target.id, capability, effect: accepted, grantedBy: actor.userId });
   await audit(actor, "ADMIN_PERMISSION_SET", "set", target, capability);
   return { ok: true };
 }
@@ -72,7 +76,9 @@ export async function resetPermission(
   if (!capabilityDef(capability)) return UNKNOWN_CAPABILITY;
   const target = await findUser(id);
   if (!target) return NOT_FOUND;
-  await clearPermission(target.id, capability);
-  await audit(actor, "ADMIN_PERMISSION_CLEAR", "clear", target, capability);
+  // Already at the default: nothing changed, so nothing to audit.
+  if (await clearPermission(target.id, capability)) {
+    await audit(actor, "ADMIN_PERMISSION_CLEAR", "clear", target, capability);
+  }
   return { ok: true };
 }
