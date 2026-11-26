@@ -294,6 +294,79 @@ describe("spaces plugin: delegated access", () => {
     expect((await offRows()).map((r) => [r.tool, r.error ?? null])).toEqual([["space:s1 (reason: audience set to only me)", null]]);
   });
 
+  describe("widening the audience of a delegated Space is portal-only", () => {
+    const WIDEN = {
+      error: "DELEGATION_PORTAL_ONLY",
+      message:
+        "This Space runs with your delegated access. Widen who can open it in the portal (Space > Sharing), or turn delegated access off first.",
+    };
+    const usersSpace = { ...ok, visibility: "users", users: ["qa@example.com"] };
+    const setup = async () => {
+      await deploy("u1", usersSpace);
+      await grantAndEnable();
+    };
+    const unchanged = async () => {
+      expect(await getSpace("s1")).toMatchObject({ visibility: "users", accessMode: "owner" });
+      expect(await getShares("s1")).toEqual(["qa@example.com"]);
+    };
+
+    it("update_space users -> org", async () => {
+      await setup();
+      expect(await update("u1", { name: "s1", visibility: "org" })).toEqual(WIDEN);
+      await unchanged();
+    });
+
+    it("update_space add_users with someone new", async () => {
+      await setup();
+      expect(await update("u1", { name: "s1", add_users: ["ops@example.com"] })).toEqual(WIDEN);
+      await unchanged();
+    });
+
+    it("update_space users replace that adds anyone, even while removing others", async () => {
+      await setup();
+      expect(await update("u1", { name: "s1", users: ["ops@example.com"] })).toEqual(WIDEN);
+      await unchanged();
+    });
+
+    it("deploy_space to org, or with a users list holding someone new", async () => {
+      await setup();
+      expect(await deploy("u1", { ...ok, title: "Again" })).toEqual(WIDEN);
+      expect(await deploy("u1", { ...usersSpace, users: ["qa@example.com", "ops@example.com"] })).toEqual(WIDEN);
+      await unchanged();
+    });
+
+    it("narrowing stays allowed: removing people, org -> users, private, and the same list again", async () => {
+      await deploy("u1", { ...usersSpace, users: ["qa@example.com", "ops@example.com"] });
+      await grantAndEnable();
+      expect((await update("u1", { name: "s1", remove_users: ["ops@example.com"] })).applied).toMatchObject({ delegate_access: true });
+      expect((await update("u1", { name: "s1", add_users: ["qa@example.com"] })).applied).toMatchObject({ delegate_access: true });
+      expect((await deploy("u1", { ...usersSpace, title: "Again" })).delegate_access).toBe(true);
+      expect(await getShares("s1")).toEqual(["qa@example.com"]);
+    });
+
+    it("org -> users narrows and is allowed", async () => {
+      await deploy("u1", ok);
+      await grantAndEnable();
+      const r = await update("u1", { name: "s1", visibility: "users", users: ["qa@example.com"] });
+      expect(r.applied).toMatchObject({ visibility: "users", delegate_access: true });
+    });
+
+    it("turning it off in the same call allows the widening, and so does private", async () => {
+      await setup();
+      expect((await update("u1", { name: "s1", visibility: "org", delegate_access: false })).applied).toMatchObject({
+        visibility: "org",
+        delegate_access: false,
+      });
+      await grantAndEnable();
+      expect((await update("u1", { name: "s1", visibility: "private" })).applied).toMatchObject({ visibility: "private" });
+    });
+
+    it("a Space not delegated widens freely", async () => {
+      await deploy("u1", usersSpace);
+      expect((await update("u1", { name: "s1", visibility: "org" })).applied).toMatchObject({ visibility: "org" });
+    });
+  });
+
   it("update_space to private resets with a reason", async () => {
     await deploy("u1", ok);
     await grantAndEnable();

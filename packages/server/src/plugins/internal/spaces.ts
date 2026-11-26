@@ -94,6 +94,34 @@ const PORTAL_ONLY = {
   error: "DELEGATION_PORTAL_ONLY",
   message: "Delegated access can only be turned on by you in the portal (Space > Sharing).",
 };
+// Widening who can open a delegated Space lends the owner's access to more
+// people, so like turning it on it needs the owner in the portal. Narrowing,
+// private, or turning it off in the same call stay open to an agent.
+const WIDEN_PORTAL_ONLY = {
+  error: "DELEGATION_PORTAL_ONLY",
+  message:
+    "This Space runs with your delegated access. Widen who can open it in the portal (Space > Sharing), or turn delegated access off first.",
+};
+
+/**
+ * Would this change widen the audience of a Space that runs with the owner's
+ * access? To everyone signed in from a narrower audience, or, on a Space
+ * shared with specific people, any email added to the list (including a
+ * replace that brings in someone new).
+ */
+async function widensDelegated(
+  existing: Space | null,
+  next: { visibility: Visibility; added: string[]; turningOff: boolean }
+): Promise<boolean> {
+  if (!existing || existing.accessMode !== "owner" || next.turningOff || next.visibility === "private") return false;
+  if (next.visibility === "org" && existing.visibility !== "org") return true;
+  // Everyone signed in can already open an org Space, so a list given with
+  // it (or with org -> users) reaches nobody new.
+  if (existing.visibility === "org" || next.added.length === 0) return false;
+  const current = new Set(await getShares(existing.name));
+  return next.added.some((e) => !current.has(e));
+}
+
 const SUSPENDED_NOTE = "Delegated access is paused until you confirm the new tool list in the portal.";
 
 const HOW_TO_BUILD =
@@ -112,7 +140,7 @@ const tools: PluginTool[] = [
       "Create or replace a Space: a live web app at /s/<name> in the workbench portal that calls integrations as the viewer (or with the owner's access, when the owner turned on delegated access). " +
       "`tools` lists the fully-qualified registry tool names the page may call (find them with search_tools; internal plugins and custom apps are refused with TOOL_NOT_ALLOWED). " +
       "`visibility`: 'private' (only you), 'org' (any signed-in user of this workbench) or 'users' (the emails in `users`, required then). Deploying over an existing Space replaces its share list with `users` (empty if omitted); to grant or revoke one person use update_space with add_users / remove_users. " +
-      "Delegated access (calls run with your connections) is turned on only by you in the portal; `delegate_access: false` turns it off, `true` is refused (DELEGATION_PORTAL_ONLY). A redeploy keeps the current setting unless the Space becomes private, which turns it off. The result has `delegate_access` (stored) and `delegation_active` (in effect now). " +
+      "Delegated access (calls run with your connections) is turned on only by you in the portal; `delegate_access: false` turns it off, `true` is refused (DELEGATION_PORTAL_ONLY). A redeploy keeps the current setting unless the Space becomes private, which turns it off. While it is on, widening who can open the Space (to org, or adding anyone to `users`) is refused (DELEGATION_PORTAL_ONLY). The result has `delegate_access` (stored) and `delegation_active` (in effect now). " +
       "Metadata is saved at once; the files come from an upload: package your site directory as a gzip tarball and POST it to the returned uploadUrl within ~5 min, e.g. `tar czf - -C <dir> . | curl --data-binary @- -H 'Content-Type: application/gzip' <uploadUrl>`. " +
       "The archive root must contain index.html (NO_INDEX otherwise). A new Space is not visible until its first upload lands. Names are global and creator-locked (SPACE_NAME_TAKEN); lowercase letters, digits and hyphens. Limits: <=5 MiB decompressed, <=1000 files. " +
       HOW_TO_BUILD,
@@ -144,6 +172,15 @@ const tools: PluginTool[] = [
         const e = checkEmails(args.users);
         if (!e.ok) return { error: e.error, message: e.message };
         emails = e.emails;
+      }
+      if (
+        await widensDelegated(existing, {
+          visibility: args.visibility as Visibility,
+          added: emails,
+          turningOff: args.delegate_access === false,
+        })
+      ) {
+        return WIDEN_PORTAL_ONLY;
       }
       const saved = await upsertSpace({
         name: args.name,
@@ -184,7 +221,7 @@ const tools: PluginTool[] = [
       "Share list: `add_users` / `remove_users` add or remove emails and leave everyone else on the list; use them to grant or revoke one person. `users` REPLACES the entire list (anyone not in it loses access); it cannot be combined with `add_users` / `remove_users`. list_spaces shows the current list. " +
       "Pass `files: true` (or a `delete` list) to also get a patch upload: the archive you upload is overlaid onto the live files, `delete` paths are removed first, and files you do not mention stay. Upload the same way as deploy_space, e.g. `tar czf - -C <dir> index.html | curl --data-binary @- -H 'Content-Type: application/gzip' <uploadUrl>`. " +
       "Call list_space_files to see the current tree. The merged tree must fit <=5 MiB / <=1000 files and keep a root index.html. " +
-      "`delegate_access: false` turns delegated access off; `true` is refused (DELEGATION_PORTAL_ONLY), only the owner turns it on in the portal. Changing `tools` on a delegated Space pauses delegated access until the owner confirms the new list in the portal (`delegation_suspended: true`). Setting visibility to private turns it off. `applied` has `delegate_access` (stored) and `delegation_active` (in effect now). " +
+      "`delegate_access: false` turns delegated access off; `true` is refused (DELEGATION_PORTAL_ONLY), only the owner turns it on in the portal. Changing `tools` on a delegated Space pauses delegated access until the owner confirms the new list in the portal (`delegation_suspended: true`). Setting visibility to private turns it off. While it is on, widening who can open the Space (to org, `add_users`, or a `users` list with anyone new) is refused (DELEGATION_PORTAL_ONLY); narrowing is allowed. `applied` has `delegate_access` (stored) and `delegation_active` (in effect now). " +
       "Same build rules as deploy_space: load /s/_sdk/workbench.js, call tools through workbench.call, bundle or inline every asset, no network access.",
     integration: SPACES_INTEGRATION_NAME,
     effect: "write",
@@ -248,6 +285,15 @@ const tools: PluginTool[] = [
           shares = Array.from(new Set([...shares, ...addEmails])).filter((x) => !removed.has(x));
         }
         if (shares.length === 0) return { error: "USERS_REQUIRED", message: "visibility 'users' needs a non-empty share list" };
+      }
+      if (
+        await widensDelegated(existing, {
+          visibility,
+          added: emails ?? addEmails,
+          turningOff: args.delegate_access === false,
+        })
+      ) {
+        return WIDEN_PORTAL_ONLY;
       }
       const deletes: string[] = [];
       for (const d of args.delete ?? []) {

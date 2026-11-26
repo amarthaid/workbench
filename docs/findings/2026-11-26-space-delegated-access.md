@@ -80,6 +80,13 @@ So:
 - **Portal only.** `deploy_space` and `update_space` refuse `delegate_access:
   true` with `DELEGATION_PORTAL_ONLY`. `false` is accepted: turning it off is
   always safe.
+- **Widening is portal-only too.** Lending to more people is the same act as
+  lending in the first place, so while delegation is on the agent tools
+  refuse any change that widens the audience (specific people to everyone
+  signed in, or anyone new on a specific-people list, through `add_users`, a
+  `users` replace or a redeploy) with `DELEGATION_PORTAL_ONLY`, before any
+  write. Narrowing stays open to the agent; the portal's widen asks for the
+  same second confirmation as turning it on.
 - **Pinned to the reviewed list.** The portal sends back the `tools_hash` of
   the list the owner was shown. Enabling records it as
   `delegated_tools_hash`. Any later change to the tool list (an agent

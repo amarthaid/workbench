@@ -93,7 +93,7 @@ What it does not lend:
 2. The owner turns it on in the portal only: open the Space, **Menu > Sharing**, **Delegate my access**. The dialog lists every declared tool and asks a second time (**Delegate your access?**). Widening the audience while it is on (specific people to everyone signed in) asks again the same way.
 3. The Space must be shared (`org` or `users`). Setting it to **Only me**, by any path, turns delegation off.
 
-An agent cannot turn it on: `deploy_space` and `update_space` refuse `delegate_access: true` with `DELEGATION_PORTAL_ONLY`, so a prompt-injected owner agent cannot lend the owner's access. `delegate_access: false` is accepted.
+An agent cannot turn it on: `deploy_space` and `update_space` refuse `delegate_access: true` with `DELEGATION_PORTAL_ONLY`, so a prompt-injected owner agent cannot lend the owner's access. Nor can it lend it to more people: while delegation is on, widening who can open the Space (specific people to everyone signed in, or adding anyone to the share list through `add_users`, a `users` replace or a redeploy) is refused with the same code. Narrowing (removing people, everyone signed in to specific people, only me) is allowed, and so is `delegate_access: false`, also in the same call as a widening.
 
 ### Pinned to the reviewed tool list
 
