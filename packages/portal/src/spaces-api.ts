@@ -20,6 +20,8 @@ export interface SpaceSummary {
   delegate_access?: boolean;
   /** On, but paused until the owner confirms a changed tool list. */
   delegation_suspended?: boolean;
+  /** Owner only: the stored mode is on but the owner lacks the permission. */
+  delegation_blocked?: "no_permission";
 }
 
 export interface SpaceTool {
@@ -69,6 +71,8 @@ export interface SpaceDetail {
   delegate_access?: boolean;
   /** On, but paused until the owner confirms the changed tool list. */
   delegation_suspended?: boolean;
+  /** Owner only: the stored mode is on but the owner lacks the permission. */
+  delegation_blocked?: "no_permission";
   /** Set when delegated access is on but cannot run calls (or, for a viewer, the owner must connect first). */
   delegation_off?: DelegationOff | null;
   /** Owner only: the hash of this tool list, sent back to confirm it. */

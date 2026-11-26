@@ -259,3 +259,49 @@ describe("GET /api/stats", () => {
     });
   });
 });
+
+
+describe("activity filters over HTTP", () => {
+  it("400s on unknown filter values on the personal endpoint", async () => {
+    const app = await buildApp();
+    for (const q of [
+      "status=bogus",
+      "auth=bogus",
+      "delegated=yes",
+      "space=a%20b",
+      "since=abc",
+      `since=${NOW - 91 * 86400}`,
+      `since=${NOW}&until=${NOW - 5}`,
+    ]) {
+      const res = await app.inject({ method: "GET", url: `/api/activity?${q}`, headers: AUTH });
+      expect(res.statusCode, q).toBe(400);
+    }
+  });
+
+  it("accepts a valid range and filters", async () => {
+    await seed({ userId: "user-1", tool: "in", createdAt: NOW - 100 });
+    await seed({ userId: "user-1", tool: "out", createdAt: NOW - 3 * 86400 });
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/activity?since=${NOW - 86400}&until=${NOW}`,
+      headers: AUTH,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).events.map((e: { tool: string }) => e.tool)).toEqual(["in"]);
+  });
+
+  it("serves /api/activity/people, 401 without auth, 400 over 90 days", async () => {
+    const app = await buildApp();
+    expect((await app.inject({ method: "GET", url: "/api/activity/people" })).statusCode).toBe(401);
+    const bad = await app.inject({
+      method: "GET",
+      url: `/api/activity/people?since=${NOW - 91 * 86400}`,
+      headers: AUTH,
+    });
+    expect(bad.statusCode).toBe(400);
+    const ok = await app.inject({ method: "GET", url: "/api/activity/people", headers: AUTH });
+    expect(ok.statusCode).toBe(200);
+    expect(JSON.parse(ok.body)).toEqual({ stored: true, people: [] });
+  });
+});

@@ -62,6 +62,7 @@ const SQLITE_SCHEMA = `
 
   CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_log(user_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_audit_integration ON audit_log(integration, created_at);
+  CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at, id);
 
   -- AUDIT_PAYLOAD: captured tool arguments / result, one row per audit_log row
   -- that has any. Separate so the summary scans never read the wide columns.
@@ -224,6 +225,7 @@ const POSTGRES_SCHEMA = `
 
   CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_log(user_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_audit_integration ON audit_log(integration, created_at);
+  CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at, id);
 
   -- AUDIT_PAYLOAD: captured tool arguments / result, one row per audit_log row
   -- that has any. Separate so the summary scans never read the wide columns.

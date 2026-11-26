@@ -191,6 +191,8 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
       scope.get("/", async (request) => {
         const viewer = viewerOf(request);
         const out = [];
+        // One permission read per request, only when the viewer owns a delegated Space.
+        let ownerCan: boolean | undefined;
         for (const s of await listAllSpaces()) {
           if (!hasFiles(s.name)) continue;
           if (!(await canView(s, viewer))) continue;
@@ -199,6 +201,9 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           // else only whether it is in effect. Viewer-mode Spaces skip the
           // permission read.
           const delegation = mine || s.accessMode !== "owner" ? null : await delegationFor(s);
+          if (mine && s.accessMode === "owner" && ownerCan === undefined) {
+            ownerCan = await can(viewer.userId, "spaces.delegate_access");
+          }
           out.push({
             name: s.name,
             title: s.title,
@@ -211,6 +216,7 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
             delegation_suspended: mine
               ? delegationSuspended(s)
               : delegation?.mode === "off" && delegation.reason === "tools_changed",
+            ...(mine && s.accessMode === "owner" && ownerCan === false ? { delegation_blocked: "no_permission" as const } : {}),
           });
         }
         return { spaces: out };
@@ -283,6 +289,10 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           delegation_suspended: mine
             ? delegationSuspended(space)
             : delegation.mode === "off" && delegation.reason === "tools_changed",
+          // Owner only: the stored mode is on but the owner lacks the permission.
+          ...(mine && space.accessMode === "owner" && ownerCanDelegate === false
+            ? { delegation_blocked: "no_permission" as const }
+            : {}),
           // Set when a viewer cannot use the Space: delegation off or paused,
           // or (viewers only) "owner_not_connected" while delegation is in effect.
           delegation_off:
@@ -369,17 +379,27 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
         // while already on is the re-confirm after a tool change).
         let current: Space = space;
         const modeOff = delegate === false && space.accessMode === "owner";
+        // Widening the audience while the stored mode is on but the owner lost
+        // the permission: the mode would start running for more people, so
+        // turn it off instead (the owner cannot confirm it again).
+        const audienceRank = { private: 0, users: 1, org: 2 } as const;
+        const widened = audienceRank[visibility] > audienceRank[space.visibility];
+        const forcedOff =
+          widened &&
+          delegate === undefined &&
+          space.accessMode === "owner" &&
+          !(await can(viewer.userId, "spaces.delegate_access"));
         // true on a Space already on, unpaused, for the same list: nothing to
         // confirm (a double submit), so no confirm and no second ON row.
         const reconfirm =
           delegate === true &&
           !(space.accessMode === "owner" && !delegationSuspended(space) && reviewedHash === toolsHash(space.tools));
-        if (visibility !== space.visibility || reconfirm || modeOff) {
+        if (visibility !== space.visibility || reconfirm || modeOff || forcedOff) {
           const updated = await updateSpaceMeta(space.name, viewer.userId, {
             visibility,
             ...(reconfirm
               ? { accessMode: "owner" as const, confirmDelegation: true, expectedToolsHash: reviewedHash }
-              : delegate === false
+              : delegate === false || forcedOff
                 ? { accessMode: "viewer" as const }
                 : {}),
           });
@@ -394,7 +414,11 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           if (reconfirm) {
             await recordDelegationChange(current, viewer.userId, "on");
           } else if (updated.modeReset) {
-            await recordModeReset(current, viewer.userId, delegate === false);
+            if (forcedOff) {
+              await recordDelegationChange(current, viewer.userId, "off", "audience widened without permission");
+            } else {
+              await recordModeReset(current, viewer.userId, delegate === false);
+            }
           }
         }
         let users = await getShares(space.name);
@@ -413,6 +437,9 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           users,
           delegate_access: current.accessMode === "owner",
           delegation_suspended: delegationSuspended(current),
+          ...(current.accessMode === "owner" && !(await can(viewer.userId, "spaces.delegate_access"))
+            ? { delegation_blocked: "no_permission" as const }
+            : {}),
         };
       });
 

@@ -4,6 +4,8 @@ import {
   encodeCursor,
   getAuditPayload,
   listAllAuditEvents,
+  parseAuditFilters,
+  type AuditFilterError,
   type AdminAuditEventRow,
   type AuditPayload,
 } from "../audit/query";
@@ -16,7 +18,7 @@ const first = (v: string | string[] | undefined): string | undefined => (Array.i
 
 export type AdminActivityResult =
   | { ok: true; page: { stored: boolean; events: AdminAuditEventRow[]; next_cursor: string | null } }
-  | { ok: false; error: "invalid_cursor" | "invalid_status" };
+  | { ok: false; error: "invalid_cursor" | AuditFilterError };
 
 export async function adminActivity(raw: Raw): Promise<AdminActivityResult> {
   // stdout and kafka write nothing to the table, so an empty list would read as
@@ -41,11 +43,9 @@ export async function adminActivity(raw: Raw): Promise<AdminActivityResult> {
 
   // A filter that is not understood is refused, not ignored: ignoring it would
   // return every event while the caller believes it filtered.
-  const rawStatus = first(raw.status) || undefined;
-  if (rawStatus !== undefined && rawStatus !== "success" && rawStatus !== "error") {
-    return { ok: false, error: "invalid_status" };
-  }
-  const status = rawStatus;
+  const parsed = parseAuditFilters(raw);
+  if (!parsed.ok) return { ok: false, error: parsed.error };
+  const { status, since, until, delegated, space, auth } = parsed.filters;
 
   // One extra row: its presence says another page exists, without a COUNT.
   const rows = await listAllAuditEvents({
@@ -53,6 +53,11 @@ export async function adminActivity(raw: Raw): Promise<AdminActivityResult> {
     cursor,
     integration: first(raw.integration),
     status,
+    since,
+    until,
+    delegated,
+    space,
+    auth,
     email: first(raw.email),
   });
   const events = rows.slice(0, limit);

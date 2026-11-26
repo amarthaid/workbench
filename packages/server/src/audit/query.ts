@@ -2,6 +2,7 @@ import { config } from "../config";
 import { parseAuditDest } from "./destinations";
 import { db } from "../db";
 import type { SqlParam } from "../db-adapter";
+import { isValidJotName } from "../jots/paths";
 
 export interface AuditEventRow {
   id: number;
@@ -28,6 +29,14 @@ export interface AuditDelegation {
 export interface UserAuditEventRow extends AuditEventRow {
   /** Null for an ordinary call on the reader's own access. */
   delegation: AuditDelegation | null;
+  /**
+   * Request origin and credential. All four are null on a `for_me` row: the
+   * reader is the owner, and the actor's network origin is not theirs to see.
+   */
+  auth_method: string | null;
+  client_name: string | null;
+  source_ip: string | null;
+  user_agent: string | null;
 }
 
 export interface AuditSummary {
@@ -36,12 +45,149 @@ export interface AuditSummary {
   mostUsedIntegration: string | null;
 }
 
-export interface ListAuditOptions {
+/** Filters shared by the personal and admin lists. */
+export interface AuditFilterOptions {
+  /** Unix seconds, inclusive, on created_at. */
+  since?: number;
+  until?: number;
+  /** Only delegated calls (actor_user_id set). */
+  delegated?: boolean;
+  /** Space name; matches client_name = 'space:<name>'. */
+  space?: string;
+  auth?: AuditAuth;
+}
+
+export type AuditAuth = "api_key" | "oauth" | "session" | "curl_token" | "space";
+const AUDIT_AUTHS: readonly string[] = ["api_key", "oauth", "session", "curl_token", "space"];
+const MAX_RANGE_SECONDS = 90 * 86400;
+const MAX_EMAIL = 254;
+
+export interface ListAuditOptions extends AuditFilterOptions {
   userId: string;
   limit: number;
   cursor?: { createdAt: number; id: number };
   integration?: string;
   status?: "success" | "error";
+  /** Other party's email on a delegated row, exact, case-insensitive. */
+  person?: string;
+}
+
+export type AuditFilterError =
+  | "invalid_status"
+  | "invalid_since"
+  | "invalid_until"
+  | "invalid_range"
+  | "range_too_large"
+  | "invalid_delegated"
+  | "invalid_space"
+  | "invalid_auth"
+  | "invalid_person";
+
+type RawQuery = Record<string, string | string[] | undefined>;
+const firstOf = (v: string | string[] | undefined): string | undefined => (Array.isArray(v) ? v[0] : v);
+
+function wholeSeconds(v: string): number | null {
+  if (!/^\d{1,12}$/.test(v)) return null;
+  return Number(v);
+}
+
+/**
+ * Parse and validate the filter query parameters both endpoints share. A
+ * filter that is not understood is refused, not ignored: ignoring it would
+ * return every event while the caller believes it filtered.
+ */
+export function parseAuditFilters(
+  raw: RawQuery,
+  opts: { person?: boolean } = {}
+):
+  | { ok: true; filters: AuditFilterOptions & { status?: "success" | "error"; person?: string } }
+  | { ok: false; error: AuditFilterError } {
+  const f: AuditFilterOptions & { status?: "success" | "error"; person?: string } = {};
+
+  const status = firstOf(raw.status) || undefined;
+  if (status !== undefined) {
+    if (status !== "success" && status !== "error") return { ok: false, error: "invalid_status" };
+    f.status = status;
+  }
+
+  const rawSince = firstOf(raw.since) || undefined;
+  const rawUntil = firstOf(raw.until) || undefined;
+  if (rawSince !== undefined) {
+    const n = wholeSeconds(rawSince);
+    if (n === null) return { ok: false, error: "invalid_since" };
+    f.since = n;
+  }
+  if (rawUntil !== undefined) {
+    const n = wholeSeconds(rawUntil);
+    if (n === null) return { ok: false, error: "invalid_until" };
+    f.until = n;
+  }
+  if (f.since !== undefined) {
+    const end = f.until ?? Math.floor(Date.now() / 1000);
+    if (end < f.since) return { ok: false, error: "invalid_range" };
+    if (end - f.since > MAX_RANGE_SECONDS) return { ok: false, error: "range_too_large" };
+  } else if (f.until !== undefined && f.until < 0) {
+    return { ok: false, error: "invalid_until" };
+  }
+
+  const delegated = firstOf(raw.delegated) || undefined;
+  if (delegated !== undefined) {
+    if (delegated !== "1") return { ok: false, error: "invalid_delegated" };
+    f.delegated = true;
+  }
+
+  const space = firstOf(raw.space) || undefined;
+  if (space !== undefined) {
+    if (!isValidJotName(space)) return { ok: false, error: "invalid_space" };
+    f.space = space;
+  }
+
+  const auth = firstOf(raw.auth) || undefined;
+  if (auth !== undefined) {
+    if (!AUDIT_AUTHS.includes(auth)) return { ok: false, error: "invalid_auth" };
+    f.auth = auth as AuditAuth;
+  }
+
+  if (opts.person) {
+    const person = firstOf(raw.person)?.trim() || undefined;
+    if (person !== undefined) {
+      if (person.length > MAX_EMAIL) return { ok: false, error: "invalid_person" };
+      f.person = person;
+    }
+  }
+  return { ok: true, filters: f };
+}
+
+/** Validate just the date range, for endpoints that take nothing else. */
+export function parseAuditRange(
+  raw: RawQuery
+): { ok: true; since?: number; until?: number } | { ok: false; error: AuditFilterError } {
+  const r = parseAuditFilters({ since: raw.since, until: raw.until });
+  if (!r.ok) return r;
+  return { ok: true, since: r.filters.since, until: r.filters.until };
+}
+
+/** Append the shared filter predicates (on alias `a`) to where/params. */
+function applyFilters(o: AuditFilterOptions, where: string[], params: SqlParam[]): void {
+  if (o.since !== undefined) {
+    where.push("a.created_at >= ?");
+    params.push(o.since);
+  }
+  if (o.until !== undefined) {
+    where.push("a.created_at <= ?");
+    params.push(o.until);
+  }
+  if (o.delegated) where.push("a.actor_user_id IS NOT NULL");
+  if (o.space) {
+    where.push("a.client_name = ?");
+    params.push(`${SPACE_CLIENT_PREFIX}${o.space}`);
+  }
+  if (o.auth === "space") {
+    where.push("a.client_name LIKE 'space:%'");
+  } else if (o.auth) {
+    where.push("a.auth_method = ? AND (a.client_name IS NULL OR a.client_name NOT LIKE 'space:%')");
+    params.push(o.auth);
+  }
 }
 
 /**
@@ -119,6 +265,17 @@ export async function listAuditEvents(o: ListAuditOptions): Promise<UserAuditEve
     where.push("a.success = ?");
     params.push(o.status === "success");
   }
+  applyFilters(o, where, params);
+  if (o.person) {
+    const email = o.person.trim().toLowerCase();
+    // Inside the scope above, never beside it: only the other party on a
+    // delegated row of mine.
+    where.push(
+      `((a.actor_user_id = ? AND LOWER(COALESCE(ou.email, a.user_email)) = ?)
+        OR (a.user_id = ? AND LOWER(COALESCE(au.email, a.actor_email)) = ?))`
+    );
+    params.push(o.userId, email, o.userId, email);
+  }
   if (o.cursor) {
     // Longhand rather than a row-value comparison: the two backends do not
     // agree on `(created_at, id) < (?, ?)`.
@@ -131,7 +288,7 @@ export async function listAuditEvents(o: ListAuditOptions): Promise<UserAuditEve
   // with the event when the user row is gone.
   const rows = await db.all<Record<string, unknown>>(
     `SELECT a.id, a.integration, a.tool, a.action, a.success, a.error, a.duration_ms, a.created_at,
-            a.user_id, a.actor_user_id, a.client_name,
+            a.user_id, a.actor_user_id, a.client_name, a.auth_method, a.source_ip, a.user_agent,
             COALESCE(ou.email, a.user_email) AS owner_email,
             COALESCE(au.email, a.actor_email) AS actor_email
        FROM audit_log a
@@ -142,7 +299,52 @@ export async function listAuditEvents(o: ListAuditOptions): Promise<UserAuditEve
       LIMIT ?`,
     params
   );
-  return rows.map((r) => ({ ...normalize(r), delegation: delegationFor(o.userId, r) }));
+  return rows.map((r) => {
+    const delegation = delegationFor(o.userId, r);
+    // The owner reading a call someone else made on their access does not
+    // get that person's credential or network origin.
+    const hide = delegation?.direction === "for_me";
+    const str = (v: unknown) => (hide ? null : ((v as string | null) ?? null));
+    return {
+      ...normalize(r),
+      delegation,
+      auth_method: str(r.auth_method),
+      client_name: str(r.client_name),
+      source_ip: str(r.source_ip),
+      user_agent: str(r.user_agent),
+    };
+  });
+}
+
+export interface ActivityPerson {
+  email: string;
+  count: number;
+}
+
+/**
+ * Distinct other parties on the reader's delegated rows in the range, most
+ * frequent first, at most 50. Same COALESCE email the rows display.
+ */
+export async function listActivityPeople(userId: string, since?: number, until?: number): Promise<ActivityPerson[]> {
+  const where: string[] = ["a.actor_user_id IS NOT NULL", "a.actor_user_id <> a.user_id", "(a.user_id = ? OR a.actor_user_id = ?)"];
+  const params: SqlParam[] = [userId, userId];
+  applyFilters({ since, until }, where, params);
+  const rows = await db.all<{ email: string | null; n: number | string }>(
+    `SELECT other AS email, COUNT(*) AS n FROM (
+       SELECT CASE WHEN a.actor_user_id = ? THEN COALESCE(ou.email, a.user_email)
+                   ELSE COALESCE(au.email, a.actor_email) END AS other
+         FROM audit_log a
+         LEFT JOIN users ou ON ou.id = a.user_id
+         LEFT JOIN users au ON au.id = a.actor_user_id
+        WHERE ${where.join(" AND ")}
+     ) t
+      WHERE other IS NOT NULL
+      GROUP BY other
+      ORDER BY n DESC, other ASC
+      LIMIT 50`,
+    [userId, ...params]
+  );
+  return rows.map((r) => ({ email: String(r.email), count: Number(r.n) }));
 }
 
 /**
@@ -225,7 +427,7 @@ export async function getAuditPayload(auditId: number): Promise<AuditPayload | n
   };
 }
 
-export interface ListAllAuditOptions {
+export interface ListAllAuditOptions extends AuditFilterOptions {
   limit: number;
   cursor?: { createdAt: number; id: number };
   integration?: string;
@@ -258,6 +460,7 @@ export async function listAllAuditEvents(o: ListAllAuditOptions): Promise<AdminA
     where.push("(LOWER(COALESCE(u.email, a.user_email)) = ? OR LOWER(COALESCE(au.email, a.actor_email)) = ?)");
     params.push(email, email);
   }
+  applyFilters(o, where, params);
   if (o.cursor) {
     where.push("(a.created_at < ? OR (a.created_at = ? AND a.id < ?))");
     params.push(o.cursor.createdAt, o.cursor.createdAt, o.cursor.id);
