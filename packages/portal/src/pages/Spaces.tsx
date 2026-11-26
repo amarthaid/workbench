@@ -28,9 +28,15 @@ function SpaceCard({ space }: { space: SpaceSummary }) {
           </span>
         </span>
       </Link>
-      <span className="wb-app-cell-action space-gallery-badges">
+      {/* Their own row under the text, so a long title is never cut short to make room. */}
+      <span className="space-gallery-badges">
         {space.mine && <Badge variant="green">Yours</Badge>}
         <Badge variant={vis.variant}>{vis.label}</Badge>
+        {space.delegation_suspended ? (
+          <Badge variant="neutral">Delegated, paused</Badge>
+        ) : (
+          space.delegate_access && <Badge variant="orange">Delegated</Badge>
+        )}
       </span>
     </div>
   );

@@ -467,4 +467,111 @@ describe("SpaceShell", () => {
       expect(screen.queryByTitle("PR timeline")).not.toBeInTheDocument();
     });
   });
+
+  describe("delegated access", () => {
+    const delegated = (over: Partial<SpaceDetail> = {}) =>
+      space({
+        delegate_access: true,
+        delegation_off: null,
+        tools: [
+          ...space().tools.map((t) => ({ ...t, delegable: true })),
+          { name: "github_set_token", integration: "github", integrationName: "GitHub", effect: "write", connected: true, delegable: false },
+        ],
+        ...over,
+      });
+
+    it("the consent screen says whose access the tools run with", async () => {
+      vi.mocked(fetchSpace).mockResolvedValue(delegated({ consented: false }));
+      renderShell();
+      expect(await screen.findByText("These tools run with owner@example.com's access, not yours.")).toBeInTheDocument();
+      expect(screen.getByText(/Every call is logged under your name and theirs/)).toBeInTheDocument();
+      expect(screen.queryByText(/This Space runs as you/)).not.toBeInTheDocument();
+    });
+
+    it("the bar says whose access is used, instead of Running as you", async () => {
+      vi.mocked(fetchSpace).mockResolvedValue(delegated());
+      renderShell();
+      await frame();
+      expect(screen.getByText("Using owner@example.com's delegated access")).toBeInTheDocument();
+      expect(screen.queryByText("Running as you")).not.toBeInTheDocument();
+    });
+
+    it("the owner of a delegated Space still runs as themselves", async () => {
+      vi.mocked(fetchSpace).mockResolvedValue(delegated({ mine: true, users: [], can_delegate: true, tools_hash: "h" }));
+      renderShell();
+      await frame();
+      expect(screen.getByText("Running as you")).toBeInTheDocument();
+    });
+
+    it("the destructive dialog names the owner and says it is logged under both names", async () => {
+      vi.mocked(fetchSpace).mockResolvedValue(delegated());
+      renderShell();
+      const { send } = await handshake();
+      const reply = send("call", { integration: "github", tool: "merge_pr", args: { repo: "acme/demo-repo" } });
+      const dialog = await screen.findByRole("dialog");
+      expect(within(dialog).getByRole("heading", { name: "Run github_merge_pr as owner@example.com?" })).toBeInTheDocument();
+      expect(dialog).toHaveTextContent("with owner@example.com's access, not yours");
+      expect(dialog).toHaveTextContent("logged under both names");
+      fireEvent.click(within(dialog).getByRole("button", { name: "Allow" }));
+      expect(await reply).toMatchObject({ ok: true });
+    });
+
+    it.each([
+      ["turned_off", "Shared access is off", "This Space's shared access was turned off."],
+      ["tools_changed", "Space paused", "This Space's tools changed. The owner needs to confirm them again."],
+    ] as const)("opening it while off (%s) shows a full-page card, not the Space", async (reason, title, message) => {
+      vi.mocked(fetchSpace).mockResolvedValue(delegated({ delegate_access: false, delegation_off: { reason, message } }));
+      renderShell();
+      expect(await screen.findByRole("heading", { name: title })).toBeInTheDocument();
+      expect(screen.getByText(message)).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Go to Spaces" })).toHaveAttribute("href", "/spaces");
+      expect(screen.queryByTitle("PR timeline")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    });
+
+    it("DELEGATION_OFF during a call replaces the running Space with the card", async () => {
+      vi.mocked(fetchSpace).mockResolvedValue(delegated());
+      vi.mocked(callSpaceTool).mockRejectedValueOnce(
+        new SpaceApiError(403, { code: "DELEGATION_OFF", reason: "turned_off", message: "This Space's shared access was turned off." })
+      );
+      renderShell();
+      const { send } = await handshake();
+      const r = await send("call", { integration: "github", tool: "list_prs" });
+      expect((r.error as { code: string }).code).toBe("DELEGATION_OFF");
+      expect(await screen.findByRole("heading", { name: "Shared access is off" })).toBeInTheDocument();
+      expect(screen.queryByTitle("PR timeline")).not.toBeInTheDocument();
+    });
+
+    it("a tool that cannot be delegated shows a banner and never asks or calls", async () => {
+      vi.mocked(fetchSpace).mockResolvedValue(delegated());
+      renderShell();
+      const { send, iframe } = await handshake();
+      const r = await send("call", { integration: "github", tool: "set_token" });
+      expect((r.error as { code: string }).code).toBe("TOOL_NOT_DELEGABLE");
+      expect(await screen.findByText("github_set_token cannot run with someone else's access.")).toBeInTheDocument();
+      expect(callSpaceTool).not.toHaveBeenCalled();
+      expect(iframe).toBeInTheDocument();
+    });
+
+    it("the owner not connected: a banner naming the owner, with no Connect link", async () => {
+      vi.mocked(fetchSpace).mockResolvedValue(delegated());
+      vi.mocked(callSpaceTool).mockRejectedValueOnce(
+        new SpaceApiError(409, {
+          code: "NOT_CONNECTED",
+          delegated: true,
+          message: "owner@example.com needs to reconnect GitHub.",
+          integration: "github",
+        })
+      );
+      renderShell();
+      const { send } = await handshake();
+      await send("call", { integration: "github", tool: "list_prs" });
+      const banner = (await screen.findByText("owner@example.com needs to reconnect GitHub.")).closest(".space-banner")!;
+      expect(within(banner as HTMLElement).queryByRole("link")).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: /Connect/ })).not.toBeInTheDocument();
+      fireEvent.click(within(banner as HTMLElement).getByRole("button", { name: "Dismiss" }));
+      expect(screen.queryByText("owner@example.com needs to reconnect GitHub.")).not.toBeInTheDocument();
+    });
+  });
 });
+

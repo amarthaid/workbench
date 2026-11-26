@@ -41,7 +41,7 @@ export function ConfirmActionModal({
     <Modal
       open={request !== null}
       onClose={onDeny}
-      title="Allow this action?"
+      title={request?.runAs ? `Run ${request.tool} as ${request.runAs}?` : "Allow this action?"}
       size="lg"
       footer={
         <>
@@ -52,11 +52,19 @@ export function ConfirmActionModal({
     >
       {request && (
         <div className="space-confirm">
-          <p>
-            This Space wants to run <span className="wb-mono">{request.tool}</span> on{" "}
-            <strong>{request.integrationName}</strong> as you. This action can change or delete data, or act on your
-            behalf.
-          </p>
+          {request.runAs ? (
+            <p>
+              This Space wants to run <span className="wb-mono">{request.tool}</span> on{" "}
+              <strong>{request.integrationName}</strong> with {request.runAs}'s access, not yours. This action can change
+              or delete data, and it is logged under both names.
+            </p>
+          ) : (
+            <p>
+              This Space wants to run <span className="wb-mono">{request.tool}</span> on{" "}
+              <strong>{request.integrationName}</strong> as you. This action can change or delete data, or act on your
+              behalf.
+            </p>
+          )}
           {request.description && <p className="space-muted">{request.description}</p>}
           {entries && entries.length > 0 ? (
             <dl className="space-confirm-args">

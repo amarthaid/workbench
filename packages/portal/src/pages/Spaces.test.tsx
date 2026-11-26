@@ -60,6 +60,24 @@ describe("Spaces gallery", () => {
     expect(screen.getByText("Shared")).toBeInTheDocument();
   });
 
+  it("tags delegated Spaces, and paused ones, in the badge row", async () => {
+    const base = { description: null, ownerEmail: "dev@example.com", visibility: "org" as const, updatedAt: Date.now(), mine: true };
+    vi.mocked(fetchSpaces).mockResolvedValue([
+      { ...base, name: "a", title: "Sprint Board", delegate_access: true, delegation_suspended: false },
+      { ...base, name: "b", title: "Release Checklist", delegate_access: true, delegation_suspended: true },
+      // A viewer of a paused Space: not in effect, but paused.
+      { ...base, name: "c", title: "Viewer view", mine: false, delegate_access: false, delegation_suspended: true },
+      { ...base, name: "d", title: "PR Timeline", delegate_access: false, delegation_suspended: false },
+    ]);
+    renderPage();
+    const badges = async (title: string) =>
+      (await screen.findByRole("link", { name: new RegExp(title) })).closest(".space-gallery-cell")!.querySelector(".space-gallery-badges")!;
+    expect(await badges("Sprint Board")).toHaveTextContent(/^YoursEveryone signed inDelegated$/);
+    expect(await badges("Release Checklist")).toHaveTextContent("Delegated, paused");
+    expect(await badges("Viewer view")).toHaveTextContent("Delegated, paused");
+    expect(await badges("PR Timeline")).not.toHaveTextContent("Delegated");
+  });
+
   it("explains how to create one when there are none", async () => {
     vi.mocked(fetchSpaces).mockResolvedValue([]);
     renderPage();

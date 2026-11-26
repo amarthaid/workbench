@@ -1294,7 +1294,7 @@ body {
    The gallery reuses the app grid. The shell (/s/:name) is full screen and
    outside the app shell: a thin bar the Space cannot draw over, then the
    sandboxed frame filling the rest. */
-.space-gallery-cell { align-items: flex-start; }
+.space-gallery-cell { flex-direction: column; align-items: stretch; }
 .space-gallery-link { align-items: flex-start; }
 .space-gallery-desc {
   font-size: 13px;
@@ -1304,7 +1304,7 @@ body {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.space-gallery-badges { display: flex; gap: var(--s-4); }
+.space-gallery-badges { display: flex; flex-wrap: wrap; gap: var(--s-4); }
 .space-example-prompt {
   font-family: var(--mono);
   font-size: 12px;
@@ -1389,6 +1389,18 @@ body {
 .space-bar-owner { color: var(--text-3); white-space: nowrap; }
 .space-bar-right { display: flex; align-items: center; gap: var(--s-12); flex: none; }
 .space-bar-as { color: var(--ok); font-size: 12px; }
+/* Replaces "Running as you" when calls run with the owner's access. */
+.space-bar-as-delegated {
+  color: var(--warn);
+  background: var(--warn-soft);
+  border: 1px solid var(--warn-line);
+  border-radius: var(--radius);
+  padding: 2px var(--s-8);
+  max-width: 45vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .space-menu { position: relative; }
 .space-menu-list {
