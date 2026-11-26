@@ -67,7 +67,12 @@ export function SharingModal({ open, space, onClose, onSaved }: SharingProps) {
   const [loadError, setLoadError] = useState(false);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      // Drop the copy on close, so a reopen never shows it for a frame
+      // before the new read lands.
+      setFresh(null);
+      return;
+    }
     let live = true;
     setFresh(null);
     setLoadError(false);
@@ -166,6 +171,9 @@ function SharingForm({ space, onClose, onSaved }: Omit<SharingProps, "open">) {
   // Turning it on, or widening it, needs the second step; resuming a paused
   // one goes through "Confirm tools".
   const needsConfirm = delegate && (!wasOn || widening);
+  // Widening needs the permission the server checks on confirm; without it the
+  // confirm would only be refused, so it is not offered.
+  const widenBlocked = widening && !canDelegate;
 
   const chooseAudience = (v: SpaceVisibility) => {
     setChoice(v);
@@ -220,6 +228,7 @@ function SharingForm({ space, onClose, onSaved }: Omit<SharingProps, "open">) {
   };
 
   const save = async () => {
+    if (widenBlocked) return;
     if (choice === "users" && (pills.length > 0 || draft.trim() !== "")) {
       setSaveError("Press Add to include the addresses you typed, or clear them.");
       return;
@@ -285,7 +294,7 @@ function SharingForm({ space, onClose, onSaved }: Omit<SharingProps, "open">) {
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button>
-          <Button onClick={() => void save()} disabled={busy}>{busy ? "Saving..." : "Save"}</Button>
+          <Button onClick={() => void save()} disabled={busy || widenBlocked}>{busy ? "Saving..." : "Save"}</Button>
         </>
       }
     >
@@ -399,6 +408,11 @@ function SharingForm({ space, onClose, onSaved }: Omit<SharingProps, "open">) {
                   An admin removed your permission to delegate access, so viewers cannot use it. You can still turn it off.
                 </span>
               )}
+              {widenBlocked && (
+                <span className="ui-form-error" role="alert">
+                  Turn off Delegate my access to change who can open this Space, or ask an admin to allow it again.
+                </span>
+              )}
             </span>
             <Switch
               checked={delegate}
@@ -412,7 +426,7 @@ function SharingForm({ space, onClose, onSaved }: Omit<SharingProps, "open">) {
             />
           </div>
 
-          {delegate && (!wasOn || (widening && !suspended)) && (
+          {delegate && !widenBlocked && (!wasOn || (widening && !suspended)) && (
             <div className="space-warn-box" role="note">
               <p className="space-warn-title">{LENT}</p>
               {widening && <p className="space-warn-text"><strong>{WIDEN}</strong></p>}

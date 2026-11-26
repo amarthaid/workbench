@@ -312,5 +312,47 @@ describe("SharingModal: Delegate my access", () => {
     expect(await screen.findByText("Reload this Space and try again.")).toBeInTheDocument();
     expect(updateSpaceSharing).not.toHaveBeenCalled();
   });
+
+  it("a reopen reads the Space again and never shows the old copy", async () => {
+    vi.mocked(fetchSpace).mockResolvedValue(space({ visibility: "org" }));
+    const props = { space: space(), onClose: vi.fn(), onSaved: vi.fn() };
+    const { rerender } = render(<SharingModal open {...props} />);
+    await screen.findByText("Who can open this Space");
+    expect(screen.getByLabelText(/Everyone signed in/)).toBeChecked();
+    rerender(<SharingModal open={false} {...props} />);
+    let resolve: (d: SpaceDetail) => void = () => undefined;
+    vi.mocked(fetchSpace).mockReturnValue(new Promise<SpaceDetail>((r) => (resolve = r)));
+    rerender(<SharingModal open {...props} />);
+    // Still reading: the form (with the old answer) is not on screen.
+    expect(screen.getByText("Loading sharing settings...")).toBeInTheDocument();
+    expect(screen.queryByText("Who can open this Space")).not.toBeInTheDocument();
+    resolve(space({ visibility: "private" }));
+    await screen.findByText("Who can open this Space");
+    expect(screen.getByLabelText(/Only me/)).toBeChecked();
+    expect(fetchSpace).toHaveBeenCalledTimes(2);
+  });
+
+  it("permission revoked while on: widening is blocked with a hint, narrowing and turning off still work", async () => {
+    const dialog = await open(
+      space({ visibility: "users", users: ["qa@example.com"], delegate_access: true, can_delegate: false })
+    );
+    fireEvent.click(within(dialog).getByLabelText(/Everyone signed in/));
+    expect(
+      within(dialog).getByText(
+        "Turn off Delegate my access to change who can open this Space, or ask an admin to allow it again."
+      )
+    ).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(dialog).queryByRole("note")).not.toBeInTheDocument();
+    expect(updateSpaceSharing).not.toHaveBeenCalled();
+
+    // Turning it off lifts the block: the audience change saves with the mode off.
+    fireEvent.click(theSwitch());
+    expect(within(dialog).queryByText(/Turn off Delegate my access/)).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(updateSpaceSharing).toHaveBeenCalledWith("sprint-board", { visibility: "org", delegate_access: false })
+    );
+  });
 });
 
