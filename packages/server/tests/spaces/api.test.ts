@@ -159,6 +159,8 @@ describe("GET /api/spaces", () => {
       visibility: "users",
       updatedAt: 1,
       mine: false,
+      delegate_access: false,
+      delegation_suspended: false,
     });
     const own = (await app.inject({ method: "GET", url: "/api/spaces", headers: as("u3") })).json().spaces;
     expect(own.map((s: any) => [s.name, s.mine])).toEqual([
@@ -420,6 +422,25 @@ describe("delegated access in the portal API", () => {
     expect(res.json()).toMatchObject({ delegate_access: true, delegation_suspended: false });
     expect(await detail("u2")).toMatchObject({ delegation_suspended: false, delegation_off: null });
     expect((await delegationRows()).map((r) => r.action)).toEqual(["SPACE_DELEGATION_ON", "SPACE_DELEGATION_ON"]);
+  });
+
+  it("the list carries the mode and the pause: stored for the owner, effective for others", async () => {
+    const list = async (user: string) =>
+      (await app.inject({ method: "GET", url: "/api/spaces", headers: as(user) })).json().spaces.find((s: any) => s.name === "s1");
+    expect(await list("u2")).toMatchObject({ delegate_access: false, delegation_suspended: false });
+    await grant();
+    await enable();
+    expect(await list("u1")).toMatchObject({ delegate_access: true, delegation_suspended: false });
+    expect(await list("u2")).toMatchObject({ delegate_access: true, delegation_suspended: false });
+    // Tool list changed: paused for both.
+    await upsertSpace({ name: "s1", ownerId: "u1", title: "Items", tools: ["acme_list_items"], visibility: "users" });
+    expect(await list("u1")).toMatchObject({ delegate_access: true, delegation_suspended: true });
+    expect(await list("u2")).toMatchObject({ delegate_access: false, delegation_suspended: true });
+    // Permission revoked: the owner still sees the stored mode, a viewer sees it off.
+    await db.run("DELETE FROM user_permissions WHERE user_id = ?", ["u1"]);
+    await upsertSpace({ name: "s1", ownerId: "u1", title: "Items", tools: TOOLS, visibility: "users" });
+    expect(await list("u1")).toMatchObject({ delegate_access: true, delegation_suspended: false });
+    expect(await list("u2")).toMatchObject({ delegate_access: false, delegation_suspended: false });
   });
 
   it("a revoked permission shows as off to everyone, not as the viewer's access", async () => {

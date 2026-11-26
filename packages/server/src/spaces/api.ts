@@ -178,6 +178,11 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
         for (const s of await listAllSpaces()) {
           if (!hasFiles(s.name)) continue;
           if (!(await canView(s, viewer))) continue;
+          const mine = s.ownerId === viewer.userId;
+          // Same rule as the detail: the owner sees the stored mode, anyone
+          // else only whether it is in effect. Viewer-mode Spaces skip the
+          // permission read.
+          const delegation = mine || s.accessMode !== "owner" ? null : await delegationFor(s);
           out.push({
             name: s.name,
             title: s.title,
@@ -185,7 +190,11 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
             ownerEmail: s.ownerEmail,
             visibility: s.visibility,
             updatedAt: s.updatedAt,
-            mine: s.ownerId === viewer.userId,
+            mine,
+            delegate_access: mine ? s.accessMode === "owner" : delegation?.mode === "owner",
+            delegation_suspended: mine
+              ? delegationSuspended(s)
+              : delegation?.mode === "off" && delegation.reason === "tools_changed",
           });
         }
         return { spaces: out };
