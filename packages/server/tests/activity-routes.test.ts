@@ -165,6 +165,39 @@ describe("GET /api/activity", () => {
     expect(JSON.parse(res.body).events).toHaveLength(50);
   });
 
+  it("shows a delegated call to both people, each from their side", async () => {
+    // user-2 owns the Space and lent their access; user-1 called through it.
+    await db.run(
+      `INSERT INTO audit_log (user_id, user_email, actor_user_id, actor_email, client_name,
+                              integration, tool, action, success, duration_ms, created_at)
+       VALUES (?, ?, ?, ?, ?, 'acme', 'acme_search', 'EXECUTE', ?, 100, ?)`,
+      ["user-2", "other@example.com", "user-1", "dev@example.com", "space:team-dash", true, NOW]
+    );
+    await seed({ userId: "user-1", tool: "own_call", createdAt: NOW - 10 });
+    const app = await buildApp();
+
+    const viewer = JSON.parse((await app.inject({ method: "GET", url: "/api/activity", headers: AUTH })).body);
+    expect(viewer.events.map((e: { tool: string }) => e.tool)).toEqual(["acme_search", "own_call"]);
+    expect(viewer.events[0].delegation).toEqual({
+      direction: "by_me",
+      other_email: "other@example.com",
+      space: "team-dash",
+    });
+    expect(viewer.events[1].delegation).toBeNull();
+    expect(JSON.stringify(viewer)).not.toContain("user-2");
+
+    const owner = JSON.parse(
+      (await app.inject({ method: "GET", url: "/api/activity", headers: { authorization: "Bearer other-jwt" } })).body
+    );
+    expect(owner.events).toHaveLength(1);
+    expect(owner.events[0].delegation).toEqual({
+      direction: "for_me",
+      other_email: "dev@example.com",
+      space: "team-dash",
+    });
+    expect(JSON.stringify(owner)).not.toContain("user-1");
+  });
+
   it("reports stored:false when audit events go somewhere other than the database", async () => {
     await seed({ userId: "user-1" });
     config.AUDIT_LOG_DEST = "stdout";

@@ -332,6 +332,28 @@ for (const backend of backends) {
             : (await db.get<{ indexdef: string }>("SELECT indexdef FROM pg_indexes WHERE indexname = ?", ["idx_audit_actor_nn"]))?.indexdef;
         expect(def).toMatch(/actor_user_id IS NOT NULL/i);
       });
+
+      it("Activity reads a delegated row from both sides; admin filters on either email", async () => {
+        const { listAuditEvents, listAllAuditEvents } = await import("../src/audit/query");
+        await db.run("INSERT INTO users (id, email) VALUES (?, ?), (?, ?)", ["u1", "dev@example.com", "u2", "qa@example.com"]);
+        await db.run(
+          `INSERT INTO audit_log (user_id, user_email, actor_user_id, actor_email, client_name, tool, action, success, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'EXECUTE', ?, ?), (?, NULL, NULL, NULL, NULL, ?, 'EXECUTE', ?, ?)`,
+          ["u1", "dev@example.com", "u2", "qa@example.com", "space:team-dash", "delegated", true, 200, "u3", "unrelated", true, 300]
+        );
+
+        const owner = await listAuditEvents({ userId: "u1", limit: 10 });
+        expect(owner.map((r) => r.delegation)).toEqual([
+          { direction: "for_me", other_email: "qa@example.com", space: "team-dash" },
+        ]);
+        const viewer = await listAuditEvents({ userId: "u2", limit: 10, status: "success", cursor: { createdAt: 250, id: 1e9 } });
+        expect(viewer.map((r) => r.delegation)).toEqual([
+          { direction: "by_me", other_email: "dev@example.com", space: "team-dash" },
+        ]);
+
+        const admin = await listAllAuditEvents({ limit: 10, email: "QA@example.com" });
+        expect(admin.map((r) => [r.tool, r.user_email, r.actor_email])).toEqual([["delegated", "dev@example.com", "qa@example.com"]]);
+      });
     });
 
     // A delegated call end to end below the route: the owner's token is read,
