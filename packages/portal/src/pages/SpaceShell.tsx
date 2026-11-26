@@ -14,6 +14,7 @@ import {
   revokeSpaceConsent,
   type SpaceDetail,
   type SpaceSharing,
+  type SpaceTool,
 } from "../spaces-api";
 import { createSpaceBridge, type ConfirmRequest } from "../spaces/bridge";
 import { SpaceToolList } from "../spaces/ToolList";
@@ -35,6 +36,16 @@ function CenterCard({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** Display names of integrations the viewer must connect before approving. */
+export function unconnectedIntegrations(tools: SpaceTool[]): string[] {
+  const names = new Map<string, string>();
+  for (const t of tools) {
+    if (t.missing || t.connected !== false) continue;
+    names.set(t.integration, t.integrationName || t.integration);
+  }
+  return [...names.values()];
+}
+
 function ConsentScreen({
   space,
   onApprove,
@@ -48,6 +59,8 @@ function ConsentScreen({
   busy: boolean;
   error: string | null;
 }) {
+  const needed = unconnectedIntegrations(space.tools);
+  const blocked = needed.length > 0;
   return (
     <div className="page-center page-center-stack">
       <BrandLockup />
@@ -59,11 +72,20 @@ function ConsentScreen({
           This Space runs as you, with your connections. Approve the tools it can use below. Tools tagged Asks first
           need your OK every time they run.
         </p>
-        <SpaceToolList tools={space.tools} />
+        <SpaceToolList tools={space.tools} connectHref={(integration) => `/connect/${encodeURIComponent(integration)}`} />
+        {blocked && (
+          <div className="space-consent-needs" role="status">
+            <span>
+              <strong>Connect {needed.join(", ")} to continue.</strong> This Space acts through your own connections, so
+              each integration it uses has to be connected on your account before you can approve it.
+            </span>
+            <span>Connect in the new tab, then come back here. This page updates when you return.</span>
+          </div>
+        )}
         {error && <p className="ui-form-error">{error}</p>}
         <div className="space-consent-actions">
           <Button variant="outline" onClick={onCancel} disabled={busy}>Cancel</Button>
-          <Button onClick={onApprove} disabled={busy}>{busy ? "Approving..." : "Approve"}</Button>
+          <Button onClick={onApprove} disabled={busy || blocked}>{busy ? "Approving..." : "Approve"}</Button>
         </div>
       </div>
     </div>
@@ -286,11 +308,25 @@ export default function SpaceShell() {
     refetchOnWindowFocus: false,
   });
 
+  // On the consent page, coming back from connecting in another tab re-checks
+  // which integrations are connected. The running Space does not need this.
+  const awaitingConsent = !!data && !data.consented;
+  useEffect(() => {
+    if (!awaitingConsent) return;
+    const onFocus = () => void refetch();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [awaitingConsent, refetch]);
+
   const setConsented = (consented: boolean) =>
     queryClient.setQueryData<SpaceDetail>(queryKey, (d) => (d ? { ...d, consented } : d));
 
   const approve = useMutation({
     mutationFn: () => grantSpaceConsent(name),
+    // The viewer's connections changed since this page loaded: show the new state.
+    onError: (e) => {
+      if (e instanceof SpaceApiError && e.code === "INTEGRATION_NOT_CONNECTED") void refetch();
+    },
     onSuccess: () => {
       setStopped(null);
       setConsented(true);
@@ -331,7 +367,13 @@ export default function SpaceShell() {
       <ConsentScreen
         space={data}
         busy={approve.isPending}
-        error={approve.error ? "Could not record your approval. Try again." : null}
+        error={
+          approve.error
+            ? approve.error instanceof SpaceApiError && approve.error.code === "INTEGRATION_NOT_CONNECTED"
+              ? approve.error.message
+              : "Could not record your approval. Try again."
+            : null
+        }
         onApprove={() => approve.mutate()}
         onCancel={() => navigate("/spaces")}
       />

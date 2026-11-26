@@ -49,6 +49,12 @@ function space(overrides: Partial<SpaceDetail> = {}): SpaceDetail {
   };
 }
 
+/** Not yet consented, with every integration the Space uses connected. */
+function connectedSpace(): SpaceDetail {
+  const base = space({ consented: false });
+  return { ...base, tools: base.tools.map((t) => (t.missing ? t : { ...t, connected: true })) };
+}
+
 const ports: MessagePort[] = [];
 afterEach(() => {
   for (const p of ports.splice(0)) p.close();
@@ -139,7 +145,44 @@ describe("SpaceShell", () => {
       expect(screen.queryByTitle("PR timeline")).not.toBeInTheDocument();
     });
 
+    it("blocks Approve and offers Connect while an integration is not connected", async () => {
+      renderShell();
+      const approve = await screen.findByRole("button", { name: "Approve" });
+      expect(approve).toBeDisabled();
+      expect(screen.getByRole("status")).toHaveTextContent("Connect Bitbucket to continue");
+
+      const bitbucket = screen.getByRole("heading", { name: "Bitbucket" }).closest("section")!;
+      const connect = within(bitbucket).getByRole("link", { name: "Connect" });
+      expect(connect).toHaveAttribute("href", "/connect/bitbucket");
+      expect(connect).toHaveAttribute("target", "_blank");
+      const github = screen.getByRole("heading", { name: "GitHub" }).closest("section")!;
+      expect(within(github).getByText("Connected")).toBeInTheDocument();
+      expect(within(github).queryByRole("link", { name: "Connect" })).not.toBeInTheDocument();
+
+      fireEvent.click(approve);
+      expect(grantSpaceConsent).not.toHaveBeenCalled();
+    });
+
+    it("re-checks when the window regains focus", async () => {
+      renderShell();
+      await screen.findByRole("button", { name: "Approve" });
+      expect(fetchSpace).toHaveBeenCalledTimes(1);
+      vi.mocked(fetchSpace).mockResolvedValue(connectedSpace());
+      fireEvent.focus(window);
+      await waitFor(() => expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled());
+      expect(fetchSpace).toHaveBeenCalledTimes(2);
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    });
+
+    it("ignores a Missing tool when deciding whether everything is connected", async () => {
+      vi.mocked(fetchSpace).mockResolvedValue(connectedSpace());
+      renderShell();
+      expect(await screen.findByRole("button", { name: "Approve" })).toBeEnabled();
+      expect(screen.getByText("bitbucket_old_tool")).toBeInTheDocument();
+    });
+
     it("Approve records consent and mounts the sandboxed frame", async () => {
+      vi.mocked(fetchSpace).mockResolvedValue(connectedSpace());
       renderShell();
       fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
       const iframe = await frame();

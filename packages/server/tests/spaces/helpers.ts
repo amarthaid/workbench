@@ -5,7 +5,7 @@ import { pack as tarPack } from "tar-stream";
 import { db } from "../../src/db";
 
 export async function resetSpacesDb(): Promise<void> {
-  for (const t of ["space_kv", "space_consents", "space_shares", "spaces", "pending_auth", "users", "audit_log"]) {
+  for (const t of ["space_kv", "space_consents", "space_shares", "spaces", "pending_auth", "connections", "users", "audit_log"]) {
     await db.exec(`DELETE FROM ${t}`);
   }
 }

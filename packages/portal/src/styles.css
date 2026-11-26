@@ -1291,6 +1291,9 @@ body {
 .space-tool-text { display: grid; gap: var(--s-2); min-width: 0; }
 .space-tool-desc { font-size: 12px; color: var(--text-3); }
 .space-tool-tags { display: flex; gap: var(--s-4); flex: none; }
+.space-tool-connect { display: inline-flex; align-items: center; gap: var(--s-8); }
+.space-consent-needs { display: grid; gap: var(--s-4); padding: var(--s-12); border: 1px solid var(--border); border-radius: var(--r-8); background: var(--surface-2, var(--surface)); font-size: 13px; color: var(--text-2); }
+.space-consent-needs strong { color: var(--text); }
 
 .space-shell {
   height: 100vh;
