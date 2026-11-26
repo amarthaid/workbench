@@ -1101,6 +1101,16 @@ body {
   white-space: nowrap;
 }
 
+.wb-cell-delegation {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-8);
+  margin-top: var(--s-4);
+  font-size: 12px;
+  color: var(--text-2);
+}
+
 .wb-cell-error {
   margin-top: var(--s-2);
   font-size: 12px;

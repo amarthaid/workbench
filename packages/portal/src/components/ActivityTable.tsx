@@ -1,7 +1,8 @@
 import { Fragment } from "react";
-import type { ActivityEvent, IntegrationSummary } from "../api";
+import type { ActivityDelegation, ActivityEvent, IntegrationSummary } from "../api";
 import { DataTable } from "./ui/DataTable";
 import IntegrationLogo from "./IntegrationLogo";
+import { Badge } from "./ui/Badge";
 import { dayLabel, timeLabel, durationLabel } from "../format";
 
 export interface AppLabel {
@@ -35,15 +36,26 @@ function groupByDay(events: ActivityEvent[]): { day: string; events: ActivityEve
   return groups;
 }
 
+/** Who used whose access, for a call that ran with delegated access. */
+export function delegationText(d: ActivityDelegation, spaceTitle: (name: string) => string = (n) => n): string {
+  const via = d.space ? ` via ${spaceTitle(d.space)}` : "";
+  return d.direction === "for_me"
+    ? `${d.other_email ?? "Someone"} used your access${via}`
+    : `You used ${d.other_email ? `${d.other_email}'s` : "someone else's"} access${via}`;
+}
+
 export function ActivityTable({
   events,
   caption,
   appFor,
+  spaceTitle,
 }: {
   events: ActivityEvent[];
   caption: string;
   /** Map an integration name to its display name + logo; name-only if unknown. */
   appFor?: (name: string) => AppLabel;
+  /** Map a Space's name to its title, for delegated rows; the name if unknown. */
+  spaceTitle?: (name: string) => string;
 }) {
   const app: (name: string) => AppLabel = appFor ?? ((n) => ({ label: n }));
 
@@ -89,6 +101,12 @@ export function ActivityTable({
               </td>
               <td>
                 <code className="wb-mono">{e.tool ?? "—"}</code>
+                {e.delegation && (
+                  <div className="wb-cell-delegation">
+                    <Badge variant="orange">Delegated</Badge>
+                    <span>{delegationText(e.delegation, spaceTitle)}</span>
+                  </div>
+                )}
                 {!e.success && e.error && (
                   <div className="wb-cell-error" title={e.error}>{e.error}</div>
                 )}
