@@ -35,7 +35,7 @@ vi.mock("../src/auth/users", async (orig) => ({
 import { registerAdminRoutes } from "../src/api/admin-routes";
 import { db } from "../src/db";
 import { can } from "../src/permissions/store";
-import { updateSpaceMeta, upsertSpace } from "../src/spaces/store";
+import { toolsHash, updateSpaceMeta, upsertSpace } from "../src/spaces/store";
 import { CAPABILITIES, type CapabilityDef } from "../src/permissions/capabilities";
 
 const ADMIN = { authorization: "Bearer admin-jwt" };
@@ -131,7 +131,11 @@ describe("delegatedSpaces", () => {
     await space("dev-off", "user-dev");
     await space("admin-on", "user-admin");
     for (const [name, owner] of [["dev-on", "user-dev"], ["dev-on-2", "user-dev"], ["admin-on", "user-admin"]]) {
-      await updateSpaceMeta(name, owner, { accessMode: "owner", confirmDelegation: true });
+      await updateSpaceMeta(name, owner, {
+        accessMode: "owner",
+        confirmDelegation: true,
+        expectedToolsHash: toolsHash(["acme_list"]),
+      });
     }
     // Suspended by a tool change: still delegated, so still counted.
     await updateSpaceMeta("dev-on-2", "user-dev", { tools: ["acme_other"] });

@@ -91,17 +91,15 @@ export function installAuditContext(app: FastifyInstance): void {
  * results. Fields that are not known are left out.
  */
 export async function requestLogFields(userId: string): Promise<Record<string, string>> {
-  const { auditUserEmail } = await import("./user-email.js"); // lazy: keeps the db out of modules (the admin gate) that import this file
+  const { auditActorFields, auditUserEmail } = await import("./user-email.js"); // lazy: keeps the db out of modules (the admin gate) that import this file
   const { oauthClientName } = await import("./client-name.js");
   const out: Record<string, string> = {};
   const email = await auditUserEmail(userId);
   if (email) out.user_email = email;
   const c = store.getStore();
-  if (c?.actor_user_id) {
-    out.actor_user_id = c.actor_user_id;
-    const actorEmail = await auditUserEmail(c.actor_user_id);
-    if (actorEmail) out.actor_email = actorEmail;
-  }
+  const actor = await auditActorFields(c?.actor_user_id);
+  if (actor.actor_user_id) out.actor_user_id = actor.actor_user_id;
+  if (actor.actor_email) out.actor_email = actor.actor_email;
   if (c?.source_ip) out.source_ip = c.source_ip;
   if (c?.user_agent) out.user_agent = c.user_agent;
   if (c?.auth_method) out.auth_method = c.auth_method;

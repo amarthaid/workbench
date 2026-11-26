@@ -387,7 +387,12 @@ async function initSqliteSchema(db: DbAdapter): Promise<void> {
     );
   } catch { /* already exists */ }
   // After the ALTERs: on an old database the column only exists from here.
-  await db.exec("CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_log(actor_user_id, created_at)");
+  // Partial: only delegated calls carry an actor.
+  try {
+    await db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_audit_actor_nn ON audit_log(actor_user_id, created_at) WHERE actor_user_id IS NOT NULL"
+    );
+  } catch { /* already exists */ }
 }
 
 async function initPostgresSchema(db: DbAdapter): Promise<void> {
@@ -420,7 +425,7 @@ async function initPostgresSchema(db: DbAdapter): Promise<void> {
     ALTER TABLE spaces ADD COLUMN IF NOT EXISTS delegated_tools_hash TEXT;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_keycloak_sub ON users(keycloak_sub) WHERE keycloak_sub IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_users_api_key_sha ON users(api_key_sha) WHERE api_key_sha IS NOT NULL;
-    CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_log(actor_user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_audit_actor_nn ON audit_log(actor_user_id, created_at) WHERE actor_user_id IS NOT NULL;
   `);
 }
 

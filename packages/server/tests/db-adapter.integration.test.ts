@@ -323,6 +323,14 @@ for (const backend of backends) {
         );
         expect(row).toEqual({ user_id: "u1", actor_user_id: "u2", actor_email: "qa@example.com" });
       });
+
+      it("indexes the actor partially, only rows that have one", async () => {
+        const def =
+          db.dialect === "sqlite"
+            ? (await db.get<{ sql: string }>("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?", ["idx_audit_actor_nn"]))?.sql
+            : (await db.get<{ indexdef: string }>("SELECT indexdef FROM pg_indexes WHERE indexname = ?", ["idx_audit_actor_nn"]))?.indexdef;
+        expect(def).toMatch(/actor_user_id IS NOT NULL/i);
+      });
     });
 
     // The CASE with a NULL-able placeholder (PostgreSQL needs a type for it),
@@ -343,8 +351,12 @@ for (const backend of backends) {
         expect(await upsertSpace(base)).toEqual({ result: "ok", modeReset: false });
         expect(await getSpace("s1")).toMatchObject({ accessMode: "viewer", delegatedToolsHash: null });
 
-        const on = await updateSpaceMeta("s1", "u1", { accessMode: "owner", confirmDelegation: true });
-        expect(on!.modeReset).toBe(false);
+        const on = await updateSpaceMeta("s1", "u1", {
+          accessMode: "owner",
+          confirmDelegation: true,
+          expectedToolsHash: toolsHash(base.tools),
+        });
+        expect(on).toMatchObject({ modeReset: false });
         expect(await getSpace("s1")).toMatchObject({ accessMode: "owner", delegatedToolsHash: toolsHash(base.tools) });
         expect(await countDelegatedSpaces("u1")).toBe(1);
 

@@ -15,7 +15,7 @@ import { storeToken } from "../../src/auth/tokens";
 import { setApiKey } from "../../src/auth/users";
 import { setUserDisabled } from "../../src/auth/user-status";
 import { registerSpaceApiRoutes, containsVaultRef } from "../../src/spaces/api";
-import { getSpace, setShares, updateSpaceMeta, upsertSpace, kvPut } from "../../src/spaces/store";
+import { getSpace, setShares, toolsHash, updateSpaceMeta, upsertSpace, kvPut } from "../../src/spaces/store";
 import { verifySig } from "../../src/spaces/sig";
 import { _resetRateLimitForTest, _setNowForTest as setRateNow } from "../../src/spaces/rate-limit";
 import { handlers, registerFixtures } from "./fixtures";
@@ -272,7 +272,7 @@ describe("consent", () => {
   it("a change of access mode invalidates it, both ways", async () => {
     await consent("u2");
     expect((await call("u2", { tool: "acme_list_items" })).statusCode).toBe(200);
-    await updateSpaceMeta("s1", "u1", { accessMode: "owner", confirmDelegation: true });
+    await updateSpaceMeta("s1", "u1", { accessMode: "owner", confirmDelegation: true, expectedToolsHash: toolsHash(TOOLS) });
     const flipped = await call("u2", { tool: "acme_list_items" });
     expect(flipped.statusCode).toBe(403);
     expect(flipped.json().code).toBe("CONSENT_REQUIRED");

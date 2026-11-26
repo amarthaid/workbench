@@ -31,7 +31,9 @@ import {
   updateSpaceMeta,
   upsertSpace,
   delegationSuspended,
+  writeSpaceMetaIfUnchanged,
   KV_VALUE_MAX_BYTES,
+  type Space,
 } from "../../src/spaces/store";
 import { resetSpacesDb, seedUser, writeSpaceFiles } from "./helpers";
 
@@ -42,6 +44,18 @@ beforeEach(async () => {
 afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
 const base = { ownerId: "u1", title: "PR timeline", tools: ["b_tool", "a_tool"], visibility: "org" as const };
+
+/** Turn delegation on for `name` as u1, confirming the tool list currently stored. */
+async function enableIn(name: string) {
+  const cur = (await getSpace(name))!;
+  return updateSpaceMeta(name, "u1", { accessMode: "owner", confirmDelegation: true, expectedToolsHash: toolsHash(cur.tools) });
+}
+
+/** Narrow an updateSpaceMeta result to the success shape (null otherwise). */
+async function meta(p: ReturnType<typeof updateSpaceMeta>) {
+  const r = await p;
+  return r && typeof r === "object" ? r : null;
+}
 
 describe("spaces/store", () => {
   it("names follow jot rules and reserve _sdk and upload", () => {
@@ -59,7 +73,7 @@ describe("spaces/store", () => {
     expect(s!.tools).toEqual(["a_tool", "b_tool"]);
     expect(typeof s!.createdAt).toBe("number");
 
-    const u = await updateSpaceMeta("s1", "u1", { title: "New", visibility: "private" });
+    const u = await meta(updateSpaceMeta("s1", "u1", { title: "New", visibility: "private" }));
     expect(u!.space).toMatchObject({ title: "New", visibility: "private", description: "d" });
     expect(u!.modeReset).toBe(false);
     expect((await getSpace("s1"))!.title).toBe("New");
@@ -161,7 +175,7 @@ describe("spaces/store", () => {
     expect(await hasConsent(s, "v1")).toBe(false);
     await grantConsent(s, "v1");
     expect(await hasConsent(s, "v1")).toBe(true);
-    const changed = (await updateSpaceMeta("s1", "u1", { tools: ["a_tool", "c_tool"] }))!.space;
+    const changed = (await meta(updateSpaceMeta("s1", "u1", { tools: ["a_tool", "c_tool"] })))!.space;
     expect(await hasConsent(changed, "v1")).toBe(false);
     await revokeConsent("s1", "v1");
     expect(await getConsentHash("s1", "v1")).toBeNull();
@@ -179,17 +193,17 @@ describe("spaces/store", () => {
     it("a viewer to owner flip invalidates it", async () => {
       await upsertSpace({ name: "s1", ...base });
       await grantConsent((await getSpace("s1"))!, "v1");
-      const on = (await updateSpaceMeta("s1", "u1", { accessMode: "owner", confirmDelegation: true }))!.space;
+      const on = (await meta(enableIn("s1")))!.space;
       expect(await hasConsent(on, "v1")).toBe(false);
       expect(await hasConsent((await getSpace("s1"))!, "v1")).toBe(false);
     });
 
     it("an owner to viewer flip invalidates it", async () => {
       await upsertSpace({ name: "s1", ...base });
-      await updateSpaceMeta("s1", "u1", { accessMode: "owner", confirmDelegation: true });
+      await enableIn("s1");
       await grantConsent((await getSpace("s1"))!, "v1");
       expect(await hasConsent((await getSpace("s1"))!, "v1")).toBe(true);
-      const off = (await updateSpaceMeta("s1", "u1", { accessMode: "viewer" }))!.space;
+      const off = (await meta(updateSpaceMeta("s1", "u1", { accessMode: "viewer" })))!.space;
       expect(await hasConsent(off, "v1")).toBe(false);
     });
 
@@ -213,7 +227,7 @@ describe("spaces/store", () => {
   });
 
   describe("access mode", () => {
-    const enable = () => updateSpaceMeta("s1", "u1", { accessMode: "owner", confirmDelegation: true });
+    const enable = () => enableIn("s1");
 
     it("a new Space is viewer mode with no tool pin", async () => {
       await upsertSpace({ name: "s1", ...base });
@@ -226,12 +240,60 @@ describe("spaces/store", () => {
 
     it("enabling with confirmation records the hash of the current tools", async () => {
       await upsertSpace({ name: "s1", ...base });
-      const r = (await enable())!;
+      const r = (await meta(enable()))!;
       expect(r.modeReset).toBe(false);
       expect(r.space).toMatchObject({ accessMode: "owner", delegatedToolsHash: toolsHash(base.tools) });
       const stored = (await getSpace("s1"))!;
       expect(stored).toMatchObject({ accessMode: "owner", delegatedToolsHash: toolsHash(base.tools) });
       expect(delegationSuspended(stored)).toBe(false);
+    });
+
+    it("confirming with the hash of the reviewed list enables it", async () => {
+      await upsertSpace({ name: "s1", ...base });
+      const r = await updateSpaceMeta("s1", "u1", {
+        accessMode: "owner",
+        confirmDelegation: true,
+        expectedToolsHash: toolsHash(["a_tool", "b_tool"]),
+      });
+      expect(r).toMatchObject({ modeReset: false, space: { accessMode: "owner" } });
+    });
+
+    it("a stale reviewed list is refused as tools_changed and nothing is written", async () => {
+      await upsertSpace({ name: "s1", ...base });
+      const before = (await getSpace("s1"))!;
+      const r = await updateSpaceMeta("s1", "u1", {
+        title: "Changed",
+        accessMode: "owner",
+        confirmDelegation: true,
+        expectedToolsHash: toolsHash(["a_tool"]),
+      });
+      expect(r).toBe("tools_changed");
+      expect(await getSpace("s1")).toEqual(before);
+    });
+
+    it("confirming without a reviewed hash is refused", async () => {
+      await upsertSpace({ name: "s1", ...base });
+      const before = (await getSpace("s1"))!;
+      expect(await updateSpaceMeta("s1", "u1", { accessMode: "owner", confirmDelegation: true })).toBe("tools_changed");
+      expect(await getSpace("s1")).toEqual(before);
+    });
+
+    it("the write is a compare-and-set on the stored tool list", async () => {
+      // updateSpaceMeta reads, then writes through writeSpaceMetaIfUnchanged;
+      // a redeploy between the two cannot be injected mid-function, so the
+      // predicate is tested on the helper directly with a stale read.
+      await upsertSpace({ name: "s1", ...base });
+      const stale = (await db.get<{ tools: string }>("SELECT tools FROM spaces WHERE name = ?", ["s1"]))!.tools;
+      const cur = (await getSpace("s1"))!;
+      await upsertSpace({ name: "s1", ...base, tools: ["z_tool"] }); // the concurrent redeploy
+      const next: Space = { ...cur, accessMode: "owner", delegatedToolsHash: toolsHash(cur.tools), updatedAt: cur.updatedAt + 1 };
+      expect(await writeSpaceMetaIfUnchanged(next, stale)).toBe(false);
+      expect((await getSpace("s1"))!).toMatchObject({ tools: ["z_tool"], accessMode: "viewer" });
+      const fresh = (await db.get<{ tools: string }>("SELECT tools FROM spaces WHERE name = ?", ["s1"]))!.tools;
+      expect(await writeSpaceMetaIfUnchanged({ ...next, tools: ["z_tool"] }, fresh)).toBe(true);
+      expect((await getSpace("s1"))!.accessMode).toBe("owner");
+      // Another owner never matches.
+      expect(await writeSpaceMetaIfUnchanged({ ...next, ownerId: "u2", tools: ["z_tool"] }, fresh)).toBe(false);
     });
 
     it("owner without confirmation does not turn it on", async () => {
@@ -243,7 +305,7 @@ describe("spaces/store", () => {
     it("a tool change suspends it and a re-confirm resumes it", async () => {
       await upsertSpace({ name: "s1", ...base });
       await enable();
-      const changed = (await updateSpaceMeta("s1", "u1", { tools: ["a_tool", "c_tool"] }))!;
+      const changed = (await meta(updateSpaceMeta("s1", "u1", { tools: ["a_tool", "c_tool"] })))!;
       expect(changed.space.accessMode).toBe("owner");
       expect(delegationSuspended(changed.space)).toBe(true);
       expect(delegationSuspended((await getSpace("s1"))!)).toBe(true);
@@ -265,7 +327,8 @@ describe("spaces/store", () => {
     it("turning it off clears the hash", async () => {
       await upsertSpace({ name: "s1", ...base });
       await enable();
-      const r = (await updateSpaceMeta("s1", "u1", { accessMode: "viewer" }))!;
+      const r = (await meta(updateSpaceMeta("s1", "u1", { accessMode: "viewer" })))!;
+      expect(r.modeReset).toBe(true);
       expect(r.space).toMatchObject({ accessMode: "viewer", delegatedToolsHash: null });
       expect((await getSpace("s1"))!).toMatchObject({ accessMode: "viewer", delegatedToolsHash: null });
     });
@@ -273,12 +336,12 @@ describe("spaces/store", () => {
     it("going private through updateSpaceMeta resets it and reports modeReset", async () => {
       await upsertSpace({ name: "s1", ...base });
       await enable();
-      const r = (await updateSpaceMeta("s1", "u1", { visibility: "private" }))!;
+      const r = (await meta(updateSpaceMeta("s1", "u1", { visibility: "private" })))!;
       expect(r.modeReset).toBe(true);
       expect(r.space).toMatchObject({ visibility: "private", accessMode: "viewer", delegatedToolsHash: null });
       expect((await getSpace("s1"))!).toMatchObject({ accessMode: "viewer", delegatedToolsHash: null });
       // Already viewer: nothing to report.
-      expect((await updateSpaceMeta("s1", "u1", { visibility: "private" }))!.modeReset).toBe(false);
+      expect((await meta(updateSpaceMeta("s1", "u1", { visibility: "private" })))!.modeReset).toBe(false);
     });
 
     it("a private redeploy through upsertSpace resets it and reports modeReset", async () => {

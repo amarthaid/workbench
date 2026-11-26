@@ -35,7 +35,9 @@ export interface Space {
   visibility: Visibility;
   accessMode: AccessMode;
   // toolsHash(tools) when the owner turned delegation on or last re-confirmed
-  // it; null otherwise. A different current hash suspends delegation.
+  // it; null otherwise. A different current hash suspends delegation. A later
+  // deploy that restores exactly the confirmed list resumes it without a new
+  // confirm: that is the list the owner approved, so this is intended.
   delegatedToolsHash: string | null;
   createdAt: number;
   updatedAt: number;
@@ -120,11 +122,16 @@ export async function getSpace(name: string): Promise<Space | null> {
  * `result` is "taken" when another user owns the name. The owner check rides
  * on the upsert itself, so two users racing for a new name cannot both win.
  *
- * Access mode: a new Space gets `accessMode` (default viewer). On a redeploy,
- * private always resets it to viewer; otherwise an omitted `accessMode` keeps
- * the stored mode and tool pin, and a passed one is written with the pin
- * cleared (only the portal can turn delegation on, via updateSpaceMeta).
- * `modeReset` is true when the stored row went from owner to viewer.
+ * Access mode: a new Space is always viewer mode. On a redeploy, private or an
+ * explicit `accessMode: "viewer"` resets it to viewer and clears the tool pin;
+ * otherwise the stored mode and pin are kept. `accessMode` only accepts
+ * "viewer": this is the agent path (deploy_space), and an agent never turns
+ * delegation on. Only the owner in the portal does, through updateSpaceMeta.
+ *
+ * `modeReset` is true when the stored row went from owner to viewer. It is
+ * advisory: the previous mode is read without a row lock, so under PostgreSQL
+ * READ COMMITTED a concurrent change between that read and the upsert can make
+ * it wrong. The stored mode itself is always decided in SQL.
  */
 export async function upsertSpace(input: {
   name: string;
@@ -133,47 +140,41 @@ export async function upsertSpace(input: {
   description?: string | null;
   tools: readonly string[];
   visibility: Visibility;
-  accessMode?: AccessMode;
+  accessMode?: "viewer";
 }): Promise<{ result: "ok" | "taken"; modeReset: boolean }> {
   const t = now();
-  const mode = input.accessMode ?? null;
+  // 1: a redeploy resets the mode to viewer and clears the pin; 0: keep both.
+  const resetToViewer = input.visibility === "private" || input.accessMode === "viewer" ? 1 : 0;
   return db.transaction(async (tx) => {
     const prev = await tx.get<{ owner_id: string; access_mode: string | null }>(
       "SELECT owner_id, access_mode FROM spaces WHERE name = ?",
       [input.name]
     );
-    // CAST: PostgreSQL cannot infer a type for a bare `? IS NULL`.
     const row = await tx.get<{ access_mode: string }>(
-      `INSERT INTO spaces (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+      `INSERT INTO spaces (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, 'viewer', NULL, ?, ?)
        ON CONFLICT (name) DO UPDATE SET
          title = excluded.title,
          description = excluded.description,
          tools = excluded.tools,
          visibility = excluded.visibility,
-         access_mode = CASE
-           WHEN excluded.visibility = 'private' THEN 'viewer'
-           WHEN CAST(? AS TEXT) IS NULL THEN spaces.access_mode
-           ELSE CAST(? AS TEXT) END,
-         delegated_tools_hash = CASE
-           WHEN excluded.visibility = 'private' THEN NULL
-           WHEN CAST(? AS TEXT) IS NULL THEN spaces.delegated_tools_hash
-           ELSE NULL END,
+         access_mode = CASE WHEN ? = 1 THEN 'viewer' ELSE spaces.access_mode END,
+         delegated_tools_hash = CASE WHEN ? = 1 THEN NULL ELSE spaces.delegated_tools_hash END,
          updated_at = excluded.updated_at
        WHERE spaces.owner_id = excluded.owner_id
        RETURNING access_mode`,
       [
+        // VALUES
         input.name,
         input.ownerId,
         input.title,
         input.description ?? null,
         JSON.stringify(normalizeTools(input.tools)),
         input.visibility,
-        mode ?? "viewer",
-        t,
-        t,
-        mode,
-        mode,
-        mode,
+        t, // created_at
+        t, // updated_at
+        // ON CONFLICT: the same flag for access_mode, then delegated_tools_hash
+        resetToViewer,
+        resetToViewer,
       ]
     );
     if (!row) return { result: "taken" as const, modeReset: false };
@@ -189,29 +190,38 @@ export interface SpaceMetaPatch {
   tools?: readonly string[];
   visibility?: Visibility;
   accessMode?: AccessMode;
-  // With accessMode "owner": record the current tool list as the confirmed
-  // one (turn delegation on, or re-confirm it after a tool change). Without
-  // it, "owner" changes nothing.
+  // With accessMode "owner": record the tool list as the confirmed one (turn
+  // delegation on, or re-confirm it after a tool change). Without it, "owner"
+  // changes nothing.
   confirmDelegation?: boolean;
+  // Required with confirmDelegation: toolsHash of the list the owner reviewed.
+  expectedToolsHash?: string;
 }
+
+export type SpaceMetaResult = { space: Space; modeReset: boolean } | "tools_changed" | null;
 
 /**
  * Apply a partial metadata change as `ownerId`. Unset fields keep their value.
- * The UPDATE carries the owner predicate, so a Space deleted and re-created by
- * someone else between the caller's check and this write is left alone: null
- * when nothing matched (missing, or owned by another user). `modeReset` is
- * true when the change turned delegation off by going private.
  *
- * This writes what it is told: whether the owner may turn delegation on is the
- * caller's check.
+ * - null: nothing matched (missing, owned by another user, or the tool list
+ *   changed between this function's read and its write: the UPDATE is a
+ *   compare-and-set on the owner and the stored tool list, so a Space deleted
+ *   and re-created, or a concurrent redeploy, is never overwritten).
+ * - "tools_changed": `confirmDelegation` without `expectedToolsHash`, or with
+ *   one that is not the hash of both the stored list and the resulting list.
+ *   The owner confirmed a list that is not the one being pinned; nothing is
+ *   written.
+ * - otherwise the new Space, and `modeReset`: true when the row went from
+ *   owner to viewer, for any cause (private audience or an explicit switch).
+ *
+ * Whether the owner may turn delegation on is the caller's check.
  */
-export async function updateSpaceMeta(
-  name: string,
-  ownerId: string,
-  patch: SpaceMetaPatch
-): Promise<{ space: Space; modeReset: boolean } | null> {
-  const cur = await getSpace(name);
-  if (!cur || cur.ownerId !== ownerId) return null;
+export async function updateSpaceMeta(name: string, ownerId: string, patch: SpaceMetaPatch): Promise<SpaceMetaResult> {
+  if (!isValidSpaceName(name)) return null;
+  const row = await db.get<SpaceRow>(`SELECT ${COLUMNS} FROM spaces WHERE name = ?`, [name]);
+  if (!row) return null;
+  const cur = fromRow(row);
+  if (cur.ownerId !== ownerId) return null;
   const next: Space = {
     ...cur,
     title: patch.title ?? cur.title,
@@ -220,6 +230,10 @@ export async function updateSpaceMeta(
     visibility: patch.visibility ?? cur.visibility,
     updatedAt: now(),
   };
+  if (patch.confirmDelegation) {
+    const expected = patch.expectedToolsHash;
+    if (!expected || expected !== toolsHash(cur.tools) || expected !== toolsHash(next.tools)) return "tools_changed";
+  }
   if (next.visibility === "private") {
     next.accessMode = "viewer";
     next.delegatedToolsHash = null;
@@ -230,9 +244,19 @@ export async function updateSpaceMeta(
     next.accessMode = "viewer";
     next.delegatedToolsHash = null;
   }
+  if (!(await writeSpaceMetaIfUnchanged(next, row.tools))) return null;
+  return { space: next, modeReset: cur.accessMode === "owner" && next.accessMode === "viewer" };
+}
+
+/**
+ * Write `next`'s metadata only if the row is still owned by `next.ownerId` and
+ * its stored tools text is still `storedTools` (as read). Exported so the
+ * compare-and-set can be tested with a stale read.
+ */
+export async function writeSpaceMetaIfUnchanged(next: Space, storedTools: string): Promise<boolean> {
   const { changes } = await db.run(
     `UPDATE spaces SET title = ?, description = ?, tools = ?, visibility = ?, access_mode = ?, delegated_tools_hash = ?,
-       updated_at = ? WHERE name = ? AND owner_id = ?`,
+       updated_at = ? WHERE name = ? AND owner_id = ? AND tools = ?`,
     [
       next.title,
       next.description,
@@ -241,12 +265,12 @@ export async function updateSpaceMeta(
       next.accessMode,
       next.delegatedToolsHash,
       next.updatedAt,
-      name,
-      ownerId,
+      next.name,
+      next.ownerId,
+      storedTools,
     ]
   );
-  if (changes !== 1) return null;
-  return { space: next, modeReset: cur.accessMode === "owner" && next.visibility === "private" };
+  return changes === 1;
 }
 
 /** Bump updated_at (a new upload landed). */

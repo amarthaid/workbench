@@ -222,7 +222,8 @@ const tools: PluginTool[] = [
         tools: toolList,
         visibility,
       });
-      if (!meta) return { error: "FORBIDDEN" };
+      // "tools_changed" only answers a delegation confirm, which this tool never sends.
+      if (!meta || meta === "tools_changed") return { error: "FORBIDDEN" };
       const updated = meta.space;
       if (emails && !(await setShares(args.name, ctx.userId, emails))) return { error: "FORBIDDEN" };
       if (incremental) {
