@@ -292,40 +292,55 @@ const executeToolsInput = z
     });
   });
 
-export interface ExecuteOptions {
-  /**
-   * The person who triggered the call when it runs on `userId`'s access (a
-   * delegated Space: `userId` is the owner, the actor the viewer). Audit rows
-   * and request log lines carry it, and nothing runs on `userId`'s behalf
-   * beyond the tool's own call: no cookie auto-reconnect (which types the
-   * stored login into their browser), no vault lookup, no custom-app
-   * fallback. A token refresh on expiry or 401 still happens: it renews the
-   * same grant and is audited as `userId`.
-   */
-  actorUserId?: string;
-}
-
 const NO_RECONNECT = { autoReconnect: false } as const;
 
 export async function executeSingle(
   userId: string,
   toolName: string,
   rawArgs: Record<string, unknown>,
+  preSubstituted?: Map<string, string>
+): Promise<ExecResult> {
+  // An ordinary call never carries an actor, even inside a scope that has one.
+  const audit = currentAuditContext();
+  if (audit?.actor_user_id !== undefined) {
+    const { actor_user_id: _actor, ...rest } = audit;
+    return runWithAuditContext(rest, () => runSingle(userId, toolName, rawArgs, preSubstituted));
+  }
+  return runSingle(userId, toolName, rawArgs, preSubstituted);
+}
+
+/**
+ * Run a tool on `ownerId`'s access for `actorUserId` (a delegated Space: the
+ * owner's connections, the viewer's request). The only way to run with an
+ * actor. Audit rows and request log lines carry the actor, and nothing runs on
+ * the owner's behalf beyond the tool's own call: no cookie auto-reconnect
+ * (which types the stored login into their browser), no vault lookup or
+ * substitution, no custom-app fallback. A token refresh on expiry or 401 still
+ * happens: it renews the same grant and is audited as the owner.
+ *
+ * The actor lives in a copy of the request's audit context, scoped to this
+ * call by AsyncLocalStorage: the scope ends when the call returns, and the
+ * shared request context is never written.
+ */
+export async function executeDelegated(
+  ownerId: string,
+  actorUserId: string,
+  toolName: string,
+  rawArgs: Record<string, unknown>
+): Promise<ExecResult> {
+  return runWithAuditContext({ ...(currentAuditContext() ?? {}), actor_user_id: actorUserId }, () =>
+    runSingle(ownerId, toolName, rawArgs, undefined, { actorUserId })
+  );
+}
+
+async function runSingle(
+  userId: string,
+  toolName: string,
+  rawArgs: Record<string, unknown>,
   preSubstituted?: Map<string, string>,
-  opts?: ExecuteOptions
+  opts?: { actorUserId?: string }
 ): Promise<ExecResult> {
   const actor = opts?.actorUserId;
-  if (actor) {
-    const audit = currentAuditContext();
-    // Outside a request there is no context to name the actor on: make one,
-    // so the audit rows still say who triggered the call.
-    if (!audit) {
-      return runWithAuditContext({ actor_user_id: actor }, () =>
-        executeSingle(userId, toolName, rawArgs, preSubstituted, opts)
-      );
-    }
-    audit.actor_user_id = actor;
-  }
   // What the audit log may record of the arguments (AUDIT_PAYLOAD): the ones
   // the agent sent, `{{vault:…}}` references unresolved. Never for the vault's
   // own tools, whose arguments are the secrets themselves.
@@ -388,17 +403,15 @@ export async function executeSingle(
       // its own single pass; scanning again here would resolve refs that
       // arrived inside an earlier step's output.
       // With an actor the owner's vault is never read or touched: references
-      // stay literal, and whatever a caller pre-substituted is ignored.
+      // stay literal.
       let effectiveArgs: Record<string, unknown> = rawArgs ?? {};
       let substituted = new Map<string, string>();
-      if (actor) {
-        substituted = new Map();
-      } else if (preSubstituted) {
+      if (!actor && preSubstituted) {
         substituted = preSubstituted;
         if (substituted.size > 0) {
           void touchUsed(userId, [...substituted.keys()]).catch(() => undefined);
         }
-      } else if (!toolName.startsWith("vault_")) {
+      } else if (!actor && !toolName.startsWith("vault_")) {
         try {
           const resolved = await resolveVaultRefs(userId, effectiveArgs);
           effectiveArgs = resolved.args;

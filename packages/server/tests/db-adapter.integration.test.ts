@@ -347,16 +347,16 @@ for (const backend of backends) {
         target.current = null;
       });
 
-      it("executeSingle with an actor runs on the owner's token and audits both ids", async () => {
+      it("executeDelegated runs on the owner's token and audits both ids", async () => {
         const { storeToken } = await import("../src/auth/tokens");
-        const { executeSingle } = await import("../src/mcp/meta-tools");
+        const { executeDelegated } = await import("../src/mcp/meta-tools");
         const { runWithAuditContext } = await import("../src/audit/context");
         await db.run("INSERT INTO users (id, email) VALUES (?, ?)", ["u1", "dev@example.com"]);
         await db.run("INSERT INTO users (id, email) VALUES (?, ?)", ["u2", "qa@example.com"]);
         await storeToken("u1", "acme-oauth", { accessToken: "tok-owner", scopes: "" });
         await storeToken("u2", "acme-oauth", { accessToken: "tok-viewer", scopes: "" });
         const out = await runWithAuditContext({ client_name: "space:s1" }, () =>
-          executeSingle("u1", "acmeo_whoami", {}, new Map(), { actorUserId: "u2" })
+          executeDelegated("u1", "u2", "acmeo_whoami", {})
         );
         expect(out).toEqual({ result: { token: "tok-owner" } });
         const row = await db.get<Record<string, unknown>>(

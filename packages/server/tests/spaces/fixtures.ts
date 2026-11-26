@@ -42,9 +42,42 @@ export const acmeOauthPlugin: Plugin = {
   ],
 };
 
+// Cookie auth with a dead-session rule and a reconnect recipe: a call that
+// finds the session dead would normally re-log in through the user's browser.
+export const acmeCookiePlugin: Plugin = {
+  integration: {
+    name: "acme-cookie",
+    version: "1.0.0",
+    auth: {
+      type: "cookie",
+      loginUrl: "https://app.example.com/login",
+      targetDomain: "app.example.com",
+      cookieDomains: ["app.example.com"],
+      session: { dead: { status: [401] } },
+      reconnect: { steps: [{ goto: "loginUrl" }] },
+    },
+    displayName: "Acme Cookie",
+  } as any,
+  tools: [
+    {
+      name: "acmec_me",
+      description: "Read the signed-in account",
+      integration: "acme-cookie",
+      effect: "read",
+      inputSchema: z.object({}),
+      handler: async (c) => {
+        const res = await (c as ToolContext).http("https://app.example.com/api/me");
+        if (!res.ok) throw new Error(`upstream ${res.status}`);
+        return { ok: true };
+      },
+    },
+  ],
+};
+
 export function registerFixtures(): void {
   registry.register(acmePlugin);
   registry.register(acmeOauthPlugin);
+  registry.register(acmeCookiePlugin);
   registry.register(jotsPlugin);
   registry.register(spacesPlugin);
 }

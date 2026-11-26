@@ -12,6 +12,27 @@ vi.mock("../../src/spaces/store", async (importOriginal) => {
   return { ...actual, updateSpaceMeta: vi.fn(actual.updateSpaceMeta) };
 });
 
+// The reconnect runner, observed without replacing ensureCookieSession or
+// createContext. `reconnectSession` is wrapped where other modules import it
+// (ctx.http); ensureCookieSession calls it inside its own module, where no
+// wrapper reaches, so `mayOwnBrowser` (the first thing a run asks) is the
+// probe for that path. Answering false keeps any run off a real browser.
+const recon = vi.hoisted(() => ({ reconnect: vi.fn(), mayOwn: vi.fn(() => false) }));
+vi.mock("../../src/auth/reconnect/runner", async (orig) => {
+  const real = await orig<typeof import("../../src/auth/reconnect/runner")>();
+  return {
+    ...real,
+    reconnectSession: (...a: Parameters<typeof real.reconnectSession>) => {
+      recon.reconnect(...a);
+      return real.reconnectSession(...a);
+    },
+  };
+});
+vi.mock("../../src/auth/reconnect/affinity", async (orig) => ({
+  ...(await orig<typeof import("../../src/auth/reconnect/affinity")>()),
+  mayOwnBrowser: () => recon.mayOwn(),
+}));
+
 import { config } from "../../src/config";
 import { db } from "../../src/db";
 import { installAuditContext } from "../../src/audit/context";
@@ -24,6 +45,8 @@ import { getSpace, setShares, toolsHash, updateSpaceMeta, upsertSpace, kvPut } f
 import { verifySig } from "../../src/spaces/sig";
 import { clearPermission, setPermission } from "../../src/permissions/store";
 import { deleteToken, storeToken } from "../../src/auth/tokens";
+import { storeCookies } from "../../src/auth/cookie";
+import { updateReconnectState } from "../../src/auth/reconnect/state";
 import { registry } from "../../src/plugins/registry";
 import { auditLogger } from "../../src/audit/logger";
 import { _resetRateLimitForTest, _setNowForTest as setRateNow, OWNER_RATE_CAPACITY, RATE_CAPACITY } from "../../src/spaces/rate-limit";
@@ -32,7 +55,7 @@ import { resetSpacesDb, seedUser, writeSpaceFiles } from "./helpers";
 
 let app: FastifyInstance;
 const tokens: Record<string, string> = {};
-const TOOLS = ["acme_list_items", "acme_delete_item", "acme_unlabelled", "acme_fail", "acme_set_secret", "acmeo_list_things", "acmeo_whoami"];
+const TOOLS = ["acme_list_items", "acme_delete_item", "acme_unlabelled", "acme_fail", "acme_set_secret", "acmeo_list_things", "acmeo_whoami", "acmec_me"];
 const prevAdmins = config.ADMIN_EMAILS;
 
 function as(user: string) {
@@ -809,18 +832,105 @@ describe("POST /api/spaces/:name/call, delegated", () => {
     expect(await executeRows()).toEqual([]);
   });
 
-  it("9. vault references are refused and destructive calls still need confirmation", async () => {
+  it("9. vault references, bad args and unconfirmed destructive calls are refused, and audited", async () => {
     const vault = await call("u2", { tool: "acmeo_whoami", args: { q: "{{vault:pw}}" } });
     expect(vault.statusCode).toBe(400);
     expect(vault.json()).toMatchObject({ code: "INVALID_ARGS", message: "Vault references are not allowed in a Space." });
+    const notObject = await call("u2", { tool: "acmeo_whoami", args: [1] });
+    expect(notObject.statusCode).toBe(400);
+    expect(notObject.json()).toMatchObject({ code: "INVALID_ARGS", message: "args must be an object." });
     const unconfirmed = await call("u2", { tool: "acme_delete_item", args: { id: "1" } });
     expect(unconfirmed.statusCode).toBe(428);
     expect(unconfirmed.json().code).toBe("CONFIRMATION_REQUIRED");
     const confirmed = await call("u2", { tool: "acme_delete_item", args: { id: "1" }, confirmed: true });
     expect(confirmed.statusCode).toBe(200);
+    const both = { user_id: "u1", actor_user_id: "u2", client_name: "space:s1" };
     expect((await executeRows()).map(row)).toEqual([
-      { user_id: "u1", actor_user_id: "u2", client_name: "space:s1", tool: "acme_delete_item", success: true, error: null },
+      { ...both, tool: "acmeo_whoami", success: false, error: "INVALID_ARGS" },
+      { ...both, tool: "acmeo_whoami", success: false, error: "INVALID_ARGS" },
+      { ...both, tool: "acme_delete_item", success: false, error: "CONFIRMATION_REQUIRED" },
+      { ...both, tool: "acme_delete_item", success: true, error: null },
     ]);
+  });
+
+  it("9b. not delegated, the same refusals write no audit row", async () => {
+    expect((await sharing({ delegate_access: false })).statusCode).toBe(200);
+    await consent("u2");
+    await db.exec("DELETE FROM audit_log");
+    expect((await call("u2", { tool: "acmeo_whoami", args: { q: "{{vault:pw}}" } })).statusCode).toBe(400);
+    expect((await call("u2", { tool: "acmeo_whoami", args: [1] })).statusCode).toBe(400);
+    expect((await call("u2", { tool: "acme_delete_item", args: { id: "1" } })).statusCode).toBe(428);
+    expect(await executeRows()).toEqual([]);
+  });
+
+  it("a failed audit write on a refusal is logged, and the refusal still answers", async () => {
+    vi.spyOn((auditLogger as any).destination, "log").mockRejectedValue(new Error("audit store down"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    await clearPermission("u1", "spaces.delegate_access");
+    const res = await call("u2", { tool: "acmeo_whoami" });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().code).toBe("DELEGATION_OFF");
+    expect(err).toHaveBeenCalledTimes(1);
+    expect(String(err.mock.calls[0][0])).toContain("audit store down");
+  });
+
+  describe("cookie auto-reconnect", () => {
+    const COOKIE = "acme-cookie";
+    const seedSession = (user: string) =>
+      storeCookies(user, COOKIE, {
+        domain: "app.example.com",
+        cookies: [{ name: "sid", value: `sid-${user}`, domain: "app.example.com", path: "/", expires: 9999999999 }],
+        capturedAt: 1,
+      });
+
+    beforeEach(() => {
+      recon.reconnect.mockClear();
+      recon.mayOwn.mockClear();
+    });
+
+    it("owner's session dead: delegated 409, the reconnect runner never starts", async () => {
+      await seedSession("u1");
+      await updateReconnectState("u1", COOKIE, { deadAt: Date.now() });
+      await seedSession("u2");
+      const res = await call("u2", { tool: "acmec_me" });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({
+        code: "NOT_CONNECTED",
+        delegated: true,
+        message: "dev@example.com needs to reconnect Acme Cookie.",
+        integration: COOKIE,
+        tool: "acmec_me",
+      });
+      expect(recon.reconnect).not.toHaveBeenCalled();
+      expect(recon.mayOwn).not.toHaveBeenCalled();
+    });
+
+    it("owner's session dies during the call: the dead response is kept, no reconnect, one request", async () => {
+      await seedSession("u1");
+      const fetchMock = vi.fn(async () => new Response("no", { status: 401 }));
+      vi.stubGlobal("fetch", fetchMock);
+      try {
+        const res = await call("u2", { tool: "acmec_me" });
+        expect(res.statusCode).toBe(502);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(new Headers((fetchMock.mock.calls[0] as any)[1].headers).get("cookie")).toBe("sid=sid-u1");
+      } finally {
+        vi.unstubAllGlobals();
+      }
+      expect(recon.reconnect).not.toHaveBeenCalled();
+      expect(recon.mayOwn).not.toHaveBeenCalled();
+    });
+
+    it("control: not delegated, the viewer's own dead session does start the runner", async () => {
+      expect((await sharing({ delegate_access: false })).statusCode).toBe(200);
+      await consent("u2");
+      await seedSession("u2");
+      await updateReconnectState("u2", COOKIE, { deadAt: Date.now() });
+      const res = await call("u2", { tool: "acmec_me" });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).not.toHaveProperty("delegated");
+      expect(recon.mayOwn).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("10. KV stays per viewer", async () => {

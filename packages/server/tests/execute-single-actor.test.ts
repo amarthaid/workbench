@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { z } from "zod";
 
-// executeSingle with an actor (a delegated Space call): the call runs as
-// `userId` (the owner), the audit context names the actor, and nothing on the
-// owner's behalf runs beyond the tool's own call (no cookie auto-reconnect, no
-// vault lookup, no custom-app fallback).
+// executeDelegated (a delegated Space call): the call runs as the owner, the
+// audit context names the actor, and nothing on the owner's behalf runs beyond
+// the tool's own call (no cookie auto-reconnect, no vault lookup, no
+// custom-app fallback). executeSingle never carries an actor.
 
 const h = vi.hoisted(() => ({
   ensure: vi.fn(async (..._a: unknown[]) => false),
@@ -37,7 +37,7 @@ vi.mock("../src/custom-apps/index", async (orig) => ({
   getToolForUser: (...a: unknown[]) => h.getToolForUser(...a),
 }));
 
-import { executeSingle } from "../src/mcp/meta-tools";
+import { executeDelegated, executeSingle } from "../src/mcp/meta-tools";
 import { registry } from "../src/plugins/registry";
 import { currentAuditContext, runWithAuditContext } from "../src/audit/context";
 
@@ -59,6 +59,7 @@ beforeEach(() => {
   h.createCtx.mockClear();
   h.logged.length = 0;
   h.resolveVaultRefs.mockReset();
+  h.resolveVaultRefs.mockImplementation(async (_u: unknown, args: unknown) => ({ args, substituted: new Map() }));
   h.getToolForUser.mockReset();
   h.getToolForUser.mockResolvedValue(undefined);
   handler.mockClear();
@@ -68,11 +69,11 @@ beforeEach(() => {
   vi.spyOn(registry, "getIntegration").mockImplementation((n: string) => integrations[n]);
 });
 
-describe("executeSingle actor option", () => {
+describe("executeDelegated", () => {
   it("with an actor, a dead cookie session is NOT_CONNECTED and auto-reconnect is turned off", async () => {
     const ctx = {};
     const out = await runWithAuditContext(ctx, () =>
-      executeSingle("owner", "acmec_read", {}, new Map(), { actorUserId: "viewer" })
+      executeDelegated("owner", "viewer", "acmec_read", {})
     );
     expect(out).toMatchObject({ error: "NOT_CONNECTED", integration: "acme-cookie" });
     expect(h.ensure).toHaveBeenCalledTimes(1);
@@ -95,11 +96,12 @@ describe("executeSingle actor option", () => {
     h.ensure.mockResolvedValue(true);
     const ctx: Record<string, unknown> = { client_name: "space:s1" };
     const out = await runWithAuditContext(ctx, () =>
-      executeSingle("owner", "acmec_read", {}, new Map(), { actorUserId: "viewer" })
+      executeDelegated("owner", "viewer", "acmec_read", {})
     );
     expect(out).toEqual({ result: { ok: true } });
     expect(h.createCtx.mock.calls).toEqual([["owner", "acme-cookie", { autoReconnect: false }]]);
-    expect(ctx.actor_user_id).toBe("viewer");
+    // Scoped to the call: the request's own context is never written.
+    expect(ctx.actor_user_id).toBeUndefined();
     expect(h.logged).toHaveLength(1);
     expect(h.logged[0]).toMatchObject({ event: { user_id: "owner", success: true }, actor: "viewer" });
   });
@@ -112,26 +114,44 @@ describe("executeSingle actor option", () => {
 
   it("with an actor and no request context, the audit row still carries the actor", async () => {
     expect(currentAuditContext()).toBeUndefined();
-    const out = await executeSingle("owner", "acmeo_read", {}, new Map(), { actorUserId: "viewer" });
+    const out = await executeDelegated("owner", "viewer", "acmeo_read", {});
     expect(out).toEqual({ result: { ok: true } });
     expect(h.logged[0]).toMatchObject({ event: { user_id: "owner" }, actor: "viewer" });
   });
 
   it("with an actor, vault references are never resolved against the owner's vault", async () => {
     await runWithAuditContext({}, () =>
-      executeSingle("owner", "acmeo_read", { q: "{{vault:pw}}" }, undefined, { actorUserId: "viewer" })
+      executeDelegated("owner", "viewer", "acmeo_read", { q: "{{vault:pw}}" })
     );
     expect(h.resolveVaultRefs).not.toHaveBeenCalled();
-    // Without an actor the lookup is made, as before.
-    h.resolveVaultRefs.mockResolvedValue({ args: {}, substituted: new Map() });
+    // An ordinary call makes the lookup, as before.
     await runWithAuditContext({}, () => executeSingle("owner", "acmeo_read", { q: "{{vault:pw}}" }));
     expect(h.resolveVaultRefs).toHaveBeenCalledWith("owner", { q: "{{vault:pw}}" });
+  });
+
+  it("the actor is scoped to the delegated call: the request context is not written, and a later plain call has no actor", async () => {
+    const ctx: Record<string, unknown> = { client_name: "space:s1" };
+    await runWithAuditContext(ctx, async () => {
+      await executeDelegated("owner", "viewer", "acmeo_read", {});
+      expect(currentAuditContext()?.actor_user_id).toBeUndefined();
+      await executeSingle("owner", "acmeo_read", {});
+    });
+    expect(ctx).toEqual({ client_name: "space:s1" });
+    expect(h.logged.map((l) => [l.event.user_id, l.actor])).toEqual([
+      ["owner", "viewer"],
+      ["owner", undefined],
+    ]);
+  });
+
+  it("a plain call inside a scope that already names an actor runs without it", async () => {
+    await runWithAuditContext({ actor_user_id: "someone" }, () => executeSingle("owner", "acmeo_read", {}));
+    expect(h.logged[0].actor).toBeUndefined();
   });
 
   it("with an actor, an unknown name never falls through to the owner's custom apps", async () => {
     h.getToolForUser.mockResolvedValue({ name: "app__x", integration: "custom:1", appId: "1" });
     const out = await runWithAuditContext({}, () =>
-      executeSingle("owner", "app__x", {}, new Map(), { actorUserId: "viewer" })
+      executeDelegated("owner", "viewer", "app__x", {})
     );
     expect(out).toEqual({ error: "Tool not found" });
     expect(h.getToolForUser).not.toHaveBeenCalled();

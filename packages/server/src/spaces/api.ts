@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { effectOf } from "@a-workbench/shared";
-import { noteRequestAuth, currentAuditContext } from "../audit/context";
+import { noteRequestAuth, currentAuditContext, runWithAuditContext } from "../audit/context";
 import { auditLogger } from "../audit/logger";
 import { verifySession } from "../auth/session";
 import { getUserById } from "../auth/users";
@@ -8,10 +8,10 @@ import { getToken } from "../auth/tokens";
 import { hasValidCookies } from "../auth/cookie";
 import { registry, type PluginTool } from "../plugins/registry";
 import { isInternalIntegration } from "../plugins/internal-names";
-import { executeSingle } from "../mcp/meta-tools";
+import { executeDelegated, executeSingle } from "../mcp/meta-tools";
 import { can } from "../permissions/store";
 import { canView, type Viewer } from "./access";
-import { delegationFor, mayEnableDelegation, recordDelegationChange, recordModeReset } from "./delegation";
+import { delegationFor, mayEnableDelegation, recordDelegationChange, recordModeReset, type DelegationState } from "./delegation";
 import {
   changeShares,
   delegationSuspended,
@@ -430,31 +430,42 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
 
         // 5. Delegation. Decided per call; an owner mode that is no longer valid
         // is refused, never run with the viewer's own access instead. The
-        // owner opening their own Space is not delegation: it is their access.
-        const delegation = await delegationFor(space);
-        const delegated = delegation.mode !== "viewer" && space.ownerId !== viewer.userId;
-        const actor = delegated ? viewer.userId : undefined;
-        // A refused delegated call is still audited, as the owner's row with
-        // the viewer as actor, so "every call is audited" holds for refusals.
+        // owner opening their own Space is never delegation: it is their own
+        // access, so it costs no lookup.
+        const delegation: DelegationState =
+          space.ownerId === viewer.userId ? { mode: "viewer" } : await delegationFor(space);
+        const actor = delegation.mode === "viewer" ? undefined : viewer.userId;
+        // Every delegated refusal from here on is audited, as the owner's row
+        // with the viewer as actor, so "every call is audited" holds for
+        // refusals too. The actor goes in a copy of the request's audit
+        // context, scoped to this write (the AsyncLocalStorage scope ends when
+        // it returns). A failed write is logged and the refusal still answers,
+        // as with recordDelegationChange.
         const refuse = async (status: number, err: ErrorBody) => {
           if (actor) {
-            const audit = currentAuditContext();
-            if (audit) {
-              audit.client_name = `space:${space.name}`;
-              audit.actor_user_id = actor;
+            try {
+              await runWithAuditContext(
+                { ...(currentAuditContext() ?? {}), client_name: `space:${space.name}`, actor_user_id: actor },
+                () =>
+                  auditLogger.log({
+                    user_id: space.ownerId,
+                    integration: tool.integration,
+                    tool: toolName,
+                    action: "EXECUTE",
+                    success: false,
+                    error: err.code,
+                  })
+              );
+            } catch (e) {
+              console.error(
+                `[spaces] audit of refused delegated call failed: space=${space.name} tool=${toolName} code=${err.code}: ` +
+                  (e instanceof Error ? e.message : String(e))
+              );
             }
-            await auditLogger.log({
-              user_id: space.ownerId,
-              integration: tool.integration,
-              tool: toolName,
-              action: "EXECUTE",
-              success: false,
-              error: err.code,
-            });
           }
           return fail(reply, status, err);
         };
-        if (delegated && delegation.mode === "off") {
+        if (delegation.mode === "off") {
           return refuse(403, {
             code: "DELEGATION_OFF",
             reason: delegation.reason,
@@ -463,7 +474,7 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
             tool: toolName,
           });
         }
-        if (delegated && tool.delegable === false) {
+        if (actor && tool.delegable === false) {
           return refuse(403, {
             code: "TOOL_NOT_DELEGABLE",
             message: `${toolName} cannot run with someone else's access.`,
@@ -471,11 +482,10 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
             tool: toolName,
           });
         }
-        const runAs = actor ? space.ownerId : viewer.userId;
 
         // 6. Destructive calls need the shell's own confirmation.
         if (effectOf(tool) === "destructive" && body.confirmed !== true) {
-          return fail(reply, 428, {
+          return refuse(428, {
             code: "CONFIRMATION_REQUIRED",
             message: `${toolName} needs your confirmation.`,
             integration: tool.integration,
@@ -485,13 +495,14 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
 
         // 7. Arguments: an object, with no vault reference anywhere. Vault
         // references are never resolved for a Space (step 9 passes an empty
-        // pre-substituted map); refusing them outright makes that loud.
+        // pre-substituted map, and a delegated call never reads a vault);
+        // refusing them outright makes that loud.
         const args = body.args === undefined ? {} : body.args;
         if (!args || typeof args !== "object" || Array.isArray(args)) {
-          return fail(reply, 400, { code: "INVALID_ARGS", message: "args must be an object.", integration: tool.integration, tool: toolName });
+          return refuse(400, { code: "INVALID_ARGS", message: "args must be an object.", integration: tool.integration, tool: toolName });
         }
         if (containsVaultRef(args)) {
-          return fail(reply, 400, {
+          return refuse(400, {
             code: "INVALID_ARGS",
             message: "Vault references are not allowed in a Space.",
             integration: tool.integration,
@@ -501,14 +512,15 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
 
         // 8. Rate limit: the viewer's bucket, and when delegated also the
         // owner's per Space, so many viewers cannot exhaust the owner's
-        // upstream quota.
-        const rate = takeToken(viewer.userId, space.name);
-        const ownerRate = rate.ok && actor ? takeOwnerToken(space.ownerId, space.name) : rate;
-        if (!ownerRate.ok) {
+        // upstream quota. The viewer's token is spent even when the owner's
+        // bucket then refuses: harmless, the call was attempted either way.
+        const viewerRate = takeToken(viewer.userId, space.name);
+        const rate = viewerRate.ok && actor ? takeOwnerToken(space.ownerId, space.name) : viewerRate;
+        if (!rate.ok) {
           return refuse(429, {
             code: "RATE_LIMITED",
             message: "Too many calls. Try again shortly.",
-            retryAfterMs: ownerRate.retryAfterMs,
+            retryAfterMs: rate.retryAfterMs,
             integration: tool.integration,
             tool: toolName,
           });
@@ -518,13 +530,9 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
         // attributed to the Space in the audit log.
         const audit = currentAuditContext();
         if (audit) audit.client_name = `space:${space.name}`;
-        const outcome = await executeSingle(
-          runAs,
-          toolName,
-          args as Record<string, unknown>,
-          new Map(),
-          actor ? { actorUserId: actor } : undefined
-        );
+        const outcome = actor
+          ? await executeDelegated(space.ownerId, actor, toolName, args as Record<string, unknown>)
+          : await executeSingle(viewer.userId, toolName, args as Record<string, unknown>, new Map());
         if ("result" in outcome) return { result: outcome.result };
         if (outcome.error === "NOT_CONNECTED") {
           if (actor) {
