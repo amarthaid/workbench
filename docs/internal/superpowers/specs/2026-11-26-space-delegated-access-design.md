@@ -44,6 +44,11 @@ and every call (and every refusal) is audited under both people.
   (vault references are refused). Cookie auto-reconnect, which types the
   owner's stored login into the owner's browser, is **skipped** for delegated
   calls: the viewer gets "owner needs to reconnect" instead.
+- Viewers of a delegated Space see whether the **owner** has each declared
+  integration connected (the Space detail's `connected` flags), because that
+  is what decides whether their calls work. They never see the owner's
+  permission state: non-owners get the effective `delegate_access` and only a
+  generic "turned off" message.
 - The owner's own agent is not trusted to widen what is lent: it cannot enable
   delegation, and changing the tool list suspends it.
 
