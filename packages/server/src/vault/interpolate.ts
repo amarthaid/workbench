@@ -55,10 +55,20 @@ function escapeRe(s: string): string {
 // for why this exists: a short value remembered from an earlier call (a PIN,
 // a port) is more likely to collide with unrelated prose than a value this
 // call substituted itself, which the agent just opted into using.
+/**
+ * What a scrubbed value is replaced with. By default its reference,
+ * `{{vault:NAME}}`; a caller that must not reveal names (a delegated call,
+ * where the reader is not the vault's owner) passes a fixed marker.
+ */
+function placeholder(name: string, marker?: string): string {
+  return marker ?? `{{vault:${name}}}`;
+}
+
 export function scrubString(
   s: string,
   entries: Iterable<readonly [string, string]>,
-  substringOk?: ReadonlySet<string>
+  substringOk?: ReadonlySet<string>,
+  marker?: string
 ): string {
   const list = [...entries].filter(([, value]) => value !== "");
   if (list.length === 0) return s;
@@ -69,7 +79,7 @@ export function scrubString(
   // this list (values are unique — see the dedupe in meta-tools.ts).
   if (substringOk) {
     for (const [name, value] of list) {
-      if (!substringOk.has(value) && s === value) return `{{vault:${name}}}`;
+      if (!substringOk.has(value) && s === value) return placeholder(name, marker);
     }
   }
 
@@ -92,7 +102,7 @@ export function scrubString(
   // reliable across every entry at once rather than only within one pass.
   const nameByValue = new Map(substringEntries.map(([name, value]) => [value, name]));
   const pattern = new RegExp(substringEntries.map(([, value]) => escapeRe(value)).join("|"), "g");
-  return s.replace(pattern, (matched) => `{{vault:${nameByValue.get(matched)}}}`);
+  return s.replace(pattern, (matched) => placeholder(nameByValue.get(matched) ?? "", marker));
 }
 
 export class VaultScrubError extends Error {
@@ -112,23 +122,24 @@ export class VaultScrubError extends Error {
 function scrubJson(
   node: unknown,
   entries: Array<readonly [string, string]>,
-  substringOk?: ReadonlySet<string>
+  substringOk?: ReadonlySet<string>,
+  marker?: string
 ): unknown {
-  if (typeof node === "string") return scrubString(node, entries, substringOk);
+  if (typeof node === "string") return scrubString(node, entries, substringOk, marker);
   if (node === null || typeof node === "number" || typeof node === "boolean") {
     // Scalar leaves always require whole-value equality regardless of
     // `substringOk` — there is no "inside a larger string" for a bare
     // number, boolean, or null, so the guard has nothing to restrict here.
     for (const [name, value] of entries) {
-      if (value !== "" && String(node) === value) return `{{vault:${name}}}`;
+      if (value !== "" && String(node) === value) return placeholder(name, marker);
     }
     return node;
   }
-  if (Array.isArray(node)) return node.map((v) => scrubJson(v, entries, substringOk));
+  if (Array.isArray(node)) return node.map((v) => scrubJson(v, entries, substringOk, marker));
   if (node && typeof node === "object") {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(node)) {
-      out[scrubString(k, entries, substringOk)] = scrubJson(v, entries, substringOk);
+      out[scrubString(k, entries, substringOk, marker)] = scrubJson(v, entries, substringOk, marker);
     }
     return out;
   }
@@ -158,7 +169,8 @@ function scrubJson(
 export function scrubVaultValues<T>(
   value: T,
   entries: Iterable<readonly [string, string]>,
-  substringOk?: ReadonlySet<string>
+  substringOk?: ReadonlySet<string>,
+  marker?: string
 ): T {
   const list = [...entries].filter(([, v]) => v !== "");
   if (list.length === 0) return value;
@@ -169,7 +181,7 @@ export function scrubVaultValues<T>(
   } catch (e) {
     throw new VaultScrubError(e);
   }
-  return scrubJson(normalised, list, substringOk) as T;
+  return scrubJson(normalised, list, substringOk, marker) as T;
 }
 
 export async function resolveVaultRefs(

@@ -116,8 +116,12 @@ option every caller could pass, delegated calls go through `executeDelegated`,
 the only function that runs with an actor. It drops everything that would act
 for the owner beyond the call itself:
 
-- **No vault.** Nothing is looked up or substituted (Space calls already refuse
-  vault references).
+- **No vault lookup; values the owner recently used are redacted, not named.**
+  Nothing is looked up or substituted (Space calls already refuse vault
+  references). The result is still scrubbed of values the owner substituted
+  in recent calls, but each becomes a fixed `[redacted]`, not
+  `{{vault:NAME}}`: a name would tell the viewer what the owner keeps in
+  their vault, and confirm a guessed value.
 - **No custom-app fallback.** Custom apps cannot be declared by a Space anyway,
   and a delegated call does not look for one.
 - **No cookie auto-reconnect.** It would type the owner's stored login into the

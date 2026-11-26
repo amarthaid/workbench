@@ -83,7 +83,7 @@ Everything the Space declares, with any input. A viewer holds a portal session a
 
 What it does not lend:
 
-- **Vault secrets.** Vault references are refused for every Space call, delegated or not.
+- **Vault secrets.** Vault references are refused for every Space call, delegated or not. If a result happens to contain a value the owner recently used from their vault, the viewer sees `[redacted]` in its place, never the value or the secret's name.
 - **Tools marked `delegable: false`.** A tool that changes its own connection state (for example one that rewrites its stored credential) never runs with someone else's access: 403 `TOOL_NOT_DELEGABLE`. The owner's tool list marks them **Owner only**.
 - **Cookie auto-reconnect.** It would type the owner's stored login into the owner's browser on a viewer's behalf, so it is skipped. A delegated call on a dead cookie session answers "the owner needs to reconnect" instead.
 

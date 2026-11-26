@@ -33,6 +33,9 @@ import { rememberSubstituted, recentSubstituted } from "../vault/recent";
 const CONNECT_DESCRIPTION =
   "Begin connecting an integration. Returns a connectionId and a workbench URL for the user to open. The user must be signed in to workbench as the same account this agent is connected to; the link will not work for anyone else. Call wait_for_connection afterward.";
 
+/** What a delegated call's result shows in place of an owner's vault value. */
+export const REDACTED_MARKER = "[redacted]";
+
 // A ring value shorter than this only scrubs as a whole-string match, never
 // as a substring inside unrelated prose — see the `substringOk` build below.
 const VAULT_RECENT_SUBSTRING_MIN_LEN = 8;
@@ -318,7 +321,8 @@ export async function executeSingle(
  * actor. Audit rows and request log lines carry the actor, and nothing runs on
  * the owner's behalf beyond the tool's own call: no cookie auto-reconnect
  * (which types the stored login into their browser), no vault lookup or
- * substitution, no custom-app fallback. A token refresh on expiry or 401 still
+ * substitution (values the owner recently used are still scrubbed from the
+ * result, but redacted to "[redacted]", never named), no custom-app fallback. A token refresh on expiry or 401 still
  * happens: it renews the same grant and is audited as the owner.
  *
  * The actor lives in a copy of the request's audit context, scoped to this
@@ -446,6 +450,11 @@ async function runSingle(
       // mid-session) still scrubs the stale value too, not just the fresh
       // one.
       const recent = recentSubstituted(userId);
+      // With an actor the reader is not the vault's owner: a value the owner
+      // recently used is still scrubbed, but to a fixed marker, so the
+      // viewer learns neither the value nor the secret's name (a name would
+      // also confirm a guessed value).
+      const marker = actor ? REDACTED_MARKER : undefined;
       if (substituted.size > 0) rememberSubstituted(userId, substituted);
 
       // ONE combined list for scrubString/scrubVaultValues below, not two
@@ -507,7 +516,7 @@ async function runSingle(
             duration_ms: Date.now() - start,
           });
           return {
-            error: `Invalid arguments for ${toolName}: ${scrubString(parsed.error?.message ?? "schema mismatch", scrubEntries, substringOk)}`,
+            error: `Invalid arguments for ${toolName}: ${scrubString(parsed.error?.message ?? "schema mismatch", scrubEntries, substringOk, marker)}`,
           };
         }
         parsedArgs = parsed.data;
@@ -515,7 +524,7 @@ async function runSingle(
         // Unexpected throw during schema parsing (e.g. a malformed schema).
         // Don't swallow silently: record it observably, then fall through
         // with raw args so execution still proceeds.
-        const err = scrubString(e instanceof Error ? e.message : String(e), scrubEntries, substringOk);
+        const err = scrubString(e instanceof Error ? e.message : String(e), scrubEntries, substringOk, marker);
         await auditLogger.log({
           user_id: userId,
           integration: targetTool.integration,
@@ -535,7 +544,8 @@ async function runSingle(
         const result = scrubVaultValues(
           await targetTool.handler(toolCtx, parsedArgs as Record<string, unknown>),
           scrubEntries,
-          substringOk
+          substringOk,
+          marker
         );
         const duration_ms = Date.now() - start;
         await auditLogger.log({
@@ -599,7 +609,7 @@ async function runSingle(
           toolExecutionDuration.observe({ integration: targetTool.integration, tool: toolName, success: "false" }, durationS);
           return { error: e.code };
         }
-        const err = scrubString(e instanceof Error ? e.message : String(e), scrubEntries, substringOk);
+        const err = scrubString(e instanceof Error ? e.message : String(e), scrubEntries, substringOk, marker);
         const duration_ms = Date.now() - start;
         await auditLogger.log({
           user_id: userId,

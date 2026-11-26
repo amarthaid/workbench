@@ -40,6 +40,7 @@ vi.mock("../src/custom-apps/index", async (orig) => ({
 import { executeDelegated, executeSingle } from "../src/mcp/meta-tools";
 import { registry } from "../src/plugins/registry";
 import { currentAuditContext, runWithAuditContext } from "../src/audit/context";
+import { _resetForTest as resetRecent, rememberSubstituted } from "../src/vault/recent";
 
 const handler = vi.fn(async () => ({ ok: true }));
 const cookieTool = { name: "acmec_read", description: "", integration: "acme-cookie", effect: "read", inputSchema: z.object({}), handler };
@@ -157,4 +158,28 @@ describe("executeDelegated", () => {
     expect(h.getToolForUser).not.toHaveBeenCalled();
     expect(h.logged[0]).toMatchObject({ event: { user_id: "owner", error: "Tool not found" }, actor: "viewer" });
   });
+
+  describe("values the owner recently substituted from their vault", () => {
+    const echo = vi.fn(async () => ({ text: "token is s3cret-owner-value-123, again s3cret-owner-value-123", n: 4242 }));
+    const echoTool = { name: "acmeo_echo", description: "", integration: "acme-oauth", effect: "read", inputSchema: z.object({}), handler: echo };
+
+    beforeEach(() => {
+      resetRecent();
+      rememberSubstituted("owner", new Map([["prod_token", "s3cret-owner-value-123"], ["pin", "4242"]]));
+      vi.spyOn(registry, "getTool").mockImplementation((n: string) => (n === echoTool.name ? (echoTool as any) : undefined));
+    });
+
+    it("with an actor, are still scrubbed, but to [redacted]: no secret name reaches the viewer", async () => {
+      const out = await runWithAuditContext({}, () => executeDelegated("owner", "viewer", "acmeo_echo", {}));
+      expect(out).toEqual({ result: { text: "token is [redacted], again [redacted]", n: "[redacted]" } });
+      expect(JSON.stringify(out)).not.toContain("prod_token");
+      expect(JSON.stringify(out)).not.toContain("vault:");
+    });
+
+    it("without an actor, are scrubbed back to their references, as before", async () => {
+      const out = await executeSingle("owner", "acmeo_echo", {});
+      expect(out).toEqual({ result: { text: "token is {{vault:prod_token}}, again {{vault:prod_token}}", n: "{{vault:pin}}" } });
+    });
+  });
 });
+
