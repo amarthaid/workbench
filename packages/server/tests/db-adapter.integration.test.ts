@@ -22,6 +22,7 @@ import { applySchema, createDb } from "../src/db";
 import type { DbAdapter } from "../src/db-adapter";
 import { can, clearPermission, listPermissions, setPermission } from "../src/permissions/store";
 import { countDelegatedSpaces, delegationSuspended, getSpace, toolsHash, updateSpaceMeta, upsertSpace } from "../src/spaces/store";
+import { delegationFor, recordDelegationChange } from "../src/spaces/delegation";
 
 // Modules that use the process-wide `db` (the permissions store) run against
 // the backend under test by pointing this holder at it. Unset, the real `db`
@@ -368,6 +369,32 @@ for (const backend of backends) {
         expect(await upsertSpace({ ...base, visibility: "private" })).toEqual({ result: "ok", modeReset: true });
         expect(await getSpace("s1")).toMatchObject({ accessMode: "viewer", delegatedToolsHash: null });
         expect(await countDelegatedSpaces("u1")).toBe(0);
+      });
+
+      // disabled_at is a nullable integer read raw, and the audit row is
+      // written through the logger's database destination.
+      it("delegationFor reads the owner row and permission; the change is audited", async () => {
+        await db.run("DELETE FROM users WHERE id IN ('u1', 'u2')");
+        await db.run("DELETE FROM user_permissions");
+        await db.run("DELETE FROM audit_log");
+        await db.run("INSERT INTO users (id, email) VALUES (?, ?)", ["u1", "dev@example.com"]);
+        await upsertSpace(base);
+        await updateSpaceMeta("s1", "u1", { accessMode: "owner", confirmDelegation: true, expectedToolsHash: toolsHash(base.tools) });
+        const s = (await getSpace("s1"))!;
+        expect(await delegationFor(s)).toMatchObject({ mode: "off", reason: "turned_off" });
+        await setPermission({ userId: "u1", capability: "spaces.delegate_access", effect: "allow", grantedBy: "admin" });
+        expect(await delegationFor(s)).toEqual({ mode: "owner", runAs: "u1" });
+        await db.run("UPDATE users SET disabled_at = ? WHERE id = ?", [1700000000, "u1"]);
+        expect(await delegationFor(s)).toMatchObject({ mode: "off", reason: "turned_off" });
+        await db.run("DELETE FROM users WHERE id = ?", ["u1"]);
+        expect(await delegationFor(s)).toMatchObject({ mode: "off", reason: "turned_off" });
+
+        await recordDelegationChange(s, "u1", "off", "audience set to only me");
+        const row = await db.get<{ user_id: string; action: string; tool: string; error: string }>(
+          "SELECT user_id, action, tool, error FROM audit_log WHERE action = ?",
+          ["SPACE_DELEGATION_OFF"]
+        );
+        expect(row).toEqual({ user_id: "u1", action: "SPACE_DELEGATION_OFF", tool: "space:s1", error: "reason: audience set to only me" });
       });
     });
   });
