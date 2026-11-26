@@ -87,6 +87,22 @@ function isInternal(tool: PluginTool): boolean {
 }
 
 /**
+ * Display names of the integrations the Space's tools need that the viewer has
+ * not connected. Tools that no longer exist are ignored: they cannot run, so
+ * there is nothing to connect for them.
+ */
+async function unconnectedIntegrations(space: Space, userId: string): Promise<string[]> {
+  const seen = new Map<string, string>();
+  for (const name of space.tools) {
+    const tool = registry.getTool(name);
+    const integ = tool ? registry.getIntegration(tool.integration) : undefined;
+    if (!tool || !integ || isInternal(tool) || seen.has(tool.integration)) continue;
+    if (!(await isConnected(tool.integration, userId))) seen.set(tool.integration, integ.displayName ?? tool.integration);
+  }
+  return [...seen.values()];
+}
+
+/**
  * Resolve a requested tool to one of the Space's declared tools. Accepts the
  * fully-qualified name, or a bare suffix like /rest: with an integration hint,
  * `<integration>_<tool>` or a declared tool of that integration ending in
@@ -282,6 +298,13 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
         const viewer = viewerOf(request);
         const space = await openable(request.params.name, viewer);
         if (!space) return notFound(reply);
+        const unconnected = await unconnectedIntegrations(space, viewer.userId);
+        if (unconnected.length > 0) {
+          return fail(reply, 409, {
+            code: "INTEGRATION_NOT_CONNECTED",
+            message: `Connect ${unconnected.join(", ")} before approving this Space.`,
+          });
+        }
         await grantConsent(space, viewer.userId);
         return { ok: true };
       });

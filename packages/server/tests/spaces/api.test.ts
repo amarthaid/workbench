@@ -11,6 +11,7 @@ import { config } from "../../src/config";
 import { db } from "../../src/db";
 import { installAuditContext } from "../../src/audit/context";
 import { signSession } from "../../src/auth/session";
+import { storeToken } from "../../src/auth/tokens";
 import { setApiKey } from "../../src/auth/users";
 import { setUserDisabled } from "../../src/auth/user-status";
 import { registerSpaceApiRoutes, containsVaultRef } from "../../src/spaces/api";
@@ -33,7 +34,17 @@ async function call(user: string, body: Record<string, unknown>, name = "s1") {
   return app.inject({ method: "POST", url: `/api/spaces/${name}/call`, headers: as(user), payload: body });
 }
 
+async function connectOauthIntegration(user: string) {
+  await storeToken(user, "acme-oauth", { accessToken: "tok-abc", scopes: "" });
+}
+
+async function disconnectOauthIntegration(user: string) {
+  await db.run("DELETE FROM connections WHERE user_id = ? AND integration = ?", [user, "acme-oauth"]);
+}
+
+/** Approve as a viewer who has connected everything the Space needs. */
 async function consent(user: string, name = "s1") {
+  await connectOauthIntegration(user);
   return app.inject({ method: "POST", url: `/api/spaces/${name}/consent`, headers: as(user) });
 }
 
@@ -246,6 +257,18 @@ describe("consent", () => {
     expect((await consent("u3")).statusCode).toBe(404);
   });
 
+  it("POST refuses with 409 until every integration the Space uses is connected", async () => {
+    const refused = await app.inject({ method: "POST", url: "/api/spaces/s1/consent", headers: as("u2") });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({ code: "INTEGRATION_NOT_CONNECTED" });
+    expect(refused.json().message).toContain("Acme OAuth");
+    expect((await app.inject({ method: "GET", url: "/api/spaces/s1", headers: as("u2") })).json().consented).toBe(false);
+
+    await connectOauthIntegration("u2");
+    const ok = await app.inject({ method: "POST", url: "/api/spaces/s1/consent", headers: as("u2") });
+    expect(ok.json()).toEqual({ ok: true });
+  });
+
   it("a change to the tool list invalidates it", async () => {
     await consent("u2");
     expect((await call("u2", { tool: "acme_list_items" })).statusCode).toBe(200);
@@ -285,6 +308,7 @@ describe("POST /api/spaces/:name/call", () => {
 
   it("3. resolves the bare suffix, with or without the integration, inside the declared list", async () => {
     await consent("u2");
+    await disconnectOauthIntegration("u2");
     const hinted = await call("u2", { integration: "acme", tool: "list_items", args: { q: "x" } });
     expect(hinted.statusCode).toBe(200);
     expect(hinted.json()).toEqual({ result: { items: ["a", "b"], echo: { q: "x" } } });
@@ -357,6 +381,7 @@ describe("POST /api/spaces/:name/call", () => {
 
   it("8. outcome mapping: NOT_CONNECTED 409, bad args 400, upstream 502", async () => {
     await consent("u2");
+    await disconnectOauthIntegration("u2");
     const nc = await call("u2", { tool: "acmeo_list_things" });
     expect(nc.statusCode).toBe(409);
     expect(nc.json()).toMatchObject({ code: "NOT_CONNECTED", integration: "acme-oauth", tool: "acmeo_list_things" });

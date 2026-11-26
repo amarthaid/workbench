@@ -32,7 +32,14 @@ function groupTools(tools: SpaceTool[]): Group[] {
 
 // The declared tools, one box per integration, each tagged with what it does.
 // Used by the consent screen and by the running Space's "View tools".
-export function SpaceToolList({ tools }: { tools: SpaceTool[] }) {
+export function SpaceToolList({
+  tools,
+  connectHref,
+}: {
+  tools: SpaceTool[];
+  /** When set, an unconnected integration gets a Connect link to this URL. */
+  connectHref?: (integration: string) => string;
+}) {
   const groups = groupTools(tools);
   if (groups.length === 0) {
     return <p className="space-muted">This Space uses no tools.</p>;
@@ -43,7 +50,25 @@ export function SpaceToolList({ tools }: { tools: SpaceTool[] }) {
         <Box
           key={g.integration}
           title={g.integrationName}
-          action={g.connected ? null : <Badge variant="orange">Not connected</Badge>}
+          action={
+            g.connected ? (
+              connectHref ? <Badge variant="green">Connected</Badge> : null
+            ) : (
+              <span className="space-tool-connect">
+                <Badge variant="orange">Not connected</Badge>
+                {connectHref && (
+                  <a
+                    className="ui-button ui-button-outline ui-button-sm"
+                    href={connectHref(g.integration)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Connect
+                  </a>
+                )}
+              </span>
+            )
+          }
         >
           {g.tools.map((t) => {
             const effect = effectLabel(t);

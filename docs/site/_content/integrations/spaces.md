@@ -63,7 +63,7 @@ The owner always can. With `org`, any signed-in user can. With `users`, a viewer
 
 A viewer opens `/s/<name>` in the portal. The portal shell:
 
-1. Shows a consent screen listing every declared tool, grouped by integration and tagged Reads, Writes or Asks first. Approval is recorded for the current tool list; when the author changes the list, every viewer is asked again.
+1. Shows a consent screen listing every declared tool, grouped by integration and tagged Reads, Writes or Asks first. Approve stays disabled until the viewer has connected every integration the Space uses; an unconnected one shows a Connect button that opens in a new tab, and the screen re-checks when the viewer returns. Approval is recorded for the current tool list; when the author changes the list, every viewer is asked again.
 2. Loads the author's files in an iframe with `sandbox="allow-scripts allow-forms"`.
 3. Answers the page's SDK requests over a `MessageChannel`, and asks the viewer to confirm every `destructive` call. The author cannot turn that confirmation off.
 
@@ -105,7 +105,7 @@ Used by the portal shell. Portal session JWT only (`Authorization: Bearer`); API
 | `GET /api/spaces` | Spaces the viewer can open, newest first |
 | `GET /api/spaces/:name` | Metadata, tools with `effect` and `connected`, `consented`, `appUrl` |
 | `PATCH /api/spaces/:name/sharing` | Owner only: change `visibility` and add or remove people (`{ visibility?, add_users?, remove_users? }`), same rules as `update_space`; answers `{ visibility, users }` |
-| `POST`, `DELETE /api/spaces/:name/consent` | Approve or revoke the current tool list |
+| `POST`, `DELETE /api/spaces/:name/consent` | Approve or revoke the current tool list. Approving is refused with 409 `INTEGRATION_NOT_CONNECTED` while the viewer has not connected an integration the Space uses |
 | `POST /api/spaces/:name/call` | Run a declared tool as the viewer |
 | `GET /api/spaces/:name/kv`, `GET`, `PUT`, `DELETE /api/spaces/:name/kv/:key` | Per-viewer key-value store |
 
