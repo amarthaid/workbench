@@ -278,6 +278,9 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
 
         if (visibility !== space.visibility) {
           const updated = await updateSpaceMeta(space.name, viewer.userId, { visibility });
+          if (updated === "conflict") {
+            return fail(reply, 409, { code: "CONFLICT", message: "This Space changed meanwhile. Try again." });
+          }
           if (!updated) return fail(reply, 403, { code: "FORBIDDEN", message: "Only the owner can change who can open this Space." });
         }
         let users = await getShares(space.name);

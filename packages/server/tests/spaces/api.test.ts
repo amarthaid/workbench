@@ -6,6 +6,11 @@ import Fastify, { type FastifyInstance } from "fastify";
 
 let tmp: string;
 vi.mock("../../src/spaces/dir", () => ({ spacesRoot: () => tmp }));
+// Passes through; a test can make the write lose a race.
+vi.mock("../../src/spaces/store", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/spaces/store")>();
+  return { ...actual, updateSpaceMeta: vi.fn(actual.updateSpaceMeta) };
+});
 
 import { config } from "../../src/config";
 import { db } from "../../src/db";
@@ -195,6 +200,13 @@ describe("PATCH /api/spaces/:name/sharing", () => {
     (await db.all<{ email: string }>("SELECT email FROM space_shares WHERE space_name = ? ORDER BY email", ["s1"])).map(
       (r) => r.email
     );
+
+  it("a lost race on the write is 409 CONFLICT", async () => {
+    vi.mocked(updateSpaceMeta).mockResolvedValueOnce("conflict");
+    const res = await sharing("u1", { visibility: "org" });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ code: "CONFLICT", message: "This Space changed meanwhile. Try again." });
+  });
 
   it("adds and removes people without touching anyone else", async () => {
     let res = await sharing("u1", { add_users: ["Ops@Example.com", "dev2@example.com"] });

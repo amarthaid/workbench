@@ -34,6 +34,7 @@ import {
   writeSpaceMetaIfUnchanged,
   KV_VALUE_MAX_BYTES,
   type Space,
+  type SpaceMetaSnapshot,
 } from "../../src/spaces/store";
 import { resetSpacesDb, seedUser, writeSpaceFiles } from "./helpers";
 
@@ -278,22 +279,53 @@ describe("spaces/store", () => {
       expect(await getSpace("s1")).toEqual(before);
     });
 
+    // updateSpaceMeta reads, then writes through writeSpaceMetaIfUnchanged; a
+    // concurrent write between the two cannot be injected mid-function, so the
+    // predicate is tested on the helper directly with a stale read.
+    const readRow = async () =>
+      (await db.get<SpaceMetaSnapshot>(
+        "SELECT title, description, tools, visibility, access_mode, delegated_tools_hash FROM spaces WHERE name = ?",
+        ["s1"]
+      ))!;
+
     it("the write is a compare-and-set on the stored tool list", async () => {
-      // updateSpaceMeta reads, then writes through writeSpaceMetaIfUnchanged;
-      // a redeploy between the two cannot be injected mid-function, so the
-      // predicate is tested on the helper directly with a stale read.
       await upsertSpace({ name: "s1", ...base });
-      const stale = (await db.get<{ tools: string }>("SELECT tools FROM spaces WHERE name = ?", ["s1"]))!.tools;
+      const stale = await readRow();
       const cur = (await getSpace("s1"))!;
       await upsertSpace({ name: "s1", ...base, tools: ["z_tool"] }); // the concurrent redeploy
       const next: Space = { ...cur, accessMode: "owner", delegatedToolsHash: toolsHash(cur.tools), updatedAt: cur.updatedAt + 1 };
       expect(await writeSpaceMetaIfUnchanged(next, stale)).toBe(false);
       expect((await getSpace("s1"))!).toMatchObject({ tools: ["z_tool"], accessMode: "viewer" });
-      const fresh = (await db.get<{ tools: string }>("SELECT tools FROM spaces WHERE name = ?", ["s1"]))!.tools;
+      const fresh = await readRow();
       expect(await writeSpaceMetaIfUnchanged({ ...next, tools: ["z_tool"] }, fresh)).toBe(true);
       expect((await getSpace("s1"))!.accessMode).toBe("owner");
       // Another owner never matches.
-      expect(await writeSpaceMetaIfUnchanged({ ...next, ownerId: "u2", tools: ["z_tool"] }, fresh)).toBe(false);
+      expect(await writeSpaceMetaIfUnchanged({ ...next, ownerId: "u2" }, await readRow())).toBe(false);
+    });
+
+    it("a confirm read before a private redeploy of the same tools cannot undo it", async () => {
+      await upsertSpace({ name: "s1", ...base });
+      const stale = await readRow();
+      const cur = (await getSpace("s1"))!;
+      // The agent redeploys the same tools, private.
+      await upsertSpace({ name: "s1", ...base, visibility: "private" });
+      const confirm: Space = { ...cur, accessMode: "owner", delegatedToolsHash: toolsHash(cur.tools), updatedAt: cur.updatedAt + 1 };
+      expect(await writeSpaceMetaIfUnchanged(confirm, stale)).toBe(false);
+      expect((await getSpace("s1"))!).toMatchObject({ visibility: "private", accessMode: "viewer", delegatedToolsHash: null });
+    });
+
+    it("the compare covers the mode, the pin and the title too", async () => {
+      await upsertSpace({ name: "s1", ...base });
+      await enableIn("s1");
+      const stale = await readRow();
+      const cur = (await getSpace("s1"))!;
+      await updateSpaceMeta("s1", "u1", { accessMode: "viewer" });
+      expect(await writeSpaceMetaIfUnchanged({ ...cur, title: "Late" }, stale)).toBe(false);
+      await enableIn("s1");
+      const stale2 = await readRow();
+      await updateSpaceMeta("s1", "u1", { title: "Other" });
+      expect(await writeSpaceMetaIfUnchanged({ ...cur, title: "Late" }, stale2)).toBe(false);
+      expect((await getSpace("s1"))!).toMatchObject({ title: "Other", accessMode: "owner" });
     });
 
     it("owner without confirmation does not turn it on", async () => {

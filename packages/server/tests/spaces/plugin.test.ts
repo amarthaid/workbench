@@ -9,13 +9,13 @@ vi.mock("../../src/spaces/dir", () => ({ spacesRoot: () => tmp }));
 // see a stale row (the race between check and write).
 vi.mock("../../src/spaces/store", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/spaces/store")>();
-  return { ...actual, getSpace: vi.fn(actual.getSpace) };
+  return { ...actual, getSpace: vi.fn(actual.getSpace), updateSpaceMeta: vi.fn(actual.updateSpaceMeta) };
 });
 
 import { config } from "../../src/config";
 import { db } from "../../src/db";
 import { consume } from "../../src/spaces/pending";
-import { getShares, getSpace, grantConsent, kvPut } from "../../src/spaces/store";
+import { getShares, getSpace, grantConsent, kvPut, updateSpaceMeta } from "../../src/spaces/store";
 import { spacesPlugin } from "../../src/plugins/internal/spaces";
 import { INTERNAL_PLUGIN_NAMES } from "../../src/plugins/internal-names";
 import { registerInternalPlugins } from "../../src/plugins/loader";
@@ -129,6 +129,14 @@ describe("spaces plugin", () => {
     expect((await getSpace("s1"))!.title).toBe("Items");
     const r = await update("u1", { name: "s1", visibility: "users", users: ["qa@example.com"] });
     expect(r.applied.users).toEqual(["qa@example.com"]);
+  });
+
+  it("update_space reports a lost race as CONFLICT, not FORBIDDEN", async () => {
+    await deploy("u1", ok);
+    vi.mocked(updateSpaceMeta).mockResolvedValueOnce("conflict");
+    const r = await update("u1", { name: "s1", title: "x" });
+    expect(r).toMatchObject({ error: "CONFLICT" });
+    expect(r.message).toMatch(/changed meanwhile/);
   });
 
   it("update_space add_users / remove_users change one person and keep the rest", async () => {

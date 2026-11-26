@@ -198,15 +198,23 @@ export interface SpaceMetaPatch {
   expectedToolsHash?: string;
 }
 
-export type SpaceMetaResult = { space: Space; modeReset: boolean } | "tools_changed" | null;
+export type SpaceMetaResult = { space: Space; modeReset: boolean } | "tools_changed" | "conflict" | null;
+
+/** The stored fields updateSpaceMeta read and may rewrite, as raw column values. */
+export type SpaceMetaSnapshot = Pick<
+  SpaceRow,
+  "title" | "description" | "tools" | "visibility" | "access_mode" | "delegated_tools_hash"
+>;
 
 /**
  * Apply a partial metadata change as `ownerId`. Unset fields keep their value.
  *
- * - null: nothing matched (missing, owned by another user, or the tool list
- *   changed between this function's read and its write: the UPDATE is a
- *   compare-and-set on the owner and the stored tool list, so a Space deleted
- *   and re-created, or a concurrent redeploy, is never overwritten).
+ * - null: the Space is missing or owned by another user (also when it was
+ *   deleted and re-created by someone else before the write).
+ * - "conflict": the owner's row changed between this function's read and its
+ *   write (a concurrent redeploy, sharing change or confirm). The write is a
+ *   compare-and-set on every field it rewrites, so the other change is never
+ *   undone; nothing is written and the caller should ask to retry.
  * - "tools_changed": `confirmDelegation` without `expectedToolsHash`, or with
  *   one that is not the hash of both the stored list and the resulting list.
  *   The owner confirmed a list that is not the one being pinned; nothing is
@@ -244,20 +252,30 @@ export async function updateSpaceMeta(name: string, ownerId: string, patch: Spac
     next.accessMode = "viewer";
     next.delegatedToolsHash = null;
   }
-  if (!(await writeSpaceMetaIfUnchanged(next, row.tools))) return null;
+  if (!(await writeSpaceMetaIfUnchanged(next, row))) {
+    // Still ours: someone changed it meanwhile. Gone or someone else's: null.
+    const owner = await db.get<{ owner_id: string }>("SELECT owner_id FROM spaces WHERE name = ?", [name]);
+    return owner?.owner_id === ownerId ? "conflict" : null;
+  }
   return { space: next, modeReset: cur.accessMode === "owner" && next.accessMode === "viewer" };
 }
 
 /**
  * Write `next`'s metadata only if the row is still owned by `next.ownerId` and
- * its stored tools text is still `storedTools` (as read). Exported so the
- * compare-and-set can be tested with a stale read.
+ * every field this write replaces still holds the value in `read` (the raw
+ * columns as read). Nullable columns compare through COALESCE, which is
+ * portable to both backends. Exported so the compare-and-set can be tested
+ * with a stale read.
  */
-export async function writeSpaceMetaIfUnchanged(next: Space, storedTools: string): Promise<boolean> {
+export async function writeSpaceMetaIfUnchanged(next: Space, read: SpaceMetaSnapshot): Promise<boolean> {
   const { changes } = await db.run(
     `UPDATE spaces SET title = ?, description = ?, tools = ?, visibility = ?, access_mode = ?, delegated_tools_hash = ?,
-       updated_at = ? WHERE name = ? AND owner_id = ? AND tools = ?`,
+       updated_at = ?
+     WHERE name = ? AND owner_id = ?
+       AND title = ? AND COALESCE(description, '') = ? AND tools = ? AND visibility = ?
+       AND access_mode = ? AND COALESCE(delegated_tools_hash, '') = ?`,
     [
+      // SET
       next.title,
       next.description,
       JSON.stringify(next.tools),
@@ -265,9 +283,15 @@ export async function writeSpaceMetaIfUnchanged(next: Space, storedTools: string
       next.accessMode,
       next.delegatedToolsHash,
       next.updatedAt,
+      // WHERE: the row, then each field as read
       next.name,
       next.ownerId,
-      storedTools,
+      read.title,
+      read.description ?? "",
+      read.tools,
+      read.visibility,
+      read.access_mode ?? "viewer",
+      read.delegated_tools_hash ?? "",
     ]
   );
   return changes === 1;

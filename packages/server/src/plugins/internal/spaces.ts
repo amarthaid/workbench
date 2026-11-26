@@ -222,6 +222,7 @@ const tools: PluginTool[] = [
         tools: toolList,
         visibility,
       });
+      if (meta === "conflict") return { error: "CONFLICT", message: "This Space changed meanwhile. Try again." };
       // "tools_changed" only answers a delegation confirm, which this tool never sends.
       if (!meta || meta === "tools_changed") return { error: "FORBIDDEN" };
       const updated = meta.space;
