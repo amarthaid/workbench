@@ -54,6 +54,9 @@ const BYSTANDER = { id: "dlg-bystander", email: "ops@example.com" };
 
 async function seedUsers() {
   for (const u of [OWNER, VIEWER, BYSTANDER]) {
+    // Other test files share this database and may leave a user with the same
+    // email behind (users.email is unique), so clear by id and by email first.
+    await db.run("DELETE FROM users WHERE id = ? OR email = ?", [u.id, u.email]);
     await db.run("INSERT INTO users (id, email) VALUES (?, ?)", [u.id, u.email]);
   }
 }
