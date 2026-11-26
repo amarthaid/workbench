@@ -156,6 +156,10 @@ export interface ToolDefinition {
   // Optional for backward compatibility with third-party plugins. An
   // unlabelled tool is treated as "destructive" (see effectOf).
   effect?: ToolEffect;
+  // false: refused when a Space runs with its owner's access (delegated
+  // access), e.g. tools that rewrite their own stored credential. Unset means
+  // delegable.
+  delegable?: boolean;
 }
 
 /** A tool's effective side-effect label: unlabelled tools count as destructive. */
@@ -189,7 +193,9 @@ export interface AuditEvent {
     | "ADMIN_BROWSER_BLOCKLIST"
     | "CURL_SESSION"
     | "CURL_REQUEST"
-    | "ADMIN_AUDIT_PAYLOAD_VIEW";
+    | "ADMIN_AUDIT_PAYLOAD_VIEW"
+    | "SPACE_DELEGATION_ON"
+    | "SPACE_DELEGATION_OFF";
   success: boolean;
   error?: string;
   /** The user's email when the event was written (null if unknown). */

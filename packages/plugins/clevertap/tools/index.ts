@@ -164,6 +164,8 @@ export const setProjects = {
   description: "Set all CleverTap projects at once via JSON. Overwrites existing. Use for multi-account bulk config. Input is JSON array: [{\"name\":\"prod\",\"accountId\":\"XXX\",\"passcode\":\"YYY\",\"region\":\"us1\"}]. Local store only, not a CleverTap API write.",
   integration: "clevertap",
   effect: "destructive",
+  // Rewrites the stored credential: never run with a Space owner's access.
+  delegable: false,
   inputSchema: z.object({
     projects: z
       .array(
