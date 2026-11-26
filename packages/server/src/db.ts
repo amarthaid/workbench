@@ -167,6 +167,16 @@ const SQLITE_SCHEMA = `
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (space_name, user_id, key)
   );
+
+  CREATE TABLE IF NOT EXISTS user_permissions (
+    user_id TEXT NOT NULL,
+    capability TEXT NOT NULL,
+    subject TEXT NOT NULL DEFAULT '',
+    effect TEXT NOT NULL,
+    granted_by TEXT NOT NULL,
+    granted_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, capability, subject)
+  );
 `;
 
 const POSTGRES_SCHEMA = `
@@ -318,6 +328,16 @@ const POSTGRES_SCHEMA = `
     value TEXT NOT NULL,
     updated_at BIGINT NOT NULL,
     PRIMARY KEY (space_name, user_id, key)
+  );
+
+  CREATE TABLE IF NOT EXISTS user_permissions (
+    user_id TEXT NOT NULL,
+    capability TEXT NOT NULL,
+    subject TEXT NOT NULL DEFAULT '',
+    effect TEXT NOT NULL,
+    granted_by TEXT NOT NULL,
+    granted_at BIGINT NOT NULL,
+    PRIMARY KEY (user_id, capability, subject)
   );
 `;
 
