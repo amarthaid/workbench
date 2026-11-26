@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { dayLabel, timeLabel, durationLabel, relativeTime, formatBytes } from "./format";
+import { dayLabel, timeLabel, durationLabel, relativeTime, formatBytes, shortDate } from "./format";
 
 describe("formatBytes", () => {
   it.each([
@@ -69,5 +69,15 @@ describe("relativeTime", () => {
 
   it("renders an em dash for a missing timestamp", () => {
     expect(relativeTime(0, NOW)).toBe("—");
+  });
+});
+
+describe("shortDate", () => {
+  const at = (y: number, m: number, d: number) => Math.floor(new Date(y, m, d, 12).getTime() / 1000);
+  it("is day and month this year, with the year otherwise", () => {
+    const now = new Date(2026, 10, 26, 9);
+    expect(shortDate(at(2026, 10, 26), now)).toBe("26 Nov");
+    expect(shortDate(at(2026, 0, 3), now)).toBe("3 Jan");
+    expect(shortDate(at(2025, 11, 31), now)).toBe("31 Dec 2025");
   });
 });

@@ -8,6 +8,9 @@ const api = vi.hoisted(() => ({
   disableAdminUser: vi.fn(),
   enableAdminUser: vi.fn(),
   revokeAdminUserKey: vi.fn(),
+  getUserPermissions: vi.fn(),
+  setUserPermission: vi.fn(),
+  clearUserPermission: vi.fn(),
 }));
 vi.mock("../../api", async (orig) => ({ ...(await orig<typeof import("../../api")>()), ...api }));
 vi.mock("../../context/AuthContext", () => ({
@@ -36,7 +39,37 @@ beforeEach(() => {
   api.disableAdminUser.mockResolvedValue(undefined);
   api.enableAdminUser.mockResolvedValue(undefined);
   api.revokeAdminUserKey.mockResolvedValue(undefined);
+  api.setUserPermission.mockResolvedValue(undefined);
+  api.clearUserPermission.mockResolvedValue(undefined);
+  api.getUserPermissions.mockResolvedValue(perms());
 });
+
+function perm(over: Record<string, unknown> = {}) {
+  return {
+    capability: "spaces.delegate_access",
+    label: "Delegate access in Spaces",
+    description: "Lets this user share Spaces that run with their connected apps.",
+    default: "deny",
+    effect: "deny",
+    source: "default",
+    grantedBy: null,
+    grantedByEmail: null,
+    grantedAt: null,
+    ...over,
+  };
+}
+
+function perms(over: Record<string, unknown> = {}, delegatedSpaces = 0) {
+  return { permissions: [perm(over)], delegatedSpaces };
+}
+
+const GRANTED = {
+  effect: "allow",
+  source: "rule",
+  grantedBy: "me",
+  grantedByEmail: "admin@example.com",
+  grantedAt: Math.floor(new Date(new Date().getFullYear(), 10, 26, 12).getTime() / 1000),
+};
 
 describe("UsersTab", () => {
   it("lists users with counts, key state and status", async () => {
@@ -187,5 +220,91 @@ describe("UsersTab search", () => {
     renderWithClient(<UsersTab />);
     await screen.findByText("alice@example.com");
     expect(screen.getByText(/Loaded the first 4 of 900 users/)).toBeInTheDocument();
+  });
+});
+
+describe("UsersTab permissions", () => {
+  async function openPanel() {
+    renderWithClient(<UsersTab />);
+    await screen.findByText("dev@example.com");
+    const toggle = screen.getByRole("button", { name: "Permissions for dev@example.com" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    return screen.findByRole("group", { name: "Delegate access in Spaces for dev@example.com" });
+  }
+
+  it("expands a panel per user with each capability at its default", async () => {
+    const group = await openPanel();
+    expect(api.getUserPermissions).toHaveBeenCalledWith("u1");
+    const row = group.closest(".wb-perm-row") as HTMLElement;
+    expect(row).toHaveTextContent("Delegate access in Spaces");
+    expect(row).toHaveTextContent("Lets this user share Spaces that run with their connected apps.");
+    expect(row).toHaveTextContent("Default: off");
+    expect(within(group).getByRole("button", { name: "Default" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(group).getByRole("button", { name: "Allow" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByText("Default follows the instance setting")).toBeInTheDocument();
+  });
+
+  it("collapses again", async () => {
+    await openPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Permissions for dev@example.com" }));
+    expect(screen.queryByRole("group", { name: /Delegate access/ })).not.toBeInTheDocument();
+  });
+
+  it("Allow sets the opposite of the default and refreshes the panel", async () => {
+    const group = await openPanel();
+    api.getUserPermissions.mockResolvedValue(perms(GRANTED));
+    fireEvent.click(within(group).getByRole("button", { name: "Allow" }));
+    await waitFor(() => expect(api.setUserPermission).toHaveBeenCalledWith("u1", "spaces.delegate_access", "allow"));
+    expect(await screen.findByText(/Granted by admin@example.com, 26 Nov/)).toBeInTheDocument();
+    expect(within(group).getByRole("button", { name: "Allow" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("Default with no delegated Spaces clears the rule without asking", async () => {
+    api.getUserPermissions.mockResolvedValue(perms(GRANTED, 0));
+    const group = await openPanel();
+    fireEvent.click(within(group).getByRole("button", { name: "Default" }));
+    await waitFor(() => expect(api.clearUserPermission).toHaveBeenCalledWith("u1", "spaces.delegate_access"));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("Default with delegated Spaces asks first; Cancel keeps the grant", async () => {
+    api.getUserPermissions.mockResolvedValue(perms(GRANTED, 2));
+    const group = await openPanel();
+    fireEvent.click(within(group).getByRole("button", { name: "Default" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("heading", { name: "Remove permission" })).toBeInTheDocument();
+    expect(dialog).toHaveTextContent(
+      "dev@example.com has 2 Spaces using delegated access. They will stop working for viewers until it is allowed again."
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(api.clearUserPermission).not.toHaveBeenCalled();
+  });
+
+  it("Set to Default in the confirmation clears the rule", async () => {
+    api.getUserPermissions.mockResolvedValue(perms(GRANTED, 1));
+    const group = await openPanel();
+    fireEvent.click(within(group).getByRole("button", { name: "Default" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("has 1 Space using delegated access");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Set to Default" }));
+    await waitFor(() => expect(api.clearUserPermission).toHaveBeenCalledWith("u1", "spaces.delegate_access"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("shows the server's reason when a change is refused", async () => {
+    api.setUserPermission.mockRejectedValueOnce(new Error("That user no longer exists."));
+    const group = await openPanel();
+    fireEvent.click(within(group).getByRole("button", { name: "Allow" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("That user no longer exists.");
+  });
+
+  it("says so when the permissions cannot be loaded", async () => {
+    api.getUserPermissions.mockRejectedValue(new Error("boom"));
+    renderWithClient(<UsersTab />);
+    await screen.findByText("dev@example.com");
+    fireEvent.click(screen.getByRole("button", { name: "Permissions for dev@example.com" }));
+    expect(await screen.findByText("Couldn't load permissions.")).toBeInTheDocument();
   });
 });
