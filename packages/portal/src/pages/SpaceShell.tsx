@@ -60,12 +60,12 @@ function ConsentScreen({
   busy: boolean;
   error: string | null;
 }) {
-  // A delegated Space runs with the owner's connections (the detail's
-  // `connected` flags are the owner's), so the viewer has nothing to connect
-  // and is never blocked: they are told who needs to reconnect instead.
+  // A delegated Space runs with the owner's connections, so the viewer has
+  // nothing to connect and sees no connection state. An owner who is missing
+  // a connection holds the viewer at a full-page card before this screen.
   const delegated = runsAsOwner(space);
-  const needed = unconnectedIntegrations(space.tools);
-  const blocked = !delegated && needed.length > 0;
+  const needed = delegated ? [] : unconnectedIntegrations(space.tools);
+  const blocked = needed.length > 0;
   return (
     <div className="page-center page-center-stack">
       <BrandLockup />
@@ -88,6 +88,7 @@ function ConsentScreen({
         <SpaceToolList
           tools={space.tools}
           connectHref={delegated ? undefined : (integration) => `/apps/${encodeURIComponent(integration)}`}
+          hideConnection={delegated}
         />
         {blocked && (
           <div className="space-consent-needs" role="status">
@@ -96,13 +97,6 @@ function ConsentScreen({
               each integration it uses has to be connected on your account before you can approve it.
             </span>
             <span>Connect in the new tab, then come back here. This page updates when you return.</span>
-          </div>
-        )}
-        {delegated && needed.length > 0 && (
-          <div className="space-consent-needs" role="status">
-            <span>
-              {space.ownerEmail} needs to reconnect {needed.join(", ")}. Calls to those tools will fail until they do.
-            </span>
           </div>
         )}
         {error && <p className="ui-form-error">{error}</p>}
@@ -322,7 +316,7 @@ function SpaceRunner({
       <ConfirmActionModal request={pending?.request ?? null} onAllow={() => settle(true)} onDeny={() => settle(false)} />
 
       <Modal open={toolsOpen} onClose={() => setToolsOpen(false)} title="Tools this Space can use" size="lg">
-        <SpaceToolList tools={space.tools} />
+        <SpaceToolList tools={space.tools} hideConnection={runsAsOwner(space)} />
       </Modal>
 
       {space.mine && (
@@ -374,7 +368,11 @@ export default function SpaceShell() {
     // The viewer's connections, or the Space itself, changed since this page
     // loaded: show the new state.
     onError: (e) => {
-      if (e instanceof SpaceApiError && (e.code === "INTEGRATION_NOT_CONNECTED" || e.code === "CONSENT_CHANGED")) {
+      // OWNER_NOT_CONNECTED: the refetched detail carries the waiting card.
+      if (
+        e instanceof SpaceApiError &&
+        (e.code === "INTEGRATION_NOT_CONNECTED" || e.code === "CONSENT_CHANGED" || e.code === "OWNER_NOT_CONNECTED")
+      ) {
         void refetch();
       }
     },
@@ -413,13 +411,20 @@ export default function SpaceShell() {
     );
   }
 
-  // A viewer of a delegated Space whose shared access is off: nothing in it
-  // can run, and their own access is never used instead.
+  // A viewer of a delegated Space whose shared access is off, or whose owner
+  // has not connected everything it uses: nothing in it can run, and their own
+  // access is never used instead. Shown before consent too.
   const off = offDuringRun ?? (!data.mine && data.delegation_off ? data.delegation_off : null);
   if (off) {
     return (
       <CenterCard>
-        <h1 className="space-card-title">{off.reason === "tools_changed" ? "Space paused" : "Shared access is off"}</h1>
+        <h1 className="space-card-title">
+          {off.reason === "tools_changed"
+            ? "Space paused"
+            : off.reason === "owner_not_connected"
+              ? "Waiting for the owner"
+              : "Shared access is off"}
+        </h1>
         <p className="space-muted">{off.message}</p>
         <div className="space-consent-actions">
           <Button
@@ -427,6 +432,9 @@ export default function SpaceShell() {
             disabled={retrying}
             onClick={async () => {
               setRetrying(true);
+              // A refused Approve (the owner was not connected) is not news once
+              // the consent screen comes back.
+              approve.reset();
               try {
                 const r = await refetch();
                 // Back on (or never delegated any more): run the Space again.

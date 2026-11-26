@@ -36,9 +36,13 @@ export interface SpaceTool {
   delegable?: boolean;
 }
 
-/** Why a delegated Space cannot run calls right now. */
+/**
+ * Why a delegated Space cannot run calls right now. "owner_not_connected" is
+ * only shown to viewers: delegation is in effect, but the owner has not
+ * connected every integration the Space uses.
+ */
 export interface DelegationOff {
-  reason: "turned_off" | "tools_changed";
+  reason: "turned_off" | "tools_changed" | "owner_not_connected";
   message: string;
 }
 
@@ -65,7 +69,7 @@ export interface SpaceDetail {
   delegate_access?: boolean;
   /** On, but paused until the owner confirms the changed tool list. */
   delegation_suspended?: boolean;
-  /** Set when delegated access is on but cannot run calls. */
+  /** Set when delegated access is on but cannot run calls (or, for a viewer, the owner must connect first). */
   delegation_off?: DelegationOff | null;
   /** Owner only: the hash of this tool list, sent back to confirm it. */
   tools_hash?: string;

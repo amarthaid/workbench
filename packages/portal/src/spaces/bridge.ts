@@ -9,7 +9,7 @@
 // so a later document in the frame can neither call nor read replies. A second
 // load is treated as a navigation and stops the bridge.
 
-import { SpaceApiError, type SpaceCallBody, type SpaceDetail, type SpaceErrorBody, type SpaceTool } from "../spaces-api";
+import { SpaceApiError, type DelegationOff, type SpaceCallBody, type SpaceDetail, type SpaceErrorBody, type SpaceTool } from "../spaces-api";
 
 export interface FrameLike {
   addEventListener(type: "load", listener: () => void): void;
@@ -51,7 +51,7 @@ export interface BridgeOptions {
    */
   onOwnerNotConnected?(integration: string, message: string): void;
   /** DELEGATION_OFF: shared access was turned off, or paused for a tool change. The bridge stops. */
-  onDelegationOff?(reason: "turned_off" | "tools_changed", message: string): void;
+  onDelegationOff?(reason: DelegationOff["reason"], message: string): void;
   /** TOOL_NOT_DELEGABLE: this tool never runs with someone else's access. */
   onToolNotDelegable?(tool: string, message: string): void;
   onConsentRequired?(): void;
@@ -281,6 +281,13 @@ export function createSpaceBridge(opts: BridgeOptions): SpaceBridge {
     if (error.code === "DELEGATION_OFF") {
       dispose();
       opts.onDelegationOff?.(error.reason === "tools_changed" ? "tools_changed" : "turned_off", error.message);
+      return;
+    }
+    // The owner is missing a connection the Space uses: the Space is closed to
+    // viewers until they reconnect, so it stops like a delegation that is off.
+    if (error.code === "OWNER_NOT_CONNECTED") {
+      dispose();
+      opts.onDelegationOff?.("owner_not_connected", error.message);
       return;
     }
     if (error.code === "TOOL_NOT_DELEGABLE" && type === "call") {

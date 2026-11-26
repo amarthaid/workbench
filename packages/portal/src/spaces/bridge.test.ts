@@ -446,6 +446,22 @@ describe("delegated access", () => {
     expect(opts.onNotConnected).not.toHaveBeenCalled();
   });
 
+  it("OWNER_NOT_CONNECTED answers the Space, then stops the bridge like DELEGATION_OFF", async () => {
+    const onDelegationOff = vi.fn();
+    const onOwnerNotConnected = vi.fn();
+    const { space, api } = started({ getSpace: () => DELEGATED, onDelegationOff, onOwnerNotConnected });
+    api.call.mockRejectedValueOnce(
+      new SpaceApiError(409, { code: "OWNER_NOT_CONNECTED", reason: "owner_not_connected", message: "wait", integration: "github" })
+    );
+    const r = await space.send("call", { integration: "github", tool: "list_prs" }).reply;
+    expect(r.error).toMatchObject({ code: "OWNER_NOT_CONNECTED" });
+    expect(onDelegationOff).toHaveBeenCalledWith("owner_not_connected", "wait");
+    expect(onOwnerNotConnected).not.toHaveBeenCalled();
+    space.send("me");
+    await tick();
+    expect(space.replies).toHaveLength(1);
+  });
+
   it.each(["turned_off", "tools_changed"] as const)("DELEGATION_OFF (%s) answers the Space, then stops the bridge", async (reason) => {
     const onDelegationOff = vi.fn();
     const { space, api } = started({ getSpace: () => DELEGATED, onDelegationOff });

@@ -84,11 +84,22 @@ consent to whatever the Space had just become.
 Ordinary Spaces refuse consent until the viewer has connected every
 integration the Space uses (`409 INTEGRATION_NOT_CONNECTED`). A delegated
 Space skips that check for viewers: their own connections are never used, and
-the feature exists for viewers who cannot connect those tools. The consent
-screen names the owner as the one who must reconnect instead. Because the
-viewer's consent hash covers the access mode, a consent given while delegated
-cannot carry over once the Space goes back to the viewer's own connections,
-where the gate applies again.
+the feature exists for viewers who cannot connect those tools. Its consent
+screen shows no connection state at all. The gate moves to the owner instead:
+while delegation is in effect and the owner is missing a connection for any
+integration the Space uses (the same rule: real, non-internal, declared
+tools), a viewer cannot enter the Space, consented or not. The detail answers
+`delegation_off: { reason: "owner_not_connected", message }`, consent is 409
+`OWNER_NOT_CONNECTED`, every call is 409 `OWNER_NOT_CONNECTED` (audited with
+both ids, before anything runs), and the portal shows a **Waiting for the
+owner** card with Try again. Holding the viewer at the door beats letting
+them approve and then fail tool by tool. It does tell viewers which
+integrations the owner lacks; that is accepted, since it is what explains the
+wait, and it still says nothing of the owner's permission or account. The
+owner opening their own delegated Space gets the ordinary viewer gate for
+their own connections. Because the viewer's consent hash covers the access
+mode, a consent given while delegated cannot carry over once the Space goes
+back to the viewer's own connections, where the viewer gate applies again.
 
 ## Only the owner, in the portal, for a reviewed list
 

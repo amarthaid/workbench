@@ -38,11 +38,17 @@ export function SpaceToolList({
   tools,
   connectHref,
   delegation = false,
+  hideConnection = false,
 }: {
   tools: SpaceTool[];
   /** When set, an unconnected integration gets a Connect link to this URL. */
   connectHref?: (integration: string) => string;
   delegation?: boolean;
+  /**
+   * No connection state at all: a viewer of a delegated Space, whose tools run
+   * with the owner's connections, has nothing to connect.
+   */
+  hideConnection?: boolean;
 }) {
   const groups = groupTools(tools);
   if (groups.length === 0) {
@@ -55,7 +61,7 @@ export function SpaceToolList({
           key={g.integration}
           title={g.integrationName}
           action={
-            g.connected ? (
+            hideConnection ? null : g.connected ? (
               connectHref ? <Badge variant="green">Connected</Badge> : null
             ) : (
               <span className="space-tool-connect">
