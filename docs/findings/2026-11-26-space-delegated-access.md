@@ -81,6 +81,15 @@ the viewer reads "runs as you") answers `409 CONSENT_CHANGED`, and the portal
 redraws the consent screen. Without it, approving a stale screen would record
 consent to whatever the Space had just become.
 
+Ordinary Spaces refuse consent until the viewer has connected every
+integration the Space uses (`409 INTEGRATION_NOT_CONNECTED`). A delegated
+Space skips that check for viewers: their own connections are never used, and
+the feature exists for viewers who cannot connect those tools. The consent
+screen names the owner as the one who must reconnect instead. Because the
+viewer's consent hash covers the access mode, a consent given while delegated
+cannot carry over once the Space goes back to the viewer's own connections,
+where the gate applies again.
+
 ## Only the owner, in the portal, for a reviewed list
 
 The dangerous actor here is the owner's own agent. An agent that reads a
