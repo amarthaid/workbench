@@ -72,7 +72,7 @@ function ConsentScreen({
           This Space runs as you, with your connections. Approve the tools it can use below. Tools tagged Asks first
           need your OK every time they run.
         </p>
-        <SpaceToolList tools={space.tools} connectHref={(integration) => `/connect/${encodeURIComponent(integration)}`} />
+        <SpaceToolList tools={space.tools} connectHref={(integration) => `/apps/${encodeURIComponent(integration)}`} />
         {blocked && (
           <div className="space-consent-needs" role="status">
             <span>

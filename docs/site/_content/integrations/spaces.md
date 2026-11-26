@@ -63,7 +63,7 @@ The owner always can. With `org`, any signed-in user can. With `users`, a viewer
 
 A viewer opens `/s/<name>` in the portal. The portal shell:
 
-1. Shows a consent screen listing every declared tool, grouped by integration and tagged Reads, Writes or Asks first. Approve stays disabled until the viewer has connected every integration the Space uses; an unconnected one shows a Connect button that opens in a new tab, and the screen re-checks when the viewer returns. Approval is recorded for the current tool list; when the author changes the list, every viewer is asked again.
+1. Shows a consent screen listing every declared tool, grouped by integration and tagged Reads, Writes or Asks first. Approve stays disabled until the viewer has connected every integration the Space uses; an unconnected one shows a Connect button that opens that integration's page in a new tab, and the screen re-checks when the viewer returns. Approval is recorded for the current tool list; when the author changes the list, every viewer is asked again.
 2. Loads the author's files in an iframe with `sandbox="allow-scripts allow-forms"`.
 3. Answers the page's SDK requests over a `MessageChannel`, and asks the viewer to confirm every `destructive` call. The author cannot turn that confirmation off.
 
