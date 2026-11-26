@@ -218,7 +218,7 @@ describe("SpaceShell", () => {
 
     it("opens a Space to everyone signed in", async () => {
       vi.mocked(fetchSpace).mockResolvedValue(space({ mine: true, visibility: "private", users: [] }));
-      vi.mocked(updateSpaceSharing).mockResolvedValue({ visibility: "org", users: [] });
+      vi.mocked(updateSpaceSharing).mockResolvedValue({ visibility: "org", users: [], delegate_access: false, delegation_suspended: false });
       renderShell();
       const dialog = await openSharing();
       expect(within(dialog).getByLabelText(/Only me/)).toBeChecked();
@@ -232,7 +232,7 @@ describe("SpaceShell", () => {
       vi.mocked(fetchSpace).mockResolvedValue(
         space({ mine: true, visibility: "users", users: ["ops@example.com", "qa@example.com"] })
       );
-      vi.mocked(updateSpaceSharing).mockResolvedValue({ visibility: "users", users: ["new@example.com", "two@example.com", "qa@example.com"] });
+      vi.mocked(updateSpaceSharing).mockResolvedValue({ visibility: "users", users: ["new@example.com", "two@example.com", "qa@example.com"], delegate_access: false, delegation_suspended: false });
       renderShell();
       const dialog = await openSharing();
       const input = within(dialog).getByLabelText("Email addresses to add");
@@ -268,7 +268,7 @@ describe("SpaceShell", () => {
 
     it("turns comma-separated input into pills, and Backspace drops the last one", async () => {
       vi.mocked(fetchSpace).mockResolvedValue(space({ mine: true, visibility: "users", users: ["qa@example.com"] }));
-      vi.mocked(updateSpaceSharing).mockResolvedValue({ visibility: "users", users: ["a@example.com", "qa@example.com"] });
+      vi.mocked(updateSpaceSharing).mockResolvedValue({ visibility: "users", users: ["a@example.com", "qa@example.com"], delegate_access: false, delegation_suspended: false });
       renderShell();
       const dialog = await openSharing();
       const input = within(dialog).getByLabelText("Email addresses to add") as HTMLInputElement;
