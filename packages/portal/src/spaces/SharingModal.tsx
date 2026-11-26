@@ -1,7 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { Modal } from "../components/ui/Modal";
 import { Button } from "../components/ui/Button";
-import { SpaceApiError, updateSpaceSharing, type SpaceSharing, type SpaceVisibility } from "../spaces-api";
+import { Switch } from "../components/ui/Switch";
+import {
+  DELEGATION_ERROR_CODES,
+  SpaceApiError,
+  fetchSpace,
+  updateSpaceSharing,
+  type SpaceDetail,
+  type SpaceSharing,
+  type SpaceSharingChange,
+  type SpaceVisibility,
+} from "../spaces-api";
+import { SpaceToolList } from "./ToolList";
 
 const EMAIL = /^[^\s@]+@[^\s@]+$/;
 
@@ -23,21 +34,35 @@ export function splitEmails(text: string): string[] {
   );
 }
 
+const LENT = "Viewers can call these with your access, with any input.";
+
+/** Copy for a refused save. TOOLS_CHANGED is handled by the caller. */
+function saveErrorMessage(e: unknown, choice: SpaceVisibility): string {
+  if (!(e instanceof SpaceApiError)) return "Could not save. Try again.";
+  if (e.code === DELEGATION_ERROR_CODES.NOT_ALLOWED) {
+    return choice === "private"
+      ? "Delegated access needs a Space shared with specific people or everyone signed in."
+      : "An admin has not allowed you to delegate access. Ask an admin to allow it.";
+  }
+  if (e.code === "CONFLICT") return "This Space changed while you were editing. Try again.";
+  return e.message;
+}
+
 export function SharingModal({
   open,
-  spaceName,
-  visibility,
-  users,
+  space,
   onClose,
   onSaved,
 }: {
   open: boolean;
-  spaceName: string;
-  visibility: SpaceVisibility;
-  users: string[];
+  /** The owner's view of the Space. */
+  space: SpaceDetail;
   onClose: () => void;
   onSaved: (sharing: SpaceSharing) => void;
 }) {
+  const visibility = space.visibility;
+  const users = space.users ?? [];
+  const wasOn = space.delegate_access === true;
   const [choice, setChoice] = useState<SpaceVisibility>(visibility);
   const [list, setList] = useState<string[]>(users);
   const [draft, setDraft] = useState("");
@@ -47,6 +72,12 @@ export function SharingModal({
   const [inputError, setInputError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [delegate, setDelegate] = useState(wasOn);
+  // The tool list the owner is reviewing: the Space as opened, or a fresh copy
+  // after the server said the list changed (TOOLS_CHANGED).
+  const [latest, setLatest] = useState<SpaceDetail>(space);
+  const [step, setStep] = useState<"edit" | "confirm">("edit");
+  const [notice, setNotice] = useState<string | null>(null);
 
   // Start from the saved settings each time the dialog opens, and only then:
   // the parent passes a fresh `users` array on every render, so depending on it
@@ -59,6 +90,10 @@ export function SharingModal({
     setPills([]);
     setInputError(null);
     setSaveError(null);
+    setDelegate(wasOn);
+    setLatest(space);
+    setStep("edit");
+    setNotice(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -100,6 +135,62 @@ export function SharingModal({
 
   const remove = (email: string) => setList((prev) => prev.filter((e) => e !== email));
 
+  const canDelegate = latest.can_delegate === true;
+  // Shown with the permission, or while it is still on after a revoke so the
+  // owner can turn it off.
+  const showDelegate = canDelegate || wasOn;
+  const isPrivate = choice === "private";
+  const suspended = wasOn && latest.delegation_suspended === true;
+  // Turning it on needs the second step; resuming a paused one goes through
+  // "Confirm tools".
+  const needsConfirm = delegate && !wasOn;
+
+  const chooseAudience = (v: SpaceVisibility) => {
+    setChoice(v);
+    // Only me cannot be delegated: the server resets it, so the switch does too.
+    if (v === "private") setDelegate(false);
+  };
+
+  const submit = async (confirmDelegation: boolean) => {
+    const before = new Set(users);
+    const after = new Set(list);
+    const add_users = list.filter((e) => !before.has(e));
+    const remove_users = users.filter((e) => !after.has(e));
+    const change: SpaceSharingChange = {
+      ...(choice !== visibility ? { visibility: choice } : {}),
+      ...(add_users.length ? { add_users } : {}),
+      ...(remove_users.length ? { remove_users } : {}),
+      ...(confirmDelegation
+        ? { delegate_access: true, tools_hash: latest.tools_hash ?? "" }
+        : wasOn && !delegate
+          ? { delegate_access: false }
+          : {}),
+    };
+    setBusy(true);
+    setSaveError(null);
+    try {
+      const saved = await updateSpaceSharing(space.name, change);
+      onSaved(saved);
+      onClose();
+    } catch (e) {
+      if (e instanceof SpaceApiError && e.code === DELEGATION_ERROR_CODES.TOOLS_CHANGED) {
+        // Show the list as it is now and ask again: never confirm a list the
+        // owner has not seen.
+        try {
+          setLatest(await fetchSpace(space.name));
+          setNotice("The tool list changed while you were reviewing it. Review the new list, then save again.");
+        } catch {
+          setSaveError("The tool list changed. Close and open Sharing again to review it.");
+        }
+        setStep("edit");
+      } else {
+        setSaveError(saveErrorMessage(e, choice));
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const save = async () => {
     if (choice === "users" && (pills.length > 0 || draft.trim() !== "")) {
       setSaveError("Press Add to include the addresses you typed, or clear them.");
@@ -109,26 +200,52 @@ export function SharingModal({
       setSaveError("Add at least one person, or choose another option.");
       return;
     }
-    const before = new Set(users);
-    const after = new Set(list);
-    const add_users = list.filter((e) => !before.has(e));
-    const remove_users = users.filter((e) => !after.has(e));
-    setBusy(true);
-    setSaveError(null);
-    try {
-      const saved = await updateSpaceSharing(spaceName, {
-        ...(choice !== visibility ? { visibility: choice } : {}),
-        ...(add_users.length ? { add_users } : {}),
-        ...(remove_users.length ? { remove_users } : {}),
-      });
-      onSaved(saved);
-      onClose();
-    } catch (e) {
-      setSaveError(e instanceof SpaceApiError ? e.message : "Could not save. Try again.");
-    } finally {
-      setBusy(false);
+    if (needsConfirm) {
+      setSaveError(null);
+      setStep("confirm");
+      return;
     }
+    await submit(false);
   };
+
+  if (step === "confirm") {
+    const audience =
+      choice === "org" ? (
+        <>Everyone signed in who opens <strong>{space.title}</strong> will run its tools as you, with your connected apps.</>
+      ) : (
+        <>
+          The {list.length === 1 ? "person" : `${list.length} people`} you shared <strong>{space.title}</strong> with will
+          run its tools as you, with your connected apps.
+        </>
+      );
+    return (
+      <Modal
+        open={open}
+        onClose={busy ? () => undefined : onClose}
+        title="Delegate your access?"
+        size="lg"
+        className="space-share-modal"
+        footer={
+          <>
+            <Button variant="outline" onClick={() => setStep("edit")} disabled={busy}>Back</Button>
+            <Button variant="danger" onClick={() => void submit(true)} disabled={busy}>
+              {busy ? "Saving..." : "Delegate access"}
+            </Button>
+          </>
+        }
+      >
+        <div className="space-delegate-confirm">
+          <p>{audience}</p>
+          <p className="space-warn-title">{LENT}</p>
+          <SpaceToolList tools={latest.tools} delegation />
+          <p className="space-muted">
+            Every call is logged under both names. Changing the tool list pauses delegation until you confirm again.
+          </p>
+          {saveError && <div className="ui-form-error">{saveError}</div>}
+        </div>
+      </Modal>
+    );
+  }
 
   return (
     <Modal
@@ -153,7 +270,7 @@ export function SharingModal({
               name="space-visibility"
               value={c.value}
               checked={choice === c.value}
-              onChange={() => setChoice(c.value)}
+              onChange={() => chooseAudience(c.value)}
             />
             <span>
               <span className="space-share-choice-label">{c.label}</span>
@@ -234,6 +351,72 @@ export function SharingModal({
           </div>
           <span className="space-muted">Type a comma after each address to make a pill, then press Add. People need a workbench sign-in.</span>
           {inputError && <div className="ui-form-error">{inputError}</div>}
+        </div>
+      )}
+
+      {showDelegate && (
+        <div className="space-share-delegate">
+          <div className="space-share-delegate-head">
+            <span className="space-share-delegate-text">
+              <span id="space-delegate-label" className={`space-share-choice-label${isPrivate ? " is-disabled" : ""}`}>
+                Delegate my access
+              </span>
+              <span id="space-delegate-hint" className="space-muted">
+                {isPrivate
+                  ? "Share with specific people or everyone signed in to delegate access."
+                  : "People who open this Space use your connected apps, not theirs. Every call is logged under both names."}
+              </span>
+              {!canDelegate && (
+                <span className="space-muted">
+                  An admin removed your permission to delegate access, so viewers cannot use it. You can still turn it off.
+                </span>
+              )}
+            </span>
+            <Switch
+              checked={delegate}
+              onChange={(on) => {
+                setDelegate(on);
+                setNotice(null);
+              }}
+              disabled={busy || isPrivate || (!canDelegate && !delegate)}
+              aria-labelledby="space-delegate-label"
+              aria-describedby="space-delegate-hint"
+            />
+          </div>
+
+          {delegate && !wasOn && (
+            <div className="space-warn-box" role="note">
+              <p className="space-warn-title">{LENT}</p>
+              {notice && <p className="space-warn-text"><strong>{notice}</strong></p>}
+              <p className="space-warn-text">
+                This is every tool the Space declares, reads included. The Space's page does not limit what a viewer can
+                send. Save to review and confirm.
+              </p>
+              <SpaceToolList tools={latest.tools} delegation />
+            </div>
+          )}
+
+          {delegate && suspended && (
+            <div className="space-warn-box" role="note">
+              <p className="space-warn-title">The tool list changed. Review and confirm to resume.</p>
+              {notice && <p className="space-warn-text"><strong>{notice}</strong></p>}
+              <p className="space-warn-text">Delegation is paused. {LENT}</p>
+              <SpaceToolList tools={latest.tools} delegation />
+              <div className="space-warn-actions">
+                <Button
+                  variant="danger"
+                  size="sm"
+                  disabled={busy || isPrivate || !canDelegate}
+                  onClick={() => {
+                    setSaveError(null);
+                    setStep("confirm");
+                  }}
+                >
+                  Confirm tools
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

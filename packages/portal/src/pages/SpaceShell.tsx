@@ -281,9 +281,7 @@ function SpaceRunner({
       {space.mine && (
         <SharingModal
           open={sharingOpen}
-          spaceName={space.name}
-          visibility={space.visibility}
-          users={space.users ?? []}
+          space={space}
           onClose={() => setSharingOpen(false)}
           onSaved={onSharingSaved}
         />

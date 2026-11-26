@@ -1496,6 +1496,34 @@ body {
 }
 .space-share-pill-x:hover { opacity: 1; }
 
+/* "Delegate my access" in the sharing dialog, and the warning that lists
+   what it lends. */
+.space-share-delegate {
+  display: grid;
+  gap: var(--s-12);
+  margin-bottom: var(--s-12);
+  padding-top: var(--s-12);
+  border-top: 1px solid var(--border);
+}
+.space-share-delegate-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--s-16); }
+.space-share-delegate-text { display: grid; gap: 2px; min-width: 0; }
+.space-share-delegate-text .space-share-choice-label { font-weight: 500; }
+.space-share-choice-label.is-disabled { color: var(--text-3); }
+.space-warn-box {
+  display: grid;
+  gap: var(--s-8);
+  padding: var(--s-12);
+  border: 1px solid var(--warn-line);
+  border-radius: var(--radius);
+  background: var(--warn-soft);
+}
+.space-warn-box .ui-box { background: var(--surface); }
+.space-warn-title { font-size: 13px; font-weight: 600; color: var(--warn); }
+.space-warn-text { font-size: 13px; color: var(--text-2); }
+.space-warn-actions { display: flex; justify-content: flex-end; }
+.space-delegate-confirm { display: grid; gap: var(--s-12); font-size: 14px; color: var(--text-2); }
+.space-delegate-confirm strong { color: var(--text); }
+
 .space-banners { flex: none; display: grid; }
 .space-banner {
   display: flex;
