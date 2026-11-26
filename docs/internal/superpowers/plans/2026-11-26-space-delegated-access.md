@@ -352,7 +352,7 @@ Commit `feat(spaces): delegation policy`.
 
 The spaces scope already accepts only a portal session (`preHandler` at ~line 129), so this route is the human path.
 
-- Body gains `delegate_access?: boolean` (non-boolean -> 400 `INVALID_ARGS`).
+- Body gains `delegate_access?: boolean` (non-boolean -> 400 `INVALID_ARGS`) and `tools_hash?: string`: the `toolsHash` of the list the owner was shown (GET `/:name` returns `tools_hash` for the owner). Enabling or re-confirming passes it as `expectedToolsHash`; `updateSpaceMeta` returns `"tools_changed"` when it is missing or stale -> 409 `TOOLS_CHANGED` ("The tool list changed. Review it again."), nothing written.
 - If `delegate_access === true`: `mayEnableDelegation(owner, resultingVisibility)`; refusal -> 403 with its code, before any write.
 - Write when **visibility or mode or (delegate_access true, i.e. a re-confirm)** differs: `updateSpaceMeta(name, owner, { visibility, accessMode, confirmDelegation: delegate_access === true })`. (Fixes the old "only when visibility changed" condition at ~line 263.)
 - Audit: ON when turned on or re-confirmed; OFF when turned off; OFF with reason when `modeReset` from a private change.
