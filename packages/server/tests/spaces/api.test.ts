@@ -91,6 +91,11 @@ async function shownConsentHash(user: string, name = "s1"): Promise<string> {
   return detail.statusCode === 200 ? detail.json().consent_hash : "none";
 }
 
+async function revokeConsentOf(user: string, name = "s1") {
+  const res = await app.inject({ method: "DELETE", url: `/api/spaces/${name}/consent`, headers: as(user) });
+  expect(res.statusCode).toBe(200);
+}
+
 /** Approve what the viewer was shown (consent_hash from the detail), as a viewer who has connected everything the Space needs. */
 async function consent(user: string, name = "s1") {
   await connectAllIntegrations(user);
@@ -365,7 +370,7 @@ describe("delegated access in the portal API", () => {
 
   it("granted with a users audience: on, hash pinned, ON row, and the owner's connections count", async () => {
     await grant();
-    await storeToken("u1", "acme-oauth", { accessToken: "tok-abc", scopes: "" } as any);
+    await connectAllIntegrations("u1");
     const conn = (b: any) => b.tools.find((t: any) => t.name === "acmeo_list_things").connected;
     expect(conn(await detail("u2"))).toBe(false);
 
@@ -431,6 +436,7 @@ describe("delegated access in the portal API", () => {
 
   it("a re-confirm after a tool change clears delegation_suspended and writes ON again", async () => {
     await grant();
+    await connectAllIntegrations("u1");
     await enable();
     await upsertSpace({ name: "s1", ownerId: "u1", title: "Items", tools: ["acme_list_items"], visibility: "users" });
     const before = await detail("u1");
@@ -539,19 +545,83 @@ describe("consent", () => {
     expect((await consent("u3")).statusCode).toBe(404);
   });
 
-  it("a delegated Space lets a viewer approve without connecting anything (it runs on the owner's connections)", async () => {
+  const delegate = async () => {
     await setPermission({ userId: "u1", capability: "spaces.delegate_access", effect: "allow", grantedBy: "admin" });
     await updateSpaceMeta("s1", "u1", { accessMode: "owner", confirmDelegation: true, expectedToolsHash: toolsHash(TOOLS) });
-    // u2 has no acme-oauth connection.
-    const ok = await app.inject({ method: "POST", url: "/api/spaces/s1/consent", headers: as("u2"), payload: { consent_hash: await shownConsentHash("u2") } });
-    expect(ok.json()).toEqual({ ok: true });
-    expect((await app.inject({ method: "GET", url: "/api/spaces/s1", headers: as("u2") })).json().consented).toBe(true);
+  };
+  const approveAs = async (user: string) =>
+    app.inject({ method: "POST", url: "/api/spaces/s1/consent", headers: as(user), payload: { consent_hash: await shownConsentHash(user) } });
+  const detailOf = async (user: string) => (await app.inject({ method: "GET", url: "/api/spaces/s1", headers: as(user) })).json();
 
-    // Back to the viewer's own connections: the gate applies again.
+  it("a delegated Space with the owner connected: the viewer approves and calls with no connection of their own", async () => {
+    await delegate();
+    await connectAllIntegrations("u1");
+    // u2 has connected nothing.
+    expect(await detailOf("u2")).toMatchObject({ delegate_access: true, delegation_off: null, consented: false });
+    expect((await approveAs("u2")).json()).toEqual({ ok: true });
+    expect((await detailOf("u2")).consented).toBe(true);
+    const res = await call("u2", { tool: "acmeo_whoami" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ result: { token: "tok-abc" } });
+    expect(await db.all("SELECT user_id FROM connections WHERE user_id = ?", ["u2"])).toEqual([]);
+
+    // Back to the viewer's own connections: the viewer's gate applies again.
     await updateSpaceMeta("s1", "u1", { accessMode: "viewer" });
-    const refused = await app.inject({ method: "POST", url: "/api/spaces/s1/consent", headers: as("u2"), payload: { consent_hash: await shownConsentHash("u2") } });
+    const refused = await approveAs("u2");
     expect(refused.statusCode).toBe(409);
     expect(refused.json().code).toBe("INTEGRATION_NOT_CONNECTED");
+  });
+
+  it("a delegated Space whose owner lacks a connection: the viewer is held at the gate, consented or not", async () => {
+    await delegate();
+    await connectAllIntegrations("u1");
+    // Consent first, while the owner is connected, so the call path is tested with consent in place.
+    expect((await approveAs("u2")).json()).toEqual({ ok: true });
+    await disconnectOauthIntegration("u1");
+    // The viewer's own connections are never what is checked.
+    await connectAllIntegrations("u2");
+
+    const message = "dev@example.com needs to reconnect Acme OAuth before this Space can be used.";
+    const viewer = await detailOf("u2");
+    expect(viewer).toMatchObject({ delegate_access: true, delegation_suspended: false, consented: true });
+    expect(viewer.delegation_off).toEqual({ reason: "owner_not_connected", message });
+
+    await revokeConsentOf("u2");
+    const refused = await approveAs("u2");
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toEqual({ code: "OWNER_NOT_CONNECTED", message });
+    expect((await detailOf("u2")).consented).toBe(false);
+
+    // Reconnected: the gate lifts.
+    await connectOauthIntegration("u1");
+    expect((await detailOf("u2")).delegation_off).toBeNull();
+    expect((await approveAs("u2")).json()).toEqual({ ok: true });
+  });
+
+  it("the gate names each integration the owner is missing, once each", async () => {
+    await delegate();
+    const viewer = await detailOf("u2");
+    expect(viewer.delegation_off).toEqual({
+      reason: "owner_not_connected",
+      message: "dev@example.com needs to reconnect Acme Cookie, Acme OAuth before this Space can be used.",
+    });
+  });
+
+  it("the owner opening their own delegated Space gets their own connect gate, not the delegated one", async () => {
+    await delegate();
+    const owner = await detailOf("u1");
+    expect(owner.delegation_off).toBeNull();
+    const refused = await approveAs("u1");
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().code).toBe("INTEGRATION_NOT_CONNECTED");
+    expect(refused.json().message).toContain("Acme OAuth");
+  });
+
+  it("an ordinary Space ignores the owner's connections: only the viewer's count", async () => {
+    // Owner connected to nothing, viewer to everything.
+    await connectAllIntegrations("u2");
+    expect((await detailOf("u2")).delegation_off).toBeNull();
+    expect((await approveAs("u2")).json()).toEqual({ ok: true });
   });
 
   it("POST refuses with 409 until every integration the Space uses is connected", async () => {
@@ -814,8 +884,11 @@ describe("POST /api/spaces/:name/call, delegated", () => {
     await setShares("s1", "u1", VIEWERS.map(([, e]) => e));
     await grant();
     await enable();
-    for (const [id] of VIEWERS) expect((await consent(id)).statusCode).toBe(200);
+    // The owner is connected to everything the Space uses, or the viewers
+    // could not get past the delegated gate.
     await storeToken("u1", "acme-oauth", { accessToken: "tok-owner", scopes: "" });
+    await connectAllIntegrations("u1");
+    for (const [id] of VIEWERS) expect((await consent(id)).statusCode).toBe(200);
     await storeToken("u2", "acme-oauth", { accessToken: "tok-viewer", scopes: "" });
     await db.exec("DELETE FROM audit_log");
   });
@@ -850,22 +923,41 @@ describe("POST /api/spaces/:name/call, delegated", () => {
     expect((await executeRows()).every((r) => r.user_id === "u1" && r.actor_user_id === null)).toBe(true);
   });
 
-  it("3. owner disconnected while the viewer is connected: 409 delegated, never the viewer's token", async () => {
+  it("3. owner disconnected while the viewer is connected: 409 OWNER_NOT_CONNECTED for every tool, nothing runs, audited", async () => {
     const whoami = vi.spyOn(handlers, "whoami");
+    const list = vi.spyOn(handlers, "list");
     await deleteToken("u1", "acme-oauth");
+    const message = "dev@example.com needs to reconnect Acme OAuth before this Space can be used.";
     const res = await call("u2", { tool: "acmeo_whoami" });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({
-      code: "NOT_CONNECTED",
-      delegated: true,
-      message: "dev@example.com needs to reconnect Acme OAuth.",
+      code: "OWNER_NOT_CONNECTED",
+      reason: "owner_not_connected",
+      message,
       integration: "acme-oauth",
       tool: "acmeo_whoami",
     });
+    // A tool of an integration the owner has connected is refused too: the Space is closed.
+    const other = await call("u2", { tool: "acme_list_items" });
+    expect(other.statusCode).toBe(409);
+    expect(other.json()).toMatchObject({ code: "OWNER_NOT_CONNECTED", message, integration: "acme", tool: "acme_list_items" });
     expect(whoami).not.toHaveBeenCalled();
+    expect(list).not.toHaveBeenCalled();
     expect((await executeRows()).map(row)).toEqual([
-      { user_id: "u1", actor_user_id: "u2", client_name: "space:s1", tool: "acmeo_whoami", success: false, error: "NOT_CONNECTED" },
+      { user_id: "u1", actor_user_id: "u2", client_name: "space:s1", tool: "acmeo_whoami", success: false, error: "OWNER_NOT_CONNECTED" },
+      { user_id: "u1", actor_user_id: "u2", client_name: "space:s1", tool: "acme_list_items", success: false, error: "OWNER_NOT_CONNECTED" },
     ]);
+  });
+
+  it("3a. the owner calling their own delegated Space is not held by the delegated gate", async () => {
+    await consent("u1");
+    await deleteToken("u1", "acme-oauth");
+    await db.exec("DELETE FROM audit_log");
+    expect((await call("u1", { tool: "acme_list_items" })).statusCode).toBe(200);
+    const res = await call("u1", { tool: "acmeo_whoami" });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().code).toBe("NOT_CONNECTED");
+    expect(res.json()).not.toHaveProperty("delegated");
   });
 
   it("3b. owner's grant dead (expired, no refresh token): 409 delegated, never the viewer's token", async () => {
@@ -1003,16 +1095,16 @@ describe("POST /api/spaces/:name/call, delegated", () => {
       recon.mayOwn.mockClear();
     });
 
-    it("owner's session dead: delegated 409, the reconnect runner never starts", async () => {
+    it("owner's session known dead: the Space is held at the owner gate, the reconnect runner never starts", async () => {
       await seedSession("u1");
       await updateReconnectState("u1", COOKIE, { deadAt: Date.now() });
       await seedSession("u2");
       const res = await call("u2", { tool: "acmec_me" });
       expect(res.statusCode).toBe(409);
       expect(res.json()).toEqual({
-        code: "NOT_CONNECTED",
-        delegated: true,
-        message: "dev@example.com needs to reconnect Acme Cookie.",
+        code: "OWNER_NOT_CONNECTED",
+        reason: "owner_not_connected",
+        message: "dev@example.com needs to reconnect Acme Cookie before this Space can be used.",
         integration: COOKIE,
         tool: "acmec_me",
       });

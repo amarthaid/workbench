@@ -59,7 +59,8 @@ interface ErrorBody {
   integration?: string;
   tool?: string;
   retryAfterMs?: number;
-  // DELEGATION_OFF: why ("turned_off" | "tools_changed").
+  // DELEGATION_OFF: why ("turned_off" | "tools_changed"); OWNER_NOT_CONNECTED
+  // on a call: "owner_not_connected", the same reason the detail shows.
   reason?: string;
   // NOT_CONNECTED on a delegated call: the owner must reconnect, not the viewer.
   delegated?: boolean;
@@ -110,6 +111,20 @@ async function unconnectedIntegrations(space: Space, userId: string): Promise<st
     if (!(await isConnected(tool.integration, userId))) seen.set(tool.integration, integ.displayName ?? tool.integration);
   }
   return [...seen.values()];
+}
+
+/**
+ * For a viewer of a delegated Space (delegation in effect, viewer not the
+ * owner): why they cannot enter it yet, when the owner is missing a connection
+ * for any integration the Space uses (same rule as unconnectedIntegrations).
+ * It names the missing integrations, which a viewer needs to understand why
+ * they are held; it says nothing of the owner's permission or account.
+ */
+async function ownerNotConnectedMessage(space: Space, ownerId: string): Promise<string | null> {
+  const missing = await unconnectedIntegrations(space, ownerId);
+  if (missing.length === 0) return null;
+  const ownerEmail = (await ownerEmailOf(space.ownerId)) ?? "The owner";
+  return `${ownerEmail} needs to reconnect ${missing.join(", ")} before this Space can be used.`;
 }
 
 /**
@@ -212,6 +227,11 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
         // Delegated: the tools run with the owner's connections, so that is
         // what "connected" reports.
         const connectedAs = delegation.mode === "owner" ? delegation.runAs : viewer.userId;
+        // A viewer of a delegated Space is held at a gate (not the consent
+        // screen) until the owner has connected everything the Space uses.
+        // The owner opening their own Space gets the ordinary connect gate.
+        const ownerGate =
+          !mine && delegation.mode === "owner" ? await ownerNotConnectedMessage(space, delegation.runAs) : null;
 
         const tools = [];
         for (const name of space.tools) {
@@ -263,7 +283,14 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           delegation_suspended: mine
             ? delegationSuspended(space)
             : delegation.mode === "off" && delegation.reason === "tools_changed",
-          delegation_off: delegation.mode === "off" ? { reason: delegation.reason, message: delegation.message } : null,
+          // Set when a viewer cannot use the Space: delegation off or paused,
+          // or (viewers only) "owner_not_connected" while delegation is in effect.
+          delegation_off:
+            delegation.mode === "off"
+              ? { reason: delegation.reason, message: delegation.message }
+              : ownerGate
+                ? { reason: "owner_not_connected" as const, message: ownerGate }
+                : null,
           // Owner only: the hash of the list shown, sent back to confirm it.
           ...(mine ? { tools_hash: toolsHash(space.tools), can_delegate: ownerCanDelegate === true } : {}),
         };
@@ -403,8 +430,16 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
         }
         // A delegated Space runs with the owner's connections, so the viewer has
         // nothing to connect; the consent they give is for that mode (the hash
-        // covers it). Ordinary Spaces still need every integration connected.
+        // covers it). While delegation is in effect the owner must have
+        // connected everything the Space uses, or nobody else may approve it.
+        // Ordinary Spaces (and the owner's own view) need the viewer's
+        // connections instead.
         const delegatedForViewer = space.accessMode === "owner" && space.ownerId !== viewer.userId;
+        if (delegatedForViewer) {
+          const delegation = await delegationFor(space);
+          const held = delegation.mode === "owner" ? await ownerNotConnectedMessage(space, delegation.runAs) : null;
+          if (held) return fail(reply, 409, { code: "OWNER_NOT_CONNECTED", message: held });
+        }
         const unconnected = delegatedForViewer ? [] : await unconnectedIntegrations(space, viewer.userId);
         if (unconnected.length > 0) {
           return fail(reply, 409, {
@@ -515,6 +550,20 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
             integration: tool.integration,
             tool: toolName,
           });
+        }
+        // The owner is missing a connection the Space uses: the Space is closed
+        // to viewers, whichever tool was asked for, before anything runs.
+        if (delegation.mode === "owner" && actor) {
+          const held = await ownerNotConnectedMessage(space, delegation.runAs);
+          if (held) {
+            return refuse(409, {
+              code: "OWNER_NOT_CONNECTED",
+              reason: "owner_not_connected",
+              message: held,
+              integration: tool.integration,
+              tool: toolName,
+            });
+          }
         }
         if (actor && tool.delegable === false) {
           return refuse(403, {
