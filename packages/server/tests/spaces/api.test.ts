@@ -680,8 +680,9 @@ describe("POST /api/spaces/:name/call", () => {
     const over = await call("u2", { tool: "acme_list_items" });
     expect(over.statusCode).toBe(429);
     expect(over.json()).toMatchObject({ code: "RATE_LIMITED", retryAfterMs: 1000 });
-    // Checks before the limiter still answer first.
-    expect((await call("u2", { tool: "acme_list_items", args: { q: "{{vault:x}}" } })).statusCode).toBe(400);
+    // The limiter runs before the delegation, confirmation and argument
+    // checks, so a looping page cannot get unlimited refusals either.
+    expect((await call("u2", { tool: "acme_list_items", args: { q: "{{vault:x}}" } })).statusCode).toBe(429);
     // Another viewer has their own bucket.
     expect((await call("u1", { tool: "acme_list_items" })).statusCode).toBe(200);
     t += 1000;
@@ -993,7 +994,7 @@ describe("POST /api/spaces/:name/call, delegated", () => {
     expect(await get("u3")).toEqual({ value: "three" });
   });
 
-  it("11. owner bucket: 300 per minute across all viewers, then 429, audited", async () => {
+  it("11. owner bucket: 300 per minute across all viewers, then 429, not audited", async () => {
     const t = 7_000_000;
     setRateNow(() => t);
     // Five viewers use up their own 60 each: 300 on the owner's bucket.
@@ -1006,18 +1007,33 @@ describe("POST /api/spaces/:name/call, delegated", () => {
     const over = await call("u7", { tool: "acme_list_items" });
     expect(over.statusCode).toBe(429);
     expect(over.json()).toMatchObject({ code: "RATE_LIMITED", retryAfterMs: 200 });
-    expect((await executeRows()).map(row)).toEqual([
-      { user_id: "u1", actor_user_id: "u7", client_name: "space:s1", tool: "acme_list_items", success: false, error: "RATE_LIMITED" },
-    ]);
+    // Rate limiting is the one refusal not audited: it is what bounds the log.
+    expect(await executeRows()).toEqual([]);
   });
 
-  it("a delegated viewer's own 429 is audited too", async () => {
+  it("a delegated viewer's own 429 writes no audit row", async () => {
     const t = 8_000_000;
     setRateNow(() => t);
     for (let i = 0; i < RATE_CAPACITY; i++) await call("u2", { tool: "acme_list_items" });
     await db.exec("DELETE FROM audit_log");
     expect((await call("u2", { tool: "acme_list_items" })).statusCode).toBe(429);
-    await expectRefusedRow("acme_list_items", "RATE_LIMITED");
+    expect(await executeRows()).toEqual([]);
+  });
+
+  it("a viewer looping on a paused Space is rate limited: 60 audited refusals, then 429s with no rows", async () => {
+    const t = 9_000_000;
+    setRateNow(() => t);
+    await upsertSpace({ name: "s1", ownerId: "u1", title: "Items", tools: [...TOOLS, "acme_extra"], visibility: "users" });
+    // The tool change also asks for consent again; approve the new list.
+    expect((await consent("u2")).statusCode).toBe(200);
+    for (let i = 0; i < RATE_CAPACITY; i++) {
+      const r = await call("u2", { tool: "acme_list_items" });
+      expect(r.json()).toMatchObject({ code: "DELEGATION_OFF", reason: "tools_changed" });
+    }
+    for (let i = 0; i < 20; i++) expect((await call("u2", { tool: "acme_list_items" })).statusCode).toBe(429);
+    const rows = await executeRows();
+    expect(rows).toHaveLength(RATE_CAPACITY);
+    expect(new Set(rows.map((r) => r.error))).toEqual(new Set(["DELEGATION_OFF"]));
   });
 });
 

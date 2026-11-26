@@ -437,14 +437,30 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           return fail(reply, 404, { code: "TOOL_UNAVAILABLE", message: `${toolName} is not available.`, tool: toolName });
         }
 
-        // 5. Delegation. Decided per call; an owner mode that is no longer valid
+        // 5. The viewer's rate limit, before anything that can be refused and
+        // audited: a page looping on a refusal (a paused delegated Space)
+        // is held to the same 60 a minute, so it cannot flood the owner's
+        // audit log. Rate limiting itself is never audited; it is what bounds
+        // the log.
+        const viewerRate = takeToken(viewer.userId, space.name);
+        if (!viewerRate.ok) {
+          return fail(reply, 429, {
+            code: "RATE_LIMITED",
+            message: "Too many calls. Try again shortly.",
+            retryAfterMs: viewerRate.retryAfterMs,
+            integration: tool.integration,
+            tool: toolName,
+          });
+        }
+
+        // 6. Delegation. Decided per call; an owner mode that is no longer valid
         // is refused, never run with the viewer's own access instead. The
         // owner opening their own Space is never delegation: it is their own
         // access, so it costs no lookup.
         const delegation: DelegationState =
           space.ownerId === viewer.userId ? { mode: "viewer" } : await delegationFor(space);
         const actor = delegation.mode === "viewer" ? undefined : viewer.userId;
-        // Every delegated refusal from here on is audited, as the owner's row
+        // Every delegated refusal from here on (rate limiting aside) is audited, as the owner's row
         // with the viewer as actor, so "every call is audited" holds for
         // refusals too. The actor goes in a copy of the request's audit
         // context, scoped to this write (the AsyncLocalStorage scope ends when
@@ -492,7 +508,7 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           });
         }
 
-        // 6. Destructive calls need the shell's own confirmation.
+        // 7. Destructive calls need the shell's own confirmation.
         if (effectOf(tool) === "destructive" && body.confirmed !== true) {
           return refuse(428, {
             code: "CONFIRMATION_REQUIRED",
@@ -502,8 +518,8 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           });
         }
 
-        // 7. Arguments: an object, with no vault reference anywhere. Vault
-        // references are never resolved for a Space (step 9 passes an empty
+        // 8. Arguments: an object, with no vault reference anywhere. Vault
+        // references are never resolved for a Space (step 10 passes an empty
         // pre-substituted map, and a delegated call never reads a vault);
         // refusing them outright makes that loud.
         const args = body.args === undefined ? {} : body.args;
@@ -519,23 +535,23 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           });
         }
 
-        // 8. Rate limit: the viewer's bucket, and when delegated also the
-        // owner's per Space, so many viewers cannot exhaust the owner's
-        // upstream quota. The viewer's token is spent even when the owner's
-        // bucket then refuses: harmless, the call was attempted either way.
-        const viewerRate = takeToken(viewer.userId, space.name);
-        const rate = viewerRate.ok && actor ? takeOwnerToken(space.ownerId, space.name) : viewerRate;
-        if (!rate.ok) {
-          return refuse(429, {
-            code: "RATE_LIMITED",
-            message: "Too many calls. Try again shortly.",
-            retryAfterMs: rate.retryAfterMs,
-            integration: tool.integration,
-            tool: toolName,
-          });
+        // 9. When delegated, the owner's bucket per Space too, so many viewers
+        // cannot exhaust the owner's upstream quota. Taken last, only for a
+        // call about to run; like the viewer's, not audited.
+        if (actor) {
+          const ownerRate = takeOwnerToken(space.ownerId, space.name);
+          if (!ownerRate.ok) {
+            return fail(reply, 429, {
+              code: "RATE_LIMITED",
+              message: "Too many calls. Try again shortly.",
+              retryAfterMs: ownerRate.retryAfterMs,
+              integration: tool.integration,
+              tool: toolName,
+            });
+          }
         }
 
-        // 9. Run as the viewer, or as the owner with the viewer as actor,
+        // 10. Run as the viewer, or as the owner with the viewer as actor,
         // attributed to the Space in the audit log.
         const audit = currentAuditContext();
         if (audit) audit.client_name = `space:${space.name}`;

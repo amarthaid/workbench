@@ -46,8 +46,12 @@ per person, would double every admin count and make it ambiguous which one is
 the call. Each person's Activity query is `user_id = ? OR actor_user_id = ?`,
 and the row is labelled from the reader's side (`for_me`: someone used my
 access; `by_me`: I used someone else's), naming the other person by email,
-never by id. Refusals from the delegation check onward are audited the same
-way, so "every call is audited" also holds for calls that did not run.
+never by id. Refusals are audited the same way (delegation off, not
+delegable, confirmation needed, bad arguments), except rate limiting, so
+"every call is audited" also holds for calls that did not run. The viewer's
+rate limit is taken before any of those checks: otherwise a page looping on
+a refusal (say, on a paused Space) would write an owner audit row per
+request, unbounded. A 429 writes nothing; it is what bounds the log.
 
 ## No fallback to the viewer
 
