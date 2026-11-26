@@ -132,7 +132,7 @@ const tools: PluginTool[] = [
         tools: checked.tools,
         visibility: args.visibility as Visibility,
       });
-      if (saved === "taken") return { error: "SPACE_NAME_TAKEN" };
+      if (saved.result === "taken") return { error: "SPACE_NAME_TAKEN" };
       if (!(await setShares(args.name, ctx.userId, emails))) return { error: "SPACE_NAME_TAKEN" };
       const { token, expiresAt } = await mint({ owner: ctx.userId, name: args.name, mode: "replace" });
       return { uploadUrl: uploadUrl(token), token, expiresAt, maxBytes: config.JOTS_MAX_BYTES, url: spaceUrl(args.name) };
@@ -216,13 +216,14 @@ const tools: PluginTool[] = [
 
       // Both writes carry the owner predicate: a Space deleted and re-created
       // by someone else since the check above is not touched.
-      const updated = await updateSpaceMeta(args.name, ctx.userId, {
+      const meta = await updateSpaceMeta(args.name, ctx.userId, {
         title: args.title,
         description: args.description,
         tools: toolList,
         visibility,
       });
-      if (!updated) return { error: "FORBIDDEN" };
+      if (!meta) return { error: "FORBIDDEN" };
+      const updated = meta.space;
       if (emails && !(await setShares(args.name, ctx.userId, emails))) return { error: "FORBIDDEN" };
       if (incremental) {
         const changed = await changeShares(

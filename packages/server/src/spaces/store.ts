@@ -14,6 +14,11 @@ import { spacesRoot } from "./dir";
 export type Visibility = "private" | "org" | "users";
 export const VISIBILITIES: readonly Visibility[] = ["private", "org", "users"];
 
+// Whose connections a Space's tool calls run with: the viewer's own (default)
+// or the owner's ("delegated access", turned on by the owner in the portal).
+export type AccessMode = "viewer" | "owner";
+export const ACCESS_MODES: readonly AccessMode[] = ["viewer", "owner"];
+
 // Path segments the server itself owns under /s/.
 export const RESERVED_SPACE_NAMES: ReadonlySet<string> = new Set(["_sdk", "upload"]);
 
@@ -28,6 +33,10 @@ export interface Space {
   description: string | null;
   tools: string[];
   visibility: Visibility;
+  accessMode: AccessMode;
+  // toolsHash(tools) when the owner turned delegation on or last re-confirmed
+  // it; null otherwise. A different current hash suspends delegation.
+  delegatedToolsHash: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -39,6 +48,8 @@ interface SpaceRow {
   description: string | null;
   tools: string;
   visibility: string;
+  access_mode: string | null;
+  delegated_tools_hash: string | null;
   created_at: number | string;
   updated_at: number | string;
 }
@@ -82,12 +93,21 @@ function fromRow(r: SpaceRow): Space {
     description: r.description ?? null,
     tools,
     visibility: (VISIBILITIES as readonly string[]).includes(r.visibility) ? (r.visibility as Visibility) : "private",
+    // Anything unrecognised fails closed to the viewer's own access.
+    accessMode: r.access_mode === "owner" ? "owner" : "viewer",
+    delegatedToolsHash: r.delegated_tools_hash ?? null,
     createdAt: Number(r.created_at),
     updatedAt: Number(r.updated_at),
   };
 }
 
-const COLUMNS = "name, owner_id, title, description, tools, visibility, created_at, updated_at";
+const COLUMNS =
+  "name, owner_id, title, description, tools, visibility, access_mode, delegated_tools_hash, created_at, updated_at";
+
+/** Delegation is on but the tool list changed since the owner confirmed it. */
+export function delegationSuspended(s: Space): boolean {
+  return s.accessMode === "owner" && s.delegatedToolsHash !== toolsHash(s.tools);
+}
 
 export async function getSpace(name: string): Promise<Space | null> {
   if (!isValidSpaceName(name)) return null;
@@ -97,8 +117,14 @@ export async function getSpace(name: string): Promise<Space | null> {
 
 /**
  * Create a Space, or replace the metadata of one `ownerId` already owns.
- * Returns "taken" when another user owns the name. The owner check rides on
- * the upsert itself, so two users racing for a new name cannot both win.
+ * `result` is "taken" when another user owns the name. The owner check rides
+ * on the upsert itself, so two users racing for a new name cannot both win.
+ *
+ * Access mode: a new Space gets `accessMode` (default viewer). On a redeploy,
+ * private always resets it to viewer; otherwise an omitted `accessMode` keeps
+ * the stored mode and tool pin, and a passed one is written with the pin
+ * cleared (only the portal can turn delegation on, via updateSpaceMeta).
+ * `modeReset` is true when the stored row went from owner to viewer.
  */
 export async function upsertSpace(input: {
   name: string;
@@ -107,29 +133,54 @@ export async function upsertSpace(input: {
   description?: string | null;
   tools: readonly string[];
   visibility: Visibility;
-}): Promise<"ok" | "taken"> {
+  accessMode?: AccessMode;
+}): Promise<{ result: "ok" | "taken"; modeReset: boolean }> {
   const t = now();
-  const { changes } = await db.run(
-    `INSERT INTO spaces (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT (name) DO UPDATE SET
-       title = excluded.title,
-       description = excluded.description,
-       tools = excluded.tools,
-       visibility = excluded.visibility,
-       updated_at = excluded.updated_at
-     WHERE spaces.owner_id = excluded.owner_id`,
-    [
-      input.name,
-      input.ownerId,
-      input.title,
-      input.description ?? null,
-      JSON.stringify(normalizeTools(input.tools)),
-      input.visibility,
-      t,
-      t,
-    ]
-  );
-  return changes === 1 ? "ok" : "taken";
+  const mode = input.accessMode ?? null;
+  return db.transaction(async (tx) => {
+    const prev = await tx.get<{ owner_id: string; access_mode: string | null }>(
+      "SELECT owner_id, access_mode FROM spaces WHERE name = ?",
+      [input.name]
+    );
+    // CAST: PostgreSQL cannot infer a type for a bare `? IS NULL`.
+    const row = await tx.get<{ access_mode: string }>(
+      `INSERT INTO spaces (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+       ON CONFLICT (name) DO UPDATE SET
+         title = excluded.title,
+         description = excluded.description,
+         tools = excluded.tools,
+         visibility = excluded.visibility,
+         access_mode = CASE
+           WHEN excluded.visibility = 'private' THEN 'viewer'
+           WHEN CAST(? AS TEXT) IS NULL THEN spaces.access_mode
+           ELSE CAST(? AS TEXT) END,
+         delegated_tools_hash = CASE
+           WHEN excluded.visibility = 'private' THEN NULL
+           WHEN CAST(? AS TEXT) IS NULL THEN spaces.delegated_tools_hash
+           ELSE NULL END,
+         updated_at = excluded.updated_at
+       WHERE spaces.owner_id = excluded.owner_id
+       RETURNING access_mode`,
+      [
+        input.name,
+        input.ownerId,
+        input.title,
+        input.description ?? null,
+        JSON.stringify(normalizeTools(input.tools)),
+        input.visibility,
+        mode ?? "viewer",
+        t,
+        t,
+        mode,
+        mode,
+        mode,
+      ]
+    );
+    if (!row) return { result: "taken" as const, modeReset: false };
+    const modeReset =
+      prev?.owner_id === input.ownerId && prev.access_mode === "owner" && row.access_mode !== "owner";
+    return { result: "ok" as const, modeReset };
+  });
 }
 
 export interface SpaceMetaPatch {
@@ -137,15 +188,28 @@ export interface SpaceMetaPatch {
   description?: string | null;
   tools?: readonly string[];
   visibility?: Visibility;
+  accessMode?: AccessMode;
+  // With accessMode "owner": record the current tool list as the confirmed
+  // one (turn delegation on, or re-confirm it after a tool change). Without
+  // it, "owner" changes nothing.
+  confirmDelegation?: boolean;
 }
 
 /**
  * Apply a partial metadata change as `ownerId`. Unset fields keep their value.
  * The UPDATE carries the owner predicate, so a Space deleted and re-created by
  * someone else between the caller's check and this write is left alone: null
- * when nothing matched (missing, or owned by another user).
+ * when nothing matched (missing, or owned by another user). `modeReset` is
+ * true when the change turned delegation off by going private.
+ *
+ * This writes what it is told: whether the owner may turn delegation on is the
+ * caller's check.
  */
-export async function updateSpaceMeta(name: string, ownerId: string, patch: SpaceMetaPatch): Promise<Space | null> {
+export async function updateSpaceMeta(
+  name: string,
+  ownerId: string,
+  patch: SpaceMetaPatch
+): Promise<{ space: Space; modeReset: boolean } | null> {
   const cur = await getSpace(name);
   if (!cur || cur.ownerId !== ownerId) return null;
   const next: Space = {
@@ -156,11 +220,33 @@ export async function updateSpaceMeta(name: string, ownerId: string, patch: Spac
     visibility: patch.visibility ?? cur.visibility,
     updatedAt: now(),
   };
+  if (next.visibility === "private") {
+    next.accessMode = "viewer";
+    next.delegatedToolsHash = null;
+  } else if (patch.accessMode === "owner" && patch.confirmDelegation) {
+    next.accessMode = "owner";
+    next.delegatedToolsHash = toolsHash(next.tools);
+  } else if (patch.accessMode === "viewer") {
+    next.accessMode = "viewer";
+    next.delegatedToolsHash = null;
+  }
   const { changes } = await db.run(
-    "UPDATE spaces SET title = ?, description = ?, tools = ?, visibility = ?, updated_at = ? WHERE name = ? AND owner_id = ?",
-    [next.title, next.description, JSON.stringify(next.tools), next.visibility, next.updatedAt, name, ownerId]
+    `UPDATE spaces SET title = ?, description = ?, tools = ?, visibility = ?, access_mode = ?, delegated_tools_hash = ?,
+       updated_at = ? WHERE name = ? AND owner_id = ?`,
+    [
+      next.title,
+      next.description,
+      JSON.stringify(next.tools),
+      next.visibility,
+      next.accessMode,
+      next.delegatedToolsHash,
+      next.updatedAt,
+      name,
+      ownerId,
+    ]
   );
-  return changes === 1 ? next : null;
+  if (changes !== 1) return null;
+  return { space: next, modeReset: cur.accessMode === "owner" && next.visibility === "private" };
 }
 
 /** Bump updated_at (a new upload landed). */
@@ -176,9 +262,19 @@ export async function listOwnedSpaces(ownerId: string): Promise<Space[]> {
   return rows.map(fromRow);
 }
 
+/** How many of `ownerId`'s Spaces run with the owner's access (suspended ones included). */
+export async function countDelegatedSpaces(ownerId: string): Promise<number> {
+  const row = await db.get<{ n: number | string }>(
+    "SELECT COUNT(*) AS n FROM spaces WHERE owner_id = ? AND access_mode = 'owner'",
+    [ownerId]
+  );
+  return Number(row?.n ?? 0);
+}
+
 export async function listAllSpaces(): Promise<Array<Space & { ownerEmail: string | null }>> {
   const rows = await db.all<SpaceRow & { owner_email: string | null }>(
-    `SELECT s.name, s.owner_id, s.title, s.description, s.tools, s.visibility, s.created_at, s.updated_at,
+    `SELECT s.name, s.owner_id, s.title, s.description, s.tools, s.visibility, s.access_mode, s.delegated_tools_hash,
+            s.created_at, s.updated_at,
             u.email AS owner_email
        FROM spaces s LEFT JOIN users u ON u.id = s.owner_id
       ORDER BY s.updated_at DESC, s.name ASC`

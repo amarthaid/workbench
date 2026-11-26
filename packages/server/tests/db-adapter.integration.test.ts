@@ -21,6 +21,7 @@ import path from "path";
 import { applySchema, createDb } from "../src/db";
 import type { DbAdapter } from "../src/db-adapter";
 import { can, clearPermission, listPermissions, setPermission } from "../src/permissions/store";
+import { countDelegatedSpaces, delegationSuspended, getSpace, toolsHash, updateSpaceMeta, upsertSpace } from "../src/spaces/store";
 
 // Modules that use the process-wide `db` (the permissions store) run against
 // the backend under test by pointing this holder at it. Unset, the real `db`
@@ -321,6 +322,40 @@ for (const backend of backends) {
           ["u2"]
         );
         expect(row).toEqual({ user_id: "u1", actor_user_id: "u2", actor_email: "qa@example.com" });
+      });
+    });
+
+    // The CASE with a NULL-able placeholder (PostgreSQL needs a type for it),
+    // ON CONFLICT ... RETURNING, and the read-then-upsert transaction.
+    describe("spaces access mode", () => {
+      beforeAll(() => {
+        target.current = db;
+      });
+      afterAll(() => {
+        target.current = null;
+      });
+      beforeEach(async () => {
+        await db.run("DELETE FROM spaces");
+      });
+      const base = { name: "s1", ownerId: "u1", title: "T", tools: ["acme_list"], visibility: "org" as const };
+
+      it("round-trips access_mode and delegated_tools_hash through the store", async () => {
+        expect(await upsertSpace(base)).toEqual({ result: "ok", modeReset: false });
+        expect(await getSpace("s1")).toMatchObject({ accessMode: "viewer", delegatedToolsHash: null });
+
+        const on = await updateSpaceMeta("s1", "u1", { accessMode: "owner", confirmDelegation: true });
+        expect(on!.modeReset).toBe(false);
+        expect(await getSpace("s1")).toMatchObject({ accessMode: "owner", delegatedToolsHash: toolsHash(base.tools) });
+        expect(await countDelegatedSpaces("u1")).toBe(1);
+
+        // Redeploy without a mode keeps it; another owner is refused.
+        expect(await upsertSpace({ ...base, tools: ["acme_other"] })).toEqual({ result: "ok", modeReset: false });
+        expect(delegationSuspended((await getSpace("s1"))!)).toBe(true);
+        expect(await upsertSpace({ ...base, ownerId: "u2" })).toEqual({ result: "taken", modeReset: false });
+
+        expect(await upsertSpace({ ...base, visibility: "private" })).toEqual({ result: "ok", modeReset: true });
+        expect(await getSpace("s1")).toMatchObject({ accessMode: "viewer", delegatedToolsHash: null });
+        expect(await countDelegatedSpaces("u1")).toBe(0);
       });
     });
   });

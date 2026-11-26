@@ -2,6 +2,7 @@ import { db } from "../db";
 import { auditLogger } from "../audit/logger";
 import { capabilityDef, type Effect } from "../permissions/capabilities";
 import { clearPermission, listPermissions, setPermission, type PermissionView } from "../permissions/store";
+import { countDelegatedSpaces } from "../spaces/store";
 import type { AdminActor } from "../api/admin-scope";
 
 type Target = { id: string; email: string | null };
@@ -41,9 +42,8 @@ async function audit(
 export async function getUserPermissions(id: string): Promise<PermissionsResult> {
   const target = await findUser(id);
   if (!target) return NOT_FOUND;
-  // Spaces this user currently shares with delegated access. The count comes
-  // from spaces.access_mode, which is added with that column.
-  const delegatedSpaces = 0;
+  // Spaces this user currently shares with delegated access.
+  const delegatedSpaces = await countDelegatedSpaces(target.id);
   return { ok: true, view: { permissions: await listPermissions(target.id), delegatedSpaces } };
 }
 

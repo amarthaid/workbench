@@ -366,6 +366,8 @@ async function initSqliteSchema(db: DbAdapter): Promise<void> {
     "ALTER TABLE audit_log ADD COLUMN client_name TEXT",
     "ALTER TABLE audit_log ADD COLUMN actor_user_id TEXT",
     "ALTER TABLE audit_log ADD COLUMN actor_email TEXT",
+    "ALTER TABLE spaces ADD COLUMN access_mode TEXT NOT NULL DEFAULT 'viewer'",
+    "ALTER TABLE spaces ADD COLUMN delegated_tools_hash TEXT",
   ]) {
     try {
       await db.exec(stmt);
@@ -414,6 +416,8 @@ async function initPostgresSchema(db: DbAdapter): Promise<void> {
     ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS client_name TEXT;
     ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS actor_user_id TEXT;
     ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS actor_email TEXT;
+    ALTER TABLE spaces ADD COLUMN IF NOT EXISTS access_mode TEXT NOT NULL DEFAULT 'viewer';
+    ALTER TABLE spaces ADD COLUMN IF NOT EXISTS delegated_tools_hash TEXT;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_keycloak_sub ON users(keycloak_sub) WHERE keycloak_sub IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_users_api_key_sha ON users(api_key_sha) WHERE api_key_sha IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_log(actor_user_id, created_at);

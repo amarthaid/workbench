@@ -35,6 +35,7 @@ vi.mock("../src/auth/users", async (orig) => ({
 import { registerAdminRoutes } from "../src/api/admin-routes";
 import { db } from "../src/db";
 import { can } from "../src/permissions/store";
+import { updateSpaceMeta, upsertSpace } from "../src/spaces/store";
 import { CAPABILITIES, type CapabilityDef } from "../src/permissions/capabilities";
 
 const ADMIN = { authorization: "Bearer admin-jwt" };
@@ -60,7 +61,7 @@ async function auditRows() {
 }
 
 beforeEach(async () => {
-  for (const t of ["audit_log", "user_permissions", "users"]) {
+  for (const t of ["audit_log", "user_permissions", "users", "spaces"]) {
     await db.exec(`DELETE FROM ${t}`);
   }
   const now = Math.floor(Date.now() / 1000);
@@ -118,6 +119,23 @@ describe("GET /api/admin/users/:id/permissions", () => {
         grantedAt: null,
       },
     ]);
+  });
+});
+
+describe("delegatedSpaces", () => {
+  it("counts only this user's Spaces in owner mode", async () => {
+    const space = (name: string, ownerId: string) =>
+      upsertSpace({ name, ownerId, title: "T", tools: ["acme_list"], visibility: "org" });
+    await space("dev-on", "user-dev");
+    await space("dev-on-2", "user-dev");
+    await space("dev-off", "user-dev");
+    await space("admin-on", "user-admin");
+    for (const [name, owner] of [["dev-on", "user-dev"], ["dev-on-2", "user-dev"], ["admin-on", "user-admin"]]) {
+      await updateSpaceMeta(name, owner, { accessMode: "owner", confirmDelegation: true });
+    }
+    // Suspended by a tool change: still delegated, so still counted.
+    await updateSpaceMeta("dev-on-2", "user-dev", { tools: ["acme_other"] });
+    expect(JSON.parse((await call("GET", BASE)).body).delegatedSpaces).toBe(2);
   });
 });
 
