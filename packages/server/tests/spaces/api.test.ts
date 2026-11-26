@@ -269,6 +269,22 @@ describe("consent", () => {
     expect(ok.json()).toEqual({ ok: true });
   });
 
+  it("a change of access mode invalidates it, both ways", async () => {
+    await consent("u2");
+    expect((await call("u2", { tool: "acme_list_items" })).statusCode).toBe(200);
+    await updateSpaceMeta("s1", "u1", { accessMode: "owner", confirmDelegation: true });
+    const flipped = await call("u2", { tool: "acme_list_items" });
+    expect(flipped.statusCode).toBe(403);
+    expect(flipped.json().code).toBe("CONSENT_REQUIRED");
+    expect((await app.inject({ method: "GET", url: "/api/spaces/s1", headers: as("u2") })).json().consented).toBe(false);
+
+    await consent("u2");
+    await updateSpaceMeta("s1", "u1", { accessMode: "viewer" });
+    const back = await call("u2", { tool: "acme_list_items" });
+    expect(back.statusCode).toBe(403);
+    expect(back.json().code).toBe("CONSENT_REQUIRED");
+  });
+
   it("a change to the tool list invalidates it", async () => {
     await consent("u2");
     expect((await call("u2", { tool: "acme_list_items" })).statusCode).toBe(200);

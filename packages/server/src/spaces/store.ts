@@ -397,16 +397,28 @@ export async function getConsentHash(name: string, userId: string): Promise<stri
   return row?.tools_hash ?? null;
 }
 
-/** True when the viewer consented to exactly the Space's current tool list. */
-export async function hasConsent(space: Space, userId: string): Promise<boolean> {
-  return (await getConsentHash(space.name, userId)) === toolsHash(space.tools);
+/**
+ * What a viewer approves: the tool list, whose connections the calls run with
+ * (access mode) and whose Space it is (owner). Any change to one re-asks.
+ */
+export function consentHash(space: Space): string {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify([toolsHash(space.tools), space.accessMode, space.ownerId]))
+    .digest("hex");
 }
 
+/** True when the viewer consented to exactly the Space's current tools, mode and owner. */
+export async function hasConsent(space: Space, userId: string): Promise<boolean> {
+  return (await getConsentHash(space.name, userId)) === consentHash(space);
+}
+
+// The column is still named tools_hash; it holds consentHash(space).
 export async function grantConsent(space: Space, userId: string): Promise<void> {
   await db.run(
     `INSERT INTO space_consents (space_name, user_id, tools_hash, granted_at) VALUES (?, ?, ?, ?)
      ON CONFLICT (space_name, user_id) DO UPDATE SET tools_hash = excluded.tools_hash, granted_at = excluded.granted_at`,
-    [space.name, userId, toolsHash(space.tools), now()]
+    [space.name, userId, consentHash(space), now()]
   );
 }
 

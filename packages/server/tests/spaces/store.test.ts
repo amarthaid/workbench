@@ -26,6 +26,7 @@ import {
   revokeConsent,
   setShares,
   changeShares,
+  consentHash,
   toolsHash,
   updateSpaceMeta,
   upsertSpace,
@@ -164,6 +165,51 @@ describe("spaces/store", () => {
     expect(await hasConsent(changed, "v1")).toBe(false);
     await revokeConsent("s1", "v1");
     expect(await getConsentHash("s1", "v1")).toBeNull();
+  });
+
+  describe("consent covers mode and owner", () => {
+    it("stores the consent hash, not the bare tools hash", async () => {
+      await upsertSpace({ name: "s1", ...base });
+      const s = (await getSpace("s1"))!;
+      await grantConsent(s, "v1");
+      expect(await getConsentHash("s1", "v1")).toBe(consentHash(s));
+      expect(consentHash(s)).not.toBe(toolsHash(s.tools));
+    });
+
+    it("a viewer to owner flip invalidates it", async () => {
+      await upsertSpace({ name: "s1", ...base });
+      await grantConsent((await getSpace("s1"))!, "v1");
+      const on = (await updateSpaceMeta("s1", "u1", { accessMode: "owner", confirmDelegation: true }))!.space;
+      expect(await hasConsent(on, "v1")).toBe(false);
+      expect(await hasConsent((await getSpace("s1"))!, "v1")).toBe(false);
+    });
+
+    it("an owner to viewer flip invalidates it", async () => {
+      await upsertSpace({ name: "s1", ...base });
+      await updateSpaceMeta("s1", "u1", { accessMode: "owner", confirmDelegation: true });
+      await grantConsent((await getSpace("s1"))!, "v1");
+      expect(await hasConsent((await getSpace("s1"))!, "v1")).toBe(true);
+      const off = (await updateSpaceMeta("s1", "u1", { accessMode: "viewer" }))!.space;
+      expect(await hasConsent(off, "v1")).toBe(false);
+    });
+
+    it("a different owner invalidates it", async () => {
+      await upsertSpace({ name: "s1", ...base });
+      const s = (await getSpace("s1"))!;
+      await grantConsent(s, "v1");
+      expect(await hasConsent({ ...s, ownerId: "u9" }, "v1")).toBe(false);
+      expect(consentHash({ ...s, ownerId: "u9" })).not.toBe(consentHash(s));
+    });
+
+    it("a consent recorded as the bare tools hash (before this change) no longer counts", async () => {
+      await upsertSpace({ name: "s1", ...base });
+      const s = (await getSpace("s1"))!;
+      await db.run(
+        "INSERT INTO space_consents (space_name, user_id, tools_hash, granted_at) VALUES (?, ?, ?, ?)",
+        ["s1", "v1", toolsHash(s.tools), 1]
+      );
+      expect(await hasConsent(s, "v1")).toBe(false);
+    });
   });
 
   describe("access mode", () => {
