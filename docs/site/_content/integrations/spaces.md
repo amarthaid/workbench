@@ -23,8 +23,8 @@ Like `jots`, it is an internal plugin: server source rather than `PLUGINS_DIR`, 
 | Tool | Effect | Purpose |
 |---|---|---|
 | `deploy_space` | write | Create or replace a Space. Saves its metadata, returns an upload URL and a single-use token |
-| `update_space` | write | Change title, description, tools, visibility or the share list at once (`add_users` / `remove_users` edit it, `users` replaces it); with `files: true` or `delete`, also mint a patch upload |
-| `list_spaces` | read | List your Spaces. Admins can pass `all: true` to list every Space with its owner |
+| `update_space` | write | Change title, description, tools, visibility or the share list at once (`add_users` / `remove_users` edit it, `users` replaces it); with `files: true` or `delete`, also mint a patch upload. `delegate_access: false` turns [delegated access](#delegated-access) off |
+| `list_spaces` | read | List your Spaces, with `delegate_access`, `delegation_active` and `delegation_suspended`. Admins can pass `all: true` to list every Space with its owner |
 | `list_space_files` | read | List the files of a Space you own |
 | `delete_space` | destructive | Delete a Space, its shares, approvals, stored values and files. Owner or admin |
 
@@ -67,11 +67,49 @@ A viewer opens `/s/<name>` in the portal. The portal shell:
 2. Loads the author's files in an iframe with `sandbox="allow-scripts allow-forms"`.
 3. Answers the page's SDK requests over a `MessageChannel`, and asks the viewer to confirm every `destructive` call. The author cannot turn that confirmation off.
 
-The page never holds a credential. Calls run on the server as the viewer, with the viewer's connections, and are audited with `client_name = "space:<name>"`, so the Activity page shows which Space made each call.
+The page never holds a credential. Calls run on the server as the viewer, with the viewer's connections (or the owner's, with [delegated access](#delegated-access)), and are audited with `client_name = "space:<name>"`, so the Activity page shows which Space made each call.
 
 ### Tool effects
 
 Each tool declares `effect: "read" | "write" | "destructive"`. An unlabelled tool counts as `destructive`. `search_tools` and `get_tool_schema` show the label, so an author can see which calls will prompt the viewer.
+
+## Delegated access
+
+By default a Space runs every call with the viewer's own connections. An owner can instead switch a shared Space to **Delegate my access**: every viewer's calls then run with the owner's connections. Use it for a Space that shows data the viewers cannot reach themselves, such as a team dashboard over the owner's project tracker.
+
+### What it lends
+
+Everything the Space declares, with any input. A viewer holds a portal session and can call `POST /api/spaces/:name/call` directly, so the page's own code and its confirmation dialog do not limit what they send: arguments are free, and `confirmed` is a body field. The owner is shown every declared tool, reads included, before turning it on.
+
+What it does not lend:
+
+- **Vault secrets.** Vault references are refused for every Space call, delegated or not.
+- **Tools marked `delegable: false`.** A tool that changes its own connection state (for example one that rewrites its stored credential) never runs with someone else's access: 403 `TOOL_NOT_DELEGABLE`. The owner's tool list marks them **Owner only**.
+- **Cookie auto-reconnect.** It would type the owner's stored login into the owner's browser on a viewer's behalf, so it is skipped. A delegated call on a dead cookie session answers "the owner needs to reconnect" instead.
+
+### Who can turn it on
+
+1. An admin allows the user: **Admin > Users > Permissions > Delegate access in Spaces > Allow** (see [Per-user permissions](../deploy/admin.md#per-user-permissions)). Without it the switch is hidden.
+2. The owner turns it on in the portal only: open the Space, **Menu > Sharing**, **Delegate my access**. The dialog lists every declared tool and asks a second time (**Delegate your access?**). Widening the audience while it is on (specific people to everyone signed in) asks again the same way.
+3. The Space must be shared (`org` or `users`). Setting it to **Only me**, by any path, turns delegation off.
+
+An agent cannot turn it on: `deploy_space` and `update_space` refuse `delegate_access: true` with `DELEGATION_PORTAL_ONLY`, so a prompt-injected owner agent cannot lend the owner's access. `delegate_access: false` is accepted.
+
+### Pinned to the reviewed tool list
+
+Turning it on records the hash of the tool list the owner saw (the portal sends it back as `tools_hash`; a stale one is 409 `TOOLS_CHANGED`). When the tool list changes afterwards, delegation **pauses**: viewers get `DELEGATION_OFF` with reason `tools_changed`, and the owner sees **The tool list changed. Review and confirm to resume.** in the Sharing dialog. A redeploy that restores the confirmed list resumes it. `deploy_space` and `update_space` answer `delegation_suspended: true` when their change paused it.
+
+### Consent
+
+A viewer's approval covers the tool list, the access mode and the owner. Turning delegation on or off asks every viewer to approve again, and the consent screen says **These tools run with <owner>'s access, not yours.** The owner is never re-asked for a mode change (their own calls always run as themselves), only for a tool list change.
+
+### While it runs
+
+- The viewer's top bar reads **Using <owner>'s delegated access**, and a destructive call asks **Run <tool> as <owner>?**.
+- Every call, and every refusal from the delegation check on, is one audit row owned by both people: `user_id` is whose access ran (the owner) and the actor is who triggered it (the viewer). Both see it in their own Activity page, tagged **Delegated**: "qa@example.com used your access via Sprint Board" for the owner, "You used dev@example.com's access via Sprint Board" for the viewer. Admin counts are not doubled.
+- Failures never fall back to the viewer's own access. When the owner's permission is removed, the owner is disabled or gone, or the Space is private, calls answer 403 `DELEGATION_OFF` (reason `turned_off`) and the viewer sees **Shared access is off**. When the owner's connection is missing or dead, the call answers 409 `NOT_CONNECTED` with `delegated: true` and "<owner> needs to reconnect <app>.", with no connect action for the viewer.
+- Besides each viewer's 60 calls per minute, all viewers together share 300 calls per minute per Space against the owner's connections, so many viewers cannot exhaust the owner's upstream quota. Like the viewer limit, it is counted in each process.
+- The owner opening their own Space always runs as themselves.
 
 ## Serving and isolation
 
@@ -102,14 +140,16 @@ Used by the portal shell. Portal session JWT only (`Authorization: Bearer`); API
 
 | Method and path | Purpose |
 |---|---|
-| `GET /api/spaces` | Spaces the viewer can open, newest first |
-| `GET /api/spaces/:name` | Metadata, tools with `effect` and `connected`, `consented`, `appUrl` |
-| `PATCH /api/spaces/:name/sharing` | Owner only: change `visibility` and add or remove people (`{ visibility?, add_users?, remove_users? }`), same rules as `update_space`; answers `{ visibility, users }` |
-| `POST`, `DELETE /api/spaces/:name/consent` | Approve or revoke the current tool list. Approving is refused with 409 `INTEGRATION_NOT_CONNECTED` while the viewer has not connected an integration the Space uses |
+| `GET /api/spaces` | Spaces the viewer can open, newest first, with `delegate_access` and `delegation_suspended` |
+| `GET /api/spaces/:name` | Metadata, tools with `effect`, `connected` and `delegable`, `consented`, `appUrl`, `delegate_access`, `delegation_suspended`, `delegation_off`; the owner also gets `tools_hash` and `can_delegate` |
+| `PATCH /api/spaces/:name/sharing` | Owner only: change `visibility`, add or remove people, and turn delegated access on or off (`{ visibility?, add_users?, remove_users?, delegate_access?, tools_hash? }`), same rules as `update_space`; answers `{ visibility, users, delegate_access, delegation_suspended }` |
+| `POST`, `DELETE /api/spaces/:name/consent` | Approve or revoke the current tool list. Approving is refused with 409 `INTEGRATION_NOT_CONNECTED` while the viewer has not connected an integration the Space uses (not checked for a delegated Space, which uses the owner's connections) |
 | `POST /api/spaces/:name/call` | Run a declared tool as the viewer |
 | `GET /api/spaces/:name/kv`, `GET`, `PUT`, `DELETE /api/spaces/:name/kv/:key` | Per-viewer key-value store |
 
-`POST /call` checks, in this order: access (404), consent for the current tool list (403 `CONSENT_REQUIRED`), the tool is declared (403 `TOOL_NOT_DECLARED`), it still exists (404 `TOOL_UNAVAILABLE`), a `destructive` tool carries `confirmed: true` (428 `CONFIRMATION_REQUIRED`), no `{{vault:` anywhere in the arguments (400 `INVALID_ARGS`), and the rate limit of 60 calls per minute per viewer and Space (429 `RATE_LIMITED` with `retryAfterMs`). Then it runs the tool. A missing connection is 409 `NOT_CONNECTED`, rejected arguments 400 `INVALID_ARGS`, anything else 502 `UPSTREAM_ERROR`.
+For the owner, `delegate_access` is the stored setting; for anyone else it is whether delegation is in effect, so a viewer cannot tell why it is off. `connected` reports the owner's connections when delegation is in effect. `delegation_off` is `{ reason: "turned_off" | "tools_changed", message }` or `null`. Turning delegation on needs `tools_hash` (400 `INVALID_ARGS` without it), the admin permission and a shared audience (403 `DELEGATION_NOT_ALLOWED`), and the current tool list (409 `TOOLS_CHANGED`); a concurrent change is 409 `CONFLICT`.
+
+`POST /call` checks, in this order: access (404), consent for the current tool list (403 `CONSENT_REQUIRED`), the tool is declared (403 `TOOL_NOT_DECLARED`), it still exists (404 `TOOL_UNAVAILABLE`), delegated access is in effect when the Space is delegated (403 `DELEGATION_OFF` with `reason`), the tool may run with someone else's access (403 `TOOL_NOT_DELEGABLE`), a `destructive` tool carries `confirmed: true` (428 `CONFIRMATION_REQUIRED`), no `{{vault:` anywhere in the arguments (400 `INVALID_ARGS`), and the rate limit of 60 calls per minute per viewer and Space (429 `RATE_LIMITED` with `retryAfterMs`). Then it runs the tool. A missing connection is 409 `NOT_CONNECTED` (with `delegated: true` when it is the owner's), rejected arguments 400 `INVALID_ARGS`, anything else 502 `UPSTREAM_ERROR`.
 
 Vault references are never resolved for a Space. Otherwise a page could put `{{vault:prod_token}}` in a comment body and ship the viewer's secret upstream.
 
