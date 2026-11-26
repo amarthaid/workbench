@@ -82,7 +82,7 @@ export default function ActivityCard() {
   const applySpace = (name: string) => setFilters((f) => ({ ...f, space: name }));
 
   return (
-    <Box title="Activity">
+    <>
       <ActivityFilters
         value={filters}
         onChange={setFilters}
@@ -96,77 +96,79 @@ export default function ActivityCard() {
         }}
       />
 
-      <CardBody isLoading={query.isLoading} isError={query.isError} label="activity">
-        {!stored ? (
-          <EmptyState message={UNSTORED_MESSAGE} />
-        ) : events.length === 0 ? (
-          <EmptyState message="No tool calls recorded yet." />
-        ) : (
-          <DataTable
-            caption="Tool calls across all users"
-            head={
-              <tr>
-                <th scope="col">Time</th>
-                <th scope="col">User</th>
-                <th scope="col">App</th>
-                <th scope="col">Tool</th>
-                <th scope="col">Duration</th>
-                <th scope="col">Status</th>
-              </tr>
-            }
-          >
-            {events.map((e) => {
-              const app = e.integration ? appFor(e.integration).label : "—";
-              const space = spaceOf(e);
-              return (
-                <tr key={e.id} {...activityRowProps(e.id, selectedId, setSelectedId)}>
-                  <td className="wb-cell-time">{dayLabel(e.created_at)} {timeLabel(e.created_at)}</td>
-                  <td>
-                    {e.user_email ?? "—"}
-                    <RequestOrigin event={e} />
-                  </td>
-                  <td>{app}</td>
-                  <td>
-                    <code className="wb-mono">{e.tool ?? "—"}</code>
-                    {e.delegation ? (
-                      <div className="wb-cell-delegation">
-                        <Badge variant="orange">Delegated</Badge>
-                        <span>
-                          Run by{" "}
-                          {e.actor_email ? (
-                            <button type="button" className="af-link" onClick={() => applyUser(e.actor_email!)}>
-                              {e.actor_email}
-                            </button>
-                          ) : (
-                            "someone"
-                          )}
-                          {space && (
-                            <>
-                              {" · "}
-                              <button type="button" className="af-link" onClick={() => applySpace(space)}>
-                                {space}
-                              </button>
-                            </>
-                          )}
-                        </span>
-                      </div>
-                    ) : (
-                      space && <div className="af-cell-sub">via Space {space}</div>
-                    )}
-                    {!e.success && e.error && <div className="wb-cell-error" title={e.error}>{e.error}</div>}
-                  </td>
-                  <td className="ui-num">{durationLabel(e.duration_ms)}</td>
-                  <td>
-                    <span className={e.success ? "wb-status-ok" : "wb-status-bad"}>
-                      <span aria-hidden>{e.success ? "✓" : "✕"}</span> {e.success ? "Succeeded" : "Failed"}
-                    </span>
-                  </td>
+      <Box title="Activity">
+        <CardBody isLoading={query.isLoading} isError={query.isError} label="activity">
+          {!stored ? (
+            <EmptyState message={UNSTORED_MESSAGE} />
+          ) : events.length === 0 ? (
+            <EmptyState message="No tool calls recorded yet." />
+          ) : (
+            <DataTable
+              caption="Tool calls across all users"
+              head={
+                <tr>
+                  <th scope="col">Time</th>
+                  <th scope="col">User</th>
+                  <th scope="col">App</th>
+                  <th scope="col">Tool</th>
+                  <th scope="col">Duration</th>
+                  <th scope="col">Status</th>
                 </tr>
-              );
-            })}
-          </DataTable>
-        )}
-      </CardBody>
+              }
+            >
+              {events.map((e) => {
+                const app = e.integration ? appFor(e.integration).label : "—";
+                const space = spaceOf(e);
+                return (
+                  <tr key={e.id} {...activityRowProps(e.id, selectedId, setSelectedId)}>
+                    <td className="wb-cell-time">{dayLabel(e.created_at)} {timeLabel(e.created_at)}</td>
+                    <td>
+                      {e.user_email ?? "—"}
+                      <RequestOrigin event={e} />
+                    </td>
+                    <td>{app}</td>
+                    <td>
+                      <code className="wb-mono">{e.tool ?? "—"}</code>
+                      {e.delegation ? (
+                        <div className="wb-cell-delegation">
+                          <Badge variant="orange">Delegated</Badge>
+                          <span>
+                            Run by{" "}
+                            {e.actor_email ? (
+                              <button type="button" className="af-link" onClick={() => applyUser(e.actor_email!)}>
+                                {e.actor_email}
+                              </button>
+                            ) : (
+                              "someone"
+                            )}
+                            {space && (
+                              <>
+                                {" · "}
+                                <button type="button" className="af-link" onClick={() => applySpace(space)}>
+                                  {space}
+                                </button>
+                              </>
+                            )}
+                          </span>
+                        </div>
+                      ) : (
+                        space && <div className="af-cell-sub">via Space {space}</div>
+                      )}
+                      {!e.success && e.error && <div className="wb-cell-error" title={e.error}>{e.error}</div>}
+                    </td>
+                    <td className="ui-num">{durationLabel(e.duration_ms)}</td>
+                    <td>
+                      <span className={e.success ? "wb-status-ok" : "wb-status-bad"}>
+                        <span aria-hidden>{e.success ? "✓" : "✕"}</span> {e.success ? "Succeeded" : "Failed"}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </DataTable>
+          )}
+        </CardBody>
+      </Box>
 
       <ActivityDrawer
         admin
@@ -184,7 +186,7 @@ export default function ActivityCard() {
           </Button>
         </div>
       )}
-    </Box>
+    </>
   );
 }
 
