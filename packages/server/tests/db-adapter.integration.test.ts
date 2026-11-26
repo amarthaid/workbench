@@ -334,6 +334,45 @@ for (const backend of backends) {
       });
     });
 
+    // A delegated call end to end below the route: the owner's token is read,
+    // and the audit row (through the logger's database destination) names
+    // both people.
+    describe("delegated execution", () => {
+      beforeAll(async () => {
+        target.current = db;
+        const { registerFixtures } = await import("./spaces/fixtures");
+        registerFixtures();
+      });
+      afterAll(() => {
+        target.current = null;
+      });
+
+      it("executeSingle with an actor runs on the owner's token and audits both ids", async () => {
+        const { storeToken } = await import("../src/auth/tokens");
+        const { executeSingle } = await import("../src/mcp/meta-tools");
+        const { runWithAuditContext } = await import("../src/audit/context");
+        await db.run("INSERT INTO users (id, email) VALUES (?, ?)", ["u1", "dev@example.com"]);
+        await db.run("INSERT INTO users (id, email) VALUES (?, ?)", ["u2", "qa@example.com"]);
+        await storeToken("u1", "acme-oauth", { accessToken: "tok-owner", scopes: "" });
+        await storeToken("u2", "acme-oauth", { accessToken: "tok-viewer", scopes: "" });
+        const out = await runWithAuditContext({ client_name: "space:s1" }, () =>
+          executeSingle("u1", "acmeo_whoami", {}, new Map(), { actorUserId: "u2" })
+        );
+        expect(out).toEqual({ result: { token: "tok-owner" } });
+        const row = await db.get<Record<string, unknown>>(
+          "SELECT user_id, user_email, actor_user_id, actor_email, client_name, tool FROM audit_log WHERE action = 'EXECUTE'"
+        );
+        expect(row).toEqual({
+          user_id: "u1",
+          user_email: "dev@example.com",
+          actor_user_id: "u2",
+          actor_email: "qa@example.com",
+          client_name: "space:s1",
+          tool: "acmeo_whoami",
+        });
+      });
+    });
+
     // The CASE with a NULL-able placeholder (PostgreSQL needs a type for it),
     // ON CONFLICT ... RETURNING, and the read-then-upsert transaction.
     describe("spaces access mode", () => {

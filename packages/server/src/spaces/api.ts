@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { effectOf } from "@a-workbench/shared";
 import { noteRequestAuth, currentAuditContext } from "../audit/context";
+import { auditLogger } from "../audit/logger";
 import { verifySession } from "../auth/session";
 import { getUserById } from "../auth/users";
 import { getToken } from "../auth/tokens";
@@ -34,7 +35,7 @@ import {
   type Visibility,
 } from "./store";
 import { mintSig } from "./sig";
-import { takeToken } from "./rate-limit";
+import { takeOwnerToken, takeToken } from "./rate-limit";
 
 // The portal API behind the Space shell. Portal session only: the shell is the
 // one place a human drives a Space, and an agent credential (API key, OAuth
@@ -57,6 +58,10 @@ interface ErrorBody {
   integration?: string;
   tool?: string;
   retryAfterMs?: number;
+  // DELEGATION_OFF: why ("turned_off" | "tools_changed").
+  reason?: string;
+  // NOT_CONNECTED on a delegated call: the owner must reconnect, not the viewer.
+  delegated?: boolean;
 }
 
 function fail(reply: FastifyReply, status: number, body: ErrorBody) {
@@ -423,7 +428,52 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           return fail(reply, 404, { code: "TOOL_UNAVAILABLE", message: `${toolName} is not available.`, tool: toolName });
         }
 
-        // 5. Destructive calls need the shell's own confirmation.
+        // 5. Delegation. Decided per call; an owner mode that is no longer valid
+        // is refused, never run with the viewer's own access instead. The
+        // owner opening their own Space is not delegation: it is their access.
+        const delegation = await delegationFor(space);
+        const delegated = delegation.mode !== "viewer" && space.ownerId !== viewer.userId;
+        const actor = delegated ? viewer.userId : undefined;
+        // A refused delegated call is still audited, as the owner's row with
+        // the viewer as actor, so "every call is audited" holds for refusals.
+        const refuse = async (status: number, err: ErrorBody) => {
+          if (actor) {
+            const audit = currentAuditContext();
+            if (audit) {
+              audit.client_name = `space:${space.name}`;
+              audit.actor_user_id = actor;
+            }
+            await auditLogger.log({
+              user_id: space.ownerId,
+              integration: tool.integration,
+              tool: toolName,
+              action: "EXECUTE",
+              success: false,
+              error: err.code,
+            });
+          }
+          return fail(reply, status, err);
+        };
+        if (delegated && delegation.mode === "off") {
+          return refuse(403, {
+            code: "DELEGATION_OFF",
+            reason: delegation.reason,
+            message: delegation.message,
+            integration: tool.integration,
+            tool: toolName,
+          });
+        }
+        if (delegated && tool.delegable === false) {
+          return refuse(403, {
+            code: "TOOL_NOT_DELEGABLE",
+            message: `${toolName} cannot run with someone else's access.`,
+            integration: tool.integration,
+            tool: toolName,
+          });
+        }
+        const runAs = actor ? space.ownerId : viewer.userId;
+
+        // 6. Destructive calls need the shell's own confirmation.
         if (effectOf(tool) === "destructive" && body.confirmed !== true) {
           return fail(reply, 428, {
             code: "CONFIRMATION_REQUIRED",
@@ -433,8 +483,8 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           });
         }
 
-        // 6. Arguments: an object, with no vault reference anywhere. Vault
-        // references are never resolved for a Space (step 8 passes an empty
+        // 7. Arguments: an object, with no vault reference anywhere. Vault
+        // references are never resolved for a Space (step 9 passes an empty
         // pre-substituted map); refusing them outright makes that loud.
         const args = body.args === undefined ? {} : body.args;
         if (!args || typeof args !== "object" || Array.isArray(args)) {
@@ -449,24 +499,47 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           });
         }
 
-        // 7. Rate limit.
+        // 8. Rate limit: the viewer's bucket, and when delegated also the
+        // owner's per Space, so many viewers cannot exhaust the owner's
+        // upstream quota.
         const rate = takeToken(viewer.userId, space.name);
-        if (!rate.ok) {
-          return fail(reply, 429, {
+        const ownerRate = rate.ok && actor ? takeOwnerToken(space.ownerId, space.name) : rate;
+        if (!ownerRate.ok) {
+          return refuse(429, {
             code: "RATE_LIMITED",
             message: "Too many calls. Try again shortly.",
-            retryAfterMs: rate.retryAfterMs,
+            retryAfterMs: ownerRate.retryAfterMs,
             integration: tool.integration,
             tool: toolName,
           });
         }
 
-        // 8. Run as the viewer, attributed to the Space in the audit log.
+        // 9. Run as the viewer, or as the owner with the viewer as actor,
+        // attributed to the Space in the audit log.
         const audit = currentAuditContext();
         if (audit) audit.client_name = `space:${space.name}`;
-        const outcome = await executeSingle(viewer.userId, toolName, args as Record<string, unknown>, new Map());
+        const outcome = await executeSingle(
+          runAs,
+          toolName,
+          args as Record<string, unknown>,
+          new Map(),
+          actor ? { actorUserId: actor } : undefined
+        );
         if ("result" in outcome) return { result: outcome.result };
         if (outcome.error === "NOT_CONNECTED") {
+          if (actor) {
+            // The owner's connection, not the viewer's: no connect action for
+            // the viewer, and no fallback to their own.
+            const ownerEmail = (await ownerEmailOf(space.ownerId)) ?? "The owner";
+            const integrationName = registry.getIntegration(tool.integration)?.displayName ?? tool.integration;
+            return fail(reply, 409, {
+              code: "NOT_CONNECTED",
+              delegated: true,
+              message: `${ownerEmail} needs to reconnect ${integrationName}.`,
+              integration: tool.integration,
+              tool: toolName,
+            });
+          }
           return fail(reply, 409, {
             code: "NOT_CONNECTED",
             message: outcome.message ?? `${tool.integration} is not connected.`,

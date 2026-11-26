@@ -22,17 +22,17 @@ import { setUserDisabled } from "../../src/auth/user-status";
 import { registerSpaceApiRoutes, containsVaultRef } from "../../src/spaces/api";
 import { getSpace, setShares, toolsHash, updateSpaceMeta, upsertSpace, kvPut } from "../../src/spaces/store";
 import { verifySig } from "../../src/spaces/sig";
-import { setPermission } from "../../src/permissions/store";
-import { storeToken } from "../../src/auth/tokens";
+import { clearPermission, setPermission } from "../../src/permissions/store";
+import { deleteToken, storeToken } from "../../src/auth/tokens";
 import { registry } from "../../src/plugins/registry";
 import { auditLogger } from "../../src/audit/logger";
-import { _resetRateLimitForTest, _setNowForTest as setRateNow } from "../../src/spaces/rate-limit";
+import { _resetRateLimitForTest, _setNowForTest as setRateNow, OWNER_RATE_CAPACITY, RATE_CAPACITY } from "../../src/spaces/rate-limit";
 import { handlers, registerFixtures } from "./fixtures";
 import { resetSpacesDb, seedUser, writeSpaceFiles } from "./helpers";
 
 let app: FastifyInstance;
 const tokens: Record<string, string> = {};
-const TOOLS = ["acme_list_items", "acme_delete_item", "acme_unlabelled", "acme_fail", "acmeo_list_things"];
+const TOOLS = ["acme_list_items", "acme_delete_item", "acme_unlabelled", "acme_fail", "acme_set_secret", "acmeo_list_things", "acmeo_whoami"];
 const prevAdmins = config.ADMIN_EMAILS;
 
 function as(user: string) {
@@ -642,6 +642,222 @@ describe("POST /api/spaces/:name/call", () => {
       ["acme_list_items"]
     );
     expect(rows).toEqual([{ user_id: "u2", tool: "acme_list_items", client_name: "space:s1", auth_method: "session" }]);
+  });
+});
+
+describe("POST /api/spaces/:name/call, delegated", () => {
+  const VIEWERS: Array<[string, string]> = [
+    ["u2", "qa@example.com"],
+    ["u3", "ops@example.com"],
+    ["u4", "v4@example.com"],
+    ["u5", "v5@example.com"],
+    ["u6", "v6@example.com"],
+    ["u7", "v7@example.com"],
+  ];
+  const grant = () => setPermission({ userId: "u1", capability: "spaces.delegate_access", effect: "allow", grantedBy: "admin" });
+  const sharing = (payload: Record<string, unknown>) =>
+    app.inject({ method: "PATCH", url: "/api/spaces/s1/sharing", headers: as("u1"), payload });
+  const enable = async () => {
+    const res = await sharing({ delegate_access: true, tools_hash: toolsHash((await getSpace("s1"))!.tools) });
+    expect(res.statusCode).toBe(200);
+  };
+  const executeRows = () =>
+    db.all<{ user_id: string; actor_user_id: string | null; client_name: string | null; tool: string; success: unknown; error: string | null }>(
+      "SELECT user_id, actor_user_id, client_name, tool, success, error FROM audit_log WHERE action = 'EXECUTE' ORDER BY id"
+    );
+  const row = (r: { success: unknown }) => ({ ...r, success: Boolean(Number(r.success)) });
+
+  beforeEach(async () => {
+    await db.exec("DELETE FROM connections");
+    for (const [id, email] of VIEWERS.slice(2)) {
+      await seedUser(id, email);
+      tokens[id] = await signSession({ userId: id, email });
+    }
+    await setShares("s1", "u1", VIEWERS.map(([, e]) => e));
+    await grant();
+    await enable();
+    for (const [id] of VIEWERS) expect((await consent(id)).statusCode).toBe(200);
+    await storeToken("u1", "acme-oauth", { accessToken: "tok-owner", scopes: "" });
+    await storeToken("u2", "acme-oauth", { accessToken: "tok-viewer", scopes: "" });
+    await db.exec("DELETE FROM audit_log");
+  });
+
+  it("1. runs with the owner's token, audited as the owner with the viewer as actor", async () => {
+    const res = await call("u2", { tool: "acmeo_whoami" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ result: { token: "tok-owner" } });
+    expect((await executeRows()).map(row)).toEqual([
+      { user_id: "u1", actor_user_id: "u2", client_name: "space:s1", tool: "acmeo_whoami", success: true, error: null },
+    ]);
+  });
+
+  it("2. not delegated: the viewer's own token, no actor; a not-delegable tool runs as before", async () => {
+    expect((await sharing({ delegate_access: false })).statusCode).toBe(200);
+    await consent("u2");
+    await db.exec("DELETE FROM audit_log");
+    const res = await call("u2", { tool: "acmeo_whoami" });
+    expect(res.json()).toEqual({ result: { token: "tok-viewer" } });
+    expect((await call("u2", { tool: "acme_set_secret" })).statusCode).toBe(200);
+    expect((await executeRows()).map(row)).toEqual([
+      { user_id: "u2", actor_user_id: null, client_name: "space:s1", tool: "acmeo_whoami", success: true, error: null },
+      { user_id: "u2", actor_user_id: null, client_name: "space:s1", tool: "acme_set_secret", success: true, error: null },
+    ]);
+  });
+
+  it("the owner calling their own delegated Space uses their access, not delegation", async () => {
+    await consent("u1");
+    const res = await call("u1", { tool: "acmeo_whoami" });
+    expect(res.json()).toEqual({ result: { token: "tok-owner" } });
+    expect((await call("u1", { tool: "acme_set_secret" })).statusCode).toBe(200);
+    expect((await executeRows()).every((r) => r.user_id === "u1" && r.actor_user_id === null)).toBe(true);
+  });
+
+  it("3. owner disconnected while the viewer is connected: 409 delegated, never the viewer's token", async () => {
+    const whoami = vi.spyOn(handlers, "whoami");
+    await deleteToken("u1", "acme-oauth");
+    const res = await call("u2", { tool: "acmeo_whoami" });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      code: "NOT_CONNECTED",
+      delegated: true,
+      message: "dev@example.com needs to reconnect Acme OAuth.",
+      integration: "acme-oauth",
+      tool: "acmeo_whoami",
+    });
+    expect(whoami).not.toHaveBeenCalled();
+    expect((await executeRows()).map(row)).toEqual([
+      { user_id: "u1", actor_user_id: "u2", client_name: "space:s1", tool: "acmeo_whoami", success: false, error: "NOT_CONNECTED" },
+    ]);
+  });
+
+  it("3b. owner's grant dead (expired, no refresh token): 409 delegated, never the viewer's token", async () => {
+    await storeToken("u1", "acme-oauth", { accessToken: "tok-owner", scopes: "", expiresAt: 1 });
+    const res = await call("u2", { tool: "acmeo_whoami" });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ code: "NOT_CONNECTED", delegated: true, message: "dev@example.com needs to reconnect Acme OAuth." });
+  });
+
+  const expectRefusedRow = async (tool: string, error: string) =>
+    expect((await executeRows()).map(row)).toEqual([
+      { user_id: "u1", actor_user_id: "u2", client_name: "space:s1", tool, success: false, error },
+    ]);
+
+  it("4. grant revoked: 403 DELEGATION_OFF turned_off, the tool never runs, audited with both ids", async () => {
+    const whoami = vi.spyOn(handlers, "whoami");
+    await clearPermission("u1", "spaces.delegate_access");
+    const res = await call("u2", { tool: "acmeo_whoami" });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toEqual({
+      code: "DELEGATION_OFF",
+      reason: "turned_off",
+      message: "This Space's shared access was turned off.",
+      integration: "acme-oauth",
+      tool: "acmeo_whoami",
+    });
+    expect(whoami).not.toHaveBeenCalled();
+    await expectRefusedRow("acmeo_whoami", "DELEGATION_OFF");
+  });
+
+  it("5. owner disabled, or owner row gone: DELEGATION_OFF", async () => {
+    await setUserDisabled("u1", true);
+    let res = await call("u2", { tool: "acmeo_whoami" });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ code: "DELEGATION_OFF", reason: "turned_off" });
+    await expectRefusedRow("acmeo_whoami", "DELEGATION_OFF");
+
+    await setUserDisabled("u1", false);
+    await db.run("DELETE FROM users WHERE id = ?", ["u1"]);
+    await db.exec("DELETE FROM audit_log");
+    res = await call("u2", { tool: "acmeo_whoami" });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ code: "DELEGATION_OFF", reason: "turned_off" });
+    await expectRefusedRow("acmeo_whoami", "DELEGATION_OFF");
+  });
+
+  it("6. tools changed after enable: DELEGATION_OFF tools_changed", async () => {
+    await db.run("UPDATE spaces SET tools = ? WHERE name = ?", [JSON.stringify([...TOOLS].sort().slice(1)), "s1"]);
+    await consent("u2");
+    const res = await call("u2", { tool: "acmeo_whoami" });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({
+      code: "DELEGATION_OFF",
+      reason: "tools_changed",
+      message: "This Space's tools changed. The owner needs to confirm them again.",
+    });
+    await expectRefusedRow("acmeo_whoami", "DELEGATION_OFF");
+  });
+
+  it("7. a tool marked not delegable: 403 TOOL_NOT_DELEGABLE, never runs, audited", async () => {
+    const setSecret = vi.spyOn(handlers, "setSecret");
+    const res = await call("u2", { tool: "acme_set_secret" });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toEqual({
+      code: "TOOL_NOT_DELEGABLE",
+      message: "acme_set_secret cannot run with someone else's access.",
+      integration: "acme",
+      tool: "acme_set_secret",
+    });
+    expect(setSecret).not.toHaveBeenCalled();
+    await expectRefusedRow("acme_set_secret", "TOOL_NOT_DELEGABLE");
+  });
+
+  it("8. an undeclared tool is TOOL_NOT_DECLARED as before, even when delegation is off", async () => {
+    await clearPermission("u1", "spaces.delegate_access");
+    const res = await call("u2", { tool: "acme_ghost" });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().code).toBe("TOOL_NOT_DECLARED");
+    expect(await executeRows()).toEqual([]);
+  });
+
+  it("9. vault references are refused and destructive calls still need confirmation", async () => {
+    const vault = await call("u2", { tool: "acmeo_whoami", args: { q: "{{vault:pw}}" } });
+    expect(vault.statusCode).toBe(400);
+    expect(vault.json()).toMatchObject({ code: "INVALID_ARGS", message: "Vault references are not allowed in a Space." });
+    const unconfirmed = await call("u2", { tool: "acme_delete_item", args: { id: "1" } });
+    expect(unconfirmed.statusCode).toBe(428);
+    expect(unconfirmed.json().code).toBe("CONFIRMATION_REQUIRED");
+    const confirmed = await call("u2", { tool: "acme_delete_item", args: { id: "1" }, confirmed: true });
+    expect(confirmed.statusCode).toBe(200);
+    expect((await executeRows()).map(row)).toEqual([
+      { user_id: "u1", actor_user_id: "u2", client_name: "space:s1", tool: "acme_delete_item", success: true, error: null },
+    ]);
+  });
+
+  it("10. KV stays per viewer", async () => {
+    const put = (u: string, v: unknown) =>
+      app.inject({ method: "PUT", url: "/api/spaces/s1/kv/k", headers: as(u), payload: { value: v } });
+    const get = async (u: string) => (await app.inject({ method: "GET", url: "/api/spaces/s1/kv/k", headers: as(u) })).json();
+    expect((await put("u2", "two")).statusCode).toBe(200);
+    expect((await put("u3", "three")).statusCode).toBe(200);
+    expect(await get("u2")).toEqual({ value: "two" });
+    expect(await get("u3")).toEqual({ value: "three" });
+  });
+
+  it("11. owner bucket: 300 per minute across all viewers, then 429, audited", async () => {
+    const t = 7_000_000;
+    setRateNow(() => t);
+    // Five viewers use up their own 60 each: 300 on the owner's bucket.
+    expect(OWNER_RATE_CAPACITY / RATE_CAPACITY).toBe(5);
+    for (const [id] of VIEWERS.slice(0, 5)) {
+      for (let i = 0; i < RATE_CAPACITY; i++) expect((await call(id, { tool: "acme_list_items" })).statusCode).toBe(200);
+    }
+    await db.exec("DELETE FROM audit_log");
+    // A sixth viewer, with a full bucket of their own, is held by the owner's.
+    const over = await call("u7", { tool: "acme_list_items" });
+    expect(over.statusCode).toBe(429);
+    expect(over.json()).toMatchObject({ code: "RATE_LIMITED", retryAfterMs: 200 });
+    expect((await executeRows()).map(row)).toEqual([
+      { user_id: "u1", actor_user_id: "u7", client_name: "space:s1", tool: "acme_list_items", success: false, error: "RATE_LIMITED" },
+    ]);
+  });
+
+  it("a delegated viewer's own 429 is audited too", async () => {
+    const t = 8_000_000;
+    setRateNow(() => t);
+    for (let i = 0; i < RATE_CAPACITY; i++) await call("u2", { tool: "acme_list_items" });
+    await db.exec("DELETE FROM audit_log");
+    expect((await call("u2", { tool: "acme_list_items" })).statusCode).toBe(429);
+    await expectRefusedRow("acme_list_items", "RATE_LIMITED");
   });
 });
 

@@ -177,6 +177,8 @@ describe("delegable", () => {
     expect(tools.length).toBeGreaterThan(2);
     const notDelegable = tools.filter((t) => t.delegable === false).map((t) => t.name);
     expect(notDelegable).toEqual(["clevertap_set_projects"]);
-    expect(acmePlugin.tools.every((t) => t.delegable === undefined)).toBe(true);
+    expect(acmePlugin.tools.filter((t) => t.delegable !== undefined).map((t) => [t.name, t.delegable])).toEqual([
+      ["acme_set_secret", false],
+    ]);
   });
 });
