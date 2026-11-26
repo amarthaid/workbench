@@ -22,6 +22,9 @@ import { setUserDisabled } from "../../src/auth/user-status";
 import { registerSpaceApiRoutes, containsVaultRef } from "../../src/spaces/api";
 import { getSpace, setShares, toolsHash, updateSpaceMeta, upsertSpace, kvPut } from "../../src/spaces/store";
 import { verifySig } from "../../src/spaces/sig";
+import { setPermission } from "../../src/permissions/store";
+import { storeToken } from "../../src/auth/tokens";
+import { registry } from "../../src/plugins/registry";
 import { _resetRateLimitForTest, _setNowForTest as setRateNow } from "../../src/spaces/rate-limit";
 import { handlers, registerFixtures } from "./fixtures";
 import { resetSpacesDb, seedUser, writeSpaceFiles } from "./helpers";
@@ -166,6 +169,7 @@ describe("GET /api/spaces/:name", () => {
       effect: "read",
       connected: true,
       description: "List items",
+      delegable: true,
     });
     expect(byName.acme_unlabelled.effect).toBe("destructive");
     expect(byName.acmeo_list_things).toMatchObject({ integration: "acme-oauth", connected: false });
@@ -211,7 +215,12 @@ describe("PATCH /api/spaces/:name/sharing", () => {
   it("adds and removes people without touching anyone else", async () => {
     let res = await sharing("u1", { add_users: ["Ops@Example.com", "dev2@example.com"] });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ visibility: "users", users: ["dev2@example.com", "ops@example.com", "qa@example.com"] });
+    expect(res.json()).toEqual({
+      visibility: "users",
+      users: ["dev2@example.com", "ops@example.com", "qa@example.com"],
+      delegate_access: false,
+      delegation_suspended: false,
+    });
     res = await sharing("u1", { remove_users: ["dev2@example.com"] });
     expect(res.json().users).toEqual(["ops@example.com", "qa@example.com"]);
     // The newly added viewer can now open it.
@@ -220,7 +229,7 @@ describe("PATCH /api/spaces/:name/sharing", () => {
 
   it("opens a Space to everyone signed in and back, keeping the list", async () => {
     let res = await sharing("u1", { visibility: "org" });
-    expect(res.json()).toEqual({ visibility: "org", users: ["qa@example.com"] });
+    expect(res.json()).toEqual({ visibility: "org", users: ["qa@example.com"], delegate_access: false, delegation_suspended: false });
     expect((await getSpace("s1"))!.visibility).toBe("org");
     expect((await app.inject({ method: "GET", url: "/api/spaces/s1", headers: as("u3") })).statusCode).toBe(200);
     res = await sharing("u1", { visibility: "private" });
@@ -236,7 +245,7 @@ describe("PATCH /api/spaces/:name/sharing", () => {
     expect(await shares()).toEqual(["qa@example.com"]);
     // Switching to private while removing the last person is fine.
     const ok = await sharing("u1", { visibility: "private", remove_users: ["qa@example.com"] });
-    expect(ok.json()).toEqual({ visibility: "private", users: [] });
+    expect(ok.json()).toEqual({ visibility: "private", users: [], delegate_access: false, delegation_suspended: false });
   });
 
   it("validates input before writing", async () => {
@@ -256,6 +265,157 @@ describe("PATCH /api/spaces/:name/sharing", () => {
     expect(anon.statusCode).toBe(401);
     expect(await shares()).toEqual(["qa@example.com"]);
     expect((await getSpace("s1"))!.visibility).toBe("users");
+  });
+});
+
+describe("delegated access in the portal API", () => {
+  const sharing = (user: string, payload: Record<string, unknown>, name = "s1") =>
+    app.inject({ method: "PATCH", url: `/api/spaces/${name}/sharing`, headers: as(user), payload });
+  const detail = async (user: string) => (await app.inject({ method: "GET", url: "/api/spaces/s1", headers: as(user) })).json();
+  const grant = () => setPermission({ userId: "u1", capability: "spaces.delegate_access", effect: "allow", grantedBy: "admin" });
+  const delegationRows = () =>
+    db.all<{ user_id: string; action: string; tool: string; error: string | null }>(
+      "SELECT user_id, action, tool, error FROM audit_log WHERE action LIKE 'SPACE_DELEGATION_%' ORDER BY id"
+    );
+  const hashNow = async () => toolsHash((await getSpace("s1"))!.tools);
+  const enable = async () => sharing("u1", { delegate_access: true, tools_hash: await hashNow() });
+
+  beforeEach(async () => {
+    await db.exec("DELETE FROM connections");
+  });
+
+  it("GET gives the owner tools_hash and can_delegate, everyone the mode and per-tool delegable", async () => {
+    let owner = await detail("u1");
+    expect(owner).toMatchObject({
+      tools_hash: await hashNow(),
+      can_delegate: false,
+      delegate_access: false,
+      delegation_suspended: false,
+      delegation_off: null,
+    });
+    await grant();
+    expect((await detail("u1")).can_delegate).toBe(true);
+    const viewer = await detail("u2");
+    expect(viewer).toMatchObject({ delegate_access: false, delegation_suspended: false, delegation_off: null });
+    expect(viewer).not.toHaveProperty("tools_hash");
+    expect(viewer).not.toHaveProperty("can_delegate");
+
+    const tool = registry.getTool("acme_fail")!;
+    tool.delegable = false;
+    try {
+      owner = await detail("u1");
+      const byName = Object.fromEntries(owner.tools.map((t: any) => [t.name, t.delegable]));
+      expect(byName).toMatchObject({ acme_fail: false, acme_list_items: true });
+    } finally {
+      delete tool.delegable;
+    }
+  });
+
+  it("not granted: 403 DELEGATION_NOT_ALLOWED, nothing changed, no audit row", async () => {
+    const res = await enable();
+    expect(res.statusCode).toBe(403);
+    expect(res.json().code).toBe("DELEGATION_NOT_ALLOWED");
+    expect((await getSpace("s1"))!.accessMode).toBe("viewer");
+    expect(await delegationRows()).toEqual([]);
+  });
+
+  it("granted with a users audience: on, hash pinned, ON row, and the owner's connections count", async () => {
+    await grant();
+    await storeToken("u1", "acme-oauth", { accessToken: "tok-abc", scopes: "" } as any);
+    const conn = (b: any) => b.tools.find((t: any) => t.name === "acmeo_list_things").connected;
+    expect(conn(await detail("u2"))).toBe(false);
+
+    const res = await enable();
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ visibility: "users", users: ["qa@example.com"], delegate_access: true, delegation_suspended: false });
+    const s = (await getSpace("s1"))!;
+    expect(s.accessMode).toBe("owner");
+    expect(s.delegatedToolsHash).toBe(toolsHash(s.tools));
+    expect(await delegationRows()).toEqual([{ user_id: "u1", action: "SPACE_DELEGATION_ON", tool: "space:s1", error: null }]);
+    expect(conn(await detail("u2"))).toBe(true);
+    expect(await detail("u2")).toMatchObject({ delegate_access: true, delegation_off: null });
+  });
+
+  it("enabling with a missing or stale tools_hash is 409 TOOLS_CHANGED and writes nothing", async () => {
+    await grant();
+    for (const payload of [{ delegate_access: true }, { delegate_access: true, tools_hash: toolsHash(["acme_list_items"]) }]) {
+      const res = await sharing("u1", { ...payload, visibility: "org" });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ code: "TOOLS_CHANGED", message: "The tool list changed. Review it again." });
+    }
+    const s = (await getSpace("s1"))!;
+    expect(s).toMatchObject({ accessMode: "viewer", visibility: "users", delegatedToolsHash: null });
+    expect(await delegationRows()).toEqual([]);
+  });
+
+  it("private + delegate_access true is 403, before any write", async () => {
+    await grant();
+    const res = await sharing("u1", { visibility: "private", delegate_access: true, tools_hash: await hashNow() });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().code).toBe("DELEGATION_NOT_ALLOWED");
+    expect((await getSpace("s1"))!.visibility).toBe("users");
+  });
+
+  it("delegated, then set to only me: back to viewer with a reasoned OFF row", async () => {
+    await grant();
+    await enable();
+    const res = await sharing("u1", { visibility: "private" });
+    expect(res.json()).toMatchObject({ visibility: "private", delegate_access: false });
+    expect((await getSpace("s1"))!.accessMode).toBe("viewer");
+    expect((await delegationRows()).map((r) => [r.action, r.error])).toEqual([
+      ["SPACE_DELEGATION_ON", null],
+      ["SPACE_DELEGATION_OFF", "reason: audience set to only me"],
+    ]);
+  });
+
+  it("a mode-only change (on, then off) is written and audited", async () => {
+    await grant();
+    await enable();
+    const res = await sharing("u1", { delegate_access: false });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ visibility: "users", delegate_access: false });
+    expect((await getSpace("s1"))!).toMatchObject({ accessMode: "viewer", delegatedToolsHash: null });
+    expect((await delegationRows()).map((r) => [r.action, r.error])).toEqual([
+      ["SPACE_DELEGATION_ON", null],
+      ["SPACE_DELEGATION_OFF", null],
+    ]);
+    // Turning off what is already off writes nothing.
+    await sharing("u1", { delegate_access: false });
+    expect(await delegationRows()).toHaveLength(2);
+  });
+
+  it("a re-confirm after a tool change clears delegation_suspended and writes ON again", async () => {
+    await grant();
+    await enable();
+    await upsertSpace({ name: "s1", ownerId: "u1", title: "Items", tools: ["acme_list_items"], visibility: "users" });
+    const before = await detail("u1");
+    expect(before).toMatchObject({ delegate_access: true, delegation_suspended: true, delegation_off: { reason: "tools_changed" } });
+    expect(before.tools_hash).toBe(toolsHash(["acme_list_items"]));
+    const res = await sharing("u1", { delegate_access: true, tools_hash: before.tools_hash });
+    expect(res.json()).toMatchObject({ delegate_access: true, delegation_suspended: false });
+    expect(await detail("u2")).toMatchObject({ delegation_suspended: false, delegation_off: null });
+    expect((await delegationRows()).map((r) => r.action)).toEqual(["SPACE_DELEGATION_ON", "SPACE_DELEGATION_ON"]);
+  });
+
+  it("a revoked permission shows as off to everyone, not as the viewer's access", async () => {
+    await grant();
+    await enable();
+    await db.run("DELETE FROM user_permissions WHERE user_id = ?", ["u1"]);
+    expect(await detail("u2")).toMatchObject({ delegate_access: true, delegation_off: { reason: "turned_off" } });
+    expect((await detail("u1")).can_delegate).toBe(false);
+  });
+
+  it("validates delegate_access and tools_hash, and only the owner may set them", async () => {
+    await grant();
+    const bad = await sharing("u1", { delegate_access: "yes" });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().code).toBe("INVALID_ARGS");
+    expect((await sharing("u1", { delegate_access: true, tools_hash: 5 })).json().code).toBe("INVALID_ARGS");
+    const viewer = await sharing("u2", { delegate_access: true, tools_hash: await hashNow() });
+    expect(viewer.statusCode).toBe(403);
+    expect(viewer.json().code).toBe("FORBIDDEN");
+    expect((await getSpace("s1"))!.accessMode).toBe("viewer");
+    expect(await delegationRows()).toEqual([]);
   });
 });
 

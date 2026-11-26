@@ -8,9 +8,12 @@ import { hasValidCookies } from "../auth/cookie";
 import { registry, type PluginTool } from "../plugins/registry";
 import { isInternalIntegration } from "../plugins/internal-names";
 import { executeSingle } from "../mcp/meta-tools";
+import { can } from "../permissions/store";
 import { canView, type Viewer } from "./access";
+import { delegationFor, mayEnableDelegation, recordDelegationChange } from "./delegation";
 import {
   changeShares,
+  delegationSuspended,
   getShares,
   getSpace,
   grantConsent,
@@ -25,6 +28,7 @@ import {
   ownerEmailOf,
   parseEmails,
   revokeConsent,
+  toolsHash,
   updateSpaceMeta,
   type Space,
   type Visibility,
@@ -187,6 +191,10 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
         const space = await openable(request.params.name, viewer);
         if (!space) return notFound(reply);
         const mine = space.ownerId === viewer.userId;
+        const delegation = await delegationFor(space);
+        // Delegated: the tools run with the owner's connections, so that is
+        // what "connected" reports.
+        const connectedAs = delegation.mode === "owner" ? delegation.runAs : viewer.userId;
 
         const tools = [];
         for (const name of space.tools) {
@@ -201,6 +209,7 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
               connected: false,
               description: "",
               missing: true,
+              delegable: false,
             });
             continue;
           }
@@ -209,8 +218,9 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
             integration: tool.integration,
             integrationName: integ.displayName ?? tool.integration,
             effect: effectOf(tool),
-            connected: await isConnected(tool.integration, viewer.userId),
+            connected: await isConnected(tool.integration, connectedAs),
             description: tool.description ?? "",
+            delegable: tool.delegable !== false,
           });
         }
 
@@ -226,6 +236,13 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           tools,
           consented: await hasConsent(space, viewer.userId),
           appUrl: `/s/${space.name}/app/${mintSig(space.name, viewer.userId)}/`,
+          delegate_access: space.accessMode === "owner",
+          delegation_suspended: delegationSuspended(space),
+          delegation_off: delegation.mode === "off" ? { reason: delegation.reason, message: delegation.message } : null,
+          // Owner only: the hash of the list shown, sent back to confirm it.
+          ...(mine
+            ? { tools_hash: toolsHash(space.tools), can_delegate: await can(viewer.userId, "spaces.delegate_access") }
+            : {}),
         };
       });
 
@@ -237,7 +254,7 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
       // can open it but do not own it.
       scope.patch<{
         Params: { name: string };
-        Body: { visibility?: unknown; add_users?: unknown; remove_users?: unknown };
+        Body: { visibility?: unknown; add_users?: unknown; remove_users?: unknown; delegate_access?: unknown; tools_hash?: unknown };
       }>("/:name/sharing", async (request, reply) => {
         const viewer = viewerOf(request);
         const space = await openable(request.params.name, viewer);
@@ -245,7 +262,13 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
         if (space.ownerId !== viewer.userId) {
           return fail(reply, 403, { code: "FORBIDDEN", message: "Only the owner can change who can open this Space." });
         }
-        const body = (request.body ?? {}) as { visibility?: unknown; add_users?: unknown; remove_users?: unknown };
+        const body = (request.body ?? {}) as {
+          visibility?: unknown;
+          add_users?: unknown;
+          remove_users?: unknown;
+          delegate_access?: unknown;
+          tools_hash?: unknown;
+        };
 
         let visibility: Visibility = space.visibility;
         if (body.visibility !== undefined) {
@@ -267,7 +290,20 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           remove = e.emails;
         }
 
+        if (body.delegate_access !== undefined && typeof body.delegate_access !== "boolean") {
+          return fail(reply, 400, { code: "INVALID_ARGS", message: "delegate_access must be true or false" });
+        }
+        if (body.tools_hash !== undefined && typeof body.tools_hash !== "string") {
+          return fail(reply, 400, { code: "INVALID_ARGS", message: "tools_hash must be a string" });
+        }
+        const delegate = body.delegate_access as boolean | undefined;
+        const reviewedHash = body.tools_hash as string | undefined;
+
         // Validate the outcome before writing anything.
+        if (delegate === true) {
+          const check = await mayEnableDelegation(viewer.userId, visibility);
+          if (!check.ok) return fail(reply, 403, { code: check.code, message: check.message });
+        }
         if (visibility === "users") {
           const removed = new Set(remove);
           const projected = new Set([...(await getShares(space.name)), ...add].filter((x) => !removed.has(x)));
@@ -276,12 +312,33 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           }
         }
 
-        if (visibility !== space.visibility) {
-          const updated = await updateSpaceMeta(space.name, viewer.userId, { visibility });
+        // Write when the audience or the mode changes, or on a confirm (true
+        // while already on is the re-confirm after a tool change).
+        let current: Space = space;
+        const modeOff = delegate === false && space.accessMode === "owner";
+        if (visibility !== space.visibility || delegate === true || modeOff) {
+          const updated = await updateSpaceMeta(space.name, viewer.userId, {
+            visibility,
+            ...(delegate === true
+              ? { accessMode: "owner" as const, confirmDelegation: true, expectedToolsHash: reviewedHash }
+              : delegate === false
+                ? { accessMode: "viewer" as const }
+                : {}),
+          });
           if (updated === "conflict") {
             return fail(reply, 409, { code: "CONFLICT", message: "This Space changed meanwhile. Try again." });
           }
+          if (updated === "tools_changed") {
+            return fail(reply, 409, { code: "TOOLS_CHANGED", message: "The tool list changed. Review it again." });
+          }
           if (!updated) return fail(reply, 403, { code: "FORBIDDEN", message: "Only the owner can change who can open this Space." });
+          current = updated.space;
+          if (delegate === true) {
+            await recordDelegationChange(current, viewer.userId, "on");
+          } else if (updated.modeReset) {
+            // Private forces it off; an explicit false is the owner's choice.
+            await recordDelegationChange(current, viewer.userId, "off", delegate === false ? undefined : "audience set to only me");
+          }
         }
         let users = await getShares(space.name);
         if (add.length > 0 || remove.length > 0) {
@@ -294,7 +351,12 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           }
           users = changed;
         }
-        return { visibility, users };
+        return {
+          visibility,
+          users,
+          delegate_access: current.accessMode === "owner",
+          delegation_suspended: delegationSuspended(current),
+        };
       });
 
       scope.post<{ Params: { name: string } }>("/:name/consent", async (request, reply) => {
