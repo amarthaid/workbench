@@ -257,7 +257,8 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           consent_hash: consentHash(space, viewer.userId),
           appUrl: `/s/${space.name}/app/${mintSig(space.name, viewer.userId)}/`,
           // The owner sees the stored mode; anyone else only whether it is in
-          // effect, so a viewer cannot infer why it is off.
+          // effect. A viewer sees whether it is paused (tools changed) or off,
+          // never the owner's permission or account state.
           delegate_access: mine ? space.accessMode === "owner" : delegation.mode === "owner",
           delegation_suspended: mine
             ? delegationSuspended(space)
