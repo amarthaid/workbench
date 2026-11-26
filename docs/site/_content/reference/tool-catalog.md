@@ -12,7 +12,7 @@ arguments with `get_tool_schema`, and run it with `execute_tools`.
 
 | Integration | Auth | Curl proxy | Tools |
 |---|---|---|---|
-| [`asana`](../integrations/asana.md) | oauth2 | yes | 8 |
+| [`asana`](../integrations/asana.md) | oauth2 | yes | 10 |
 | [`atlassian-bitbucket`](../integrations/atlassian-bitbucket.md) | oauth2 | yes | 20 |
 | [`atlassian-confluence`](../integrations/atlassian-confluence.md) | oauth2 | yes | 6 |
 | [`atlassian-jira`](../integrations/atlassian-jira.md) | oauth2 | yes | 12 |
@@ -39,10 +39,12 @@ silently wins a name collision. Prefix your own tools with your integration name
 | Tool | Purpose |
 |---|---|
 | `asana_create_task` | Create a task in a project; returns its gid |
-| `asana_get_task` | Read one task by gid |
-| `asana_update_task` | Update fields; `completed: true` is how you close a task |
+| `asana_get_task` | Read one task by gid, with dates, sections and custom fields |
+| `asana_update_task` | Update fields, start date, custom fields and section; `completed: true` is how you close a task |
 | `asana_add_comment` | Add a story (comment) to a task |
-| `asana_list_tasks` | Slim task rows for a project |
+| `asana_list_tasks` | Slim task rows for a project, with section and custom fields |
+| `asana_list_subtasks` | A task's subtasks with their dates and custom fields |
+| `asana_list_sections` | Sections of a project |
 | `asana_list_projects` | Slim project rows |
 | `asana_list_teams` | Slim team rows for an organization |
 | `asana_search_users` | Resolve user gids for assignment |

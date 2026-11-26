@@ -51,8 +51,11 @@ describe("asana_update_task", () => {
       notes: "n",
       completed: false,
       assignee: "Test User",
+      start_on: null,
       due_on: "2026-07-01",
       projects: ["P1"],
+      sections: [],
+      custom_fields: {},
       url: "https://app.asana.com/0/1/42",
     });
   });
@@ -64,9 +67,13 @@ describe("asana_get_task", () => {
     await getTask.handler(ctx, { taskGid: "7" });
     const u = new URL(urls[0]);
     expect(u.pathname).toBe("/api/1.0/tasks/7");
-    expect(u.searchParams.get("opt_fields")).toBe(
-      "name,notes,completed,assignee.name,due_on,projects.name,permalink_url"
-    );
+    const fields = (u.searchParams.get("opt_fields") ?? "").split(",");
+    for (const f of [
+      "name", "notes", "completed", "assignee.name", "due_on", "start_on", "projects.name", "permalink_url",
+      "memberships.section.name", "custom_fields.name", "custom_fields.enum_value.name", "custom_fields.date_value",
+    ]) {
+      expect(fields).toContain(f);
+    }
   });
 
   it("truncates notes to 2000 chars", async () => {
@@ -98,11 +105,14 @@ describe("asana_list_tasks shaping", () => {
       ],
     });
     const result = await listTasks.handler(ctx, { projectId: "p1", limit: 10 });
-    expect(urls[0]).toContain("opt_fields=name%2Ccompleted%2Cdue_on%2Cassignee.name");
+    const fields = (new URL(urls[0]).searchParams.get("opt_fields") ?? "").split(",");
+    for (const f of ["name", "completed", "due_on", "start_on", "assignee.name", "memberships.section.name", "custom_fields.name"]) {
+      expect(fields).toContain(f);
+    }
     expect(result).toEqual({
       tasks: [
-        { gid: "1", name: "A", completed: false, due_on: "2026-07-01", assignee: "Z" },
-        { gid: "2", name: "B", completed: true, due_on: null, assignee: null },
+        { gid: "1", name: "A", completed: false, start_on: null, due_on: "2026-07-01", assignee: "Z", section: null, custom_fields: {} },
+        { gid: "2", name: "B", completed: true, start_on: null, due_on: null, assignee: null, section: null, custom_fields: {} },
       ],
     });
   });
