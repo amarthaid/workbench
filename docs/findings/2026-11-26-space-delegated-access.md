@@ -132,7 +132,13 @@ for the owner beyond the call itself:
   references). The result is still scrubbed of values the owner substituted
   in recent calls, but each becomes a fixed `[redacted]`, not
   `{{vault:NAME}}`: a name would tell the viewer what the owner keeps in
-  their vault, and confirm a guessed value.
+  their vault. A residual oracle remains: if a tool echoes its input, a
+  viewer who guesses a recently used value sees it come back as
+  `[redacted]`. Closing that would mean not scrubbing at all, which is worse.
+- **Widening is checked, but not atomically, on `deploy_space`.** An owner
+  enabling delegation in the portal at the same moment their agent redeploys
+  with a wider share list can let that one widening through; `update_space`
+  is covered by the full-row compare-and-set and answers `CONFLICT`.
 - **No custom-app fallback.** Custom apps cannot be declared by a Space anyway,
   and a delegated call does not look for one.
 - **No cookie auto-reconnect.** It would type the owner's stored login into the
