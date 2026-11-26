@@ -11,8 +11,10 @@ import { safeRelPath } from "../../jots/paths";
 import { isAdminEmail } from "../../auth/admin";
 import { getUserById } from "../../auth/users";
 import { mint } from "../../spaces/pending";
+import { recordDelegationChange } from "../../spaces/delegation";
 import {
   changeShares,
+  delegationSuspended,
   deleteSpace,
   getShares,
   getSpace,
@@ -24,6 +26,7 @@ import {
   parseEmails,
   normalizeTools,
   setShares,
+  toolsHash,
   updateSpaceMeta,
   upsertSpace,
   type Visibility,
@@ -78,11 +81,20 @@ function checkTools(tools: unknown): ToolCheck {
 // Same validation the portal sharing endpoint uses.
 const checkEmails = parseEmails;
 
+// An agent can read and turn off delegated access, never turn it on: that is
+// the owner's choice in the portal, where the full tool list is shown.
+const PORTAL_ONLY = {
+  error: "DELEGATION_PORTAL_ONLY",
+  message: "Delegated access can only be turned on by you in the portal (Space > Sharing).",
+};
+const PRIVATE_REASON = "audience set to only me";
+const SUSPENDED_NOTE = "Delegated access is paused until you confirm the new tool list in the portal.";
+
 const HOW_TO_BUILD =
-  "HOW TO BUILD A SPACE: a Space is a static site (root index.html) that runs in a sandboxed iframe inside the workbench portal, as whoever opens it, using THEIR connections. " +
+  "HOW TO BUILD A SPACE: a Space is a static site (root index.html) that runs in a sandboxed iframe inside the workbench portal, for whoever opens it. Its tool calls use the viewer's connections, or the owner's when the owner turned on delegated access in the portal. " +
   "Load the SDK with <script src=\"/s/_sdk/workbench.js\"></script> (absolute path, exactly this), then call tools with `await workbench.call(integration, tool, args)`, e.g. `await workbench.call(\"github\", \"github_list_prs\", { owner: \"acme\", repo: \"demo-repo\" })` (the bare suffix `list_prs` also works). " +
   "Also available: `workbench.me()` -> { email }, and a small per-viewer store: `workbench.store.get(key)`, `.set(key, value)`, `.delete(key)`, `.keys()` (values are JSON, 64 KiB each, 256 KiB per viewer). " +
-  "Failures reject with a WorkbenchError carrying `code` (NOT_CONNECTED, DENIED, TOOL_NOT_DECLARED, TOOL_UNAVAILABLE, INVALID_ARGS, UPSTREAM_ERROR, RATE_LIMITED, CONSENT_REQUIRED, TOO_LARGE, TIMEOUT, UNAUTHENTICATED), `message`, `integration`, `tool`; render them in the page instead of failing silently. " +
+  "Failures reject with a WorkbenchError carrying `code` (NOT_CONNECTED, DENIED, TOOL_NOT_DECLARED, TOOL_UNAVAILABLE, INVALID_ARGS, UPSTREAM_ERROR, RATE_LIMITED, CONSENT_REQUIRED, TOO_LARGE, TIMEOUT, UNAUTHENTICATED, DELEGATION_OFF, TOOL_NOT_DELEGABLE), `message`, `integration`, `tool`; render them in the page instead of failing silently. " +
   "Only tools listed in `tools` can be called; viewers approve that list once, and every destructive call shows them a confirmation they can deny (DENIED). At most 60 calls per minute per viewer. " +
   "The page has NO network access: the CSP sets connect-src 'none' (no fetch/XHR/WebSocket), allows scripts, styles, images and fonts only from this server or inline (data:/blob: for images, fonts and media), and blocks forms, nested frames and remote hosts. So bundle or inline every asset (no CDNs, no Google Fonts), and get all data through workbench.call. " +
   "Relative URLs resolve inside the Space, so ./app.js and ./style.css work. Vault references ({{vault:...}}) are refused in arguments.";
@@ -91,9 +103,10 @@ const tools: PluginTool[] = [
   {
     name: "deploy_space",
     description:
-      "Create or replace a Space: a live web app at /s/<name> in the workbench portal that calls integrations as the viewer. " +
+      "Create or replace a Space: a live web app at /s/<name> in the workbench portal that calls integrations as the viewer (or with the owner's access, when the owner turned on delegated access). " +
       "`tools` lists the fully-qualified registry tool names the page may call (find them with search_tools; internal plugins and custom apps are refused with TOOL_NOT_ALLOWED). " +
       "`visibility`: 'private' (only you), 'org' (any signed-in user of this workbench) or 'users' (the emails in `users`, required then). Deploying over an existing Space replaces its share list with `users` (empty if omitted); to grant or revoke one person use update_space with add_users / remove_users. " +
+      "Delegated access (calls run with your connections) is turned on only by you in the portal; `delegate_access: false` turns it off, `true` is refused (DELEGATION_PORTAL_ONLY). A redeploy keeps the current setting unless the Space becomes private, which turns it off. " +
       "Metadata is saved at once; the files come from an upload: package your site directory as a gzip tarball and POST it to the returned uploadUrl within ~5 min, e.g. `tar czf - -C <dir> . | curl --data-binary @- -H 'Content-Type: application/gzip' <uploadUrl>`. " +
       "The archive root must contain index.html (NO_INDEX otherwise). A new Space is not visible until its first upload lands. Names are global and creator-locked (SPACE_NAME_TAKEN); lowercase letters, digits and hyphens. Limits: <=5 MiB decompressed, <=1000 files. " +
       HOW_TO_BUILD,
@@ -106,8 +119,10 @@ const tools: PluginTool[] = [
       tools: z.array(z.string()),
       visibility: z.enum(["private", "org", "users"]),
       users: z.array(z.string()).optional(),
+      delegate_access: z.boolean().optional(),
     }),
     handler: async (ctx: any, args: any) => {
+      if (args.delegate_access === true) return PORTAL_ONLY;
       if (!isValidSpaceName(args.name)) return { error: "INVALID_NAME", message: "Use lowercase letters, digits and hyphens (not _sdk or upload), at most 64 characters." };
       const existing = await getSpace(args.name);
       if (existing && existing.ownerId !== ctx.userId) return { error: "SPACE_NAME_TAKEN" };
@@ -131,11 +146,27 @@ const tools: PluginTool[] = [
         description: args.description ?? null,
         tools: checked.tools,
         visibility: args.visibility as Visibility,
+        ...(args.delegate_access === false ? { accessMode: "viewer" as const } : {}),
       });
       if (saved.result === "taken") return { error: "SPACE_NAME_TAKEN" };
+      if (saved.modeReset) {
+        await recordDelegationChange({ name: args.name }, ctx.userId, "off", args.delegate_access === false ? undefined : PRIVATE_REASON);
+      }
       if (!(await setShares(args.name, ctx.userId, emails))) return { error: "SPACE_NAME_TAKEN" };
       const { token, expiresAt } = await mint({ owner: ctx.userId, name: args.name, mode: "replace" });
-      return { uploadUrl: uploadUrl(token), token, expiresAt, maxBytes: config.JOTS_MAX_BYTES, url: spaceUrl(args.name) };
+      const out: Record<string, unknown> = {
+        uploadUrl: uploadUrl(token),
+        token,
+        expiresAt,
+        maxBytes: config.JOTS_MAX_BYTES,
+        url: spaceUrl(args.name),
+      };
+      // Still delegated, and this redeploy changed the confirmed tool list.
+      const stillOwner = existing?.accessMode === "owner" && !saved.modeReset;
+      if (stillOwner && !delegationSuspended(existing) && toolsHash(checked.tools) !== existing.delegatedToolsHash) {
+        Object.assign(out, { delegation_suspended: true, note: SUSPENDED_NOTE });
+      }
+      return out;
     },
   },
   {
@@ -145,6 +176,7 @@ const tools: PluginTool[] = [
       "Share list: `add_users` / `remove_users` add or remove emails and leave everyone else on the list; use them to grant or revoke one person. `users` REPLACES the entire list (anyone not in it loses access); it cannot be combined with `add_users` / `remove_users`. list_spaces shows the current list. " +
       "Pass `files: true` (or a `delete` list) to also get a patch upload: the archive you upload is overlaid onto the live files, `delete` paths are removed first, and files you do not mention stay. Upload the same way as deploy_space, e.g. `tar czf - -C <dir> index.html | curl --data-binary @- -H 'Content-Type: application/gzip' <uploadUrl>`. " +
       "Call list_space_files to see the current tree. The merged tree must fit <=5 MiB / <=1000 files and keep a root index.html. " +
+      "`delegate_access: false` turns delegated access off; `true` is refused (DELEGATION_PORTAL_ONLY), only the owner turns it on in the portal. Changing `tools` on a delegated Space pauses delegated access until the owner confirms the new list in the portal (`delegation_suspended: true`). Setting visibility to private turns it off. " +
       "Same build rules as deploy_space: load /s/_sdk/workbench.js, call tools through workbench.call, bundle or inline every asset, no network access.",
     integration: SPACES_INTEGRATION_NAME,
     effect: "write",
@@ -159,8 +191,10 @@ const tools: PluginTool[] = [
       remove_users: z.array(z.string()).optional(),
       files: z.boolean().optional(),
       delete: z.array(z.string()).optional(),
+      delegate_access: z.boolean().optional(),
     }),
     handler: async (ctx: any, args: any) => {
+      if (args.delegate_access === true) return PORTAL_ONLY;
       if (!isValidSpaceName(args.name)) return { error: "INVALID_NAME" };
       const existing = await getSpace(args.name);
       if (!existing) return { error: "NOT_FOUND" };
@@ -221,11 +255,15 @@ const tools: PluginTool[] = [
         description: args.description,
         tools: toolList,
         visibility,
+        ...(args.delegate_access === false ? { accessMode: "viewer" as const } : {}),
       });
       if (meta === "conflict") return { error: "CONFLICT", message: "This Space changed meanwhile. Try again." };
       // "tools_changed" only answers a delegation confirm, which this tool never sends.
       if (!meta || meta === "tools_changed") return { error: "FORBIDDEN" };
       const updated = meta.space;
+      if (meta.modeReset) {
+        await recordDelegationChange(updated, ctx.userId, "off", args.delegate_access === false ? undefined : PRIVATE_REASON);
+      }
       if (emails && !(await setShares(args.name, ctx.userId, emails))) return { error: "FORBIDDEN" };
       if (incremental) {
         const changed = await changeShares(
@@ -248,8 +286,14 @@ const tools: PluginTool[] = [
           tools: updated.tools,
           visibility: updated.visibility,
           users: await getShares(updated.name),
+          delegate_access: updated.accessMode === "owner",
         },
       };
+      // Newly paused by this change (a tool list that differs from the one
+      // the owner confirmed).
+      if (delegationSuspended(updated) && !delegationSuspended(existing)) {
+        Object.assign(result, { delegation_suspended: true, note: SUSPENDED_NOTE });
+      }
       if (args.files === true || args.delete !== undefined) {
         const { token, expiresAt } = await mint({ owner: ctx.userId, name: args.name, mode: "patch", deletes });
         Object.assign(result, { uploadUrl: uploadUrl(token), token, expiresAt, maxBytes: config.JOTS_MAX_BYTES });
@@ -260,7 +304,7 @@ const tools: PluginTool[] = [
   {
     name: "list_spaces",
     description:
-      "List the Spaces you own (name, title, visibility, tools, users (the share list), url, updatedAt; `live` is false until the first upload lands). Admins may pass `all: true` to list every Space with its owner's email.",
+      "List the Spaces you own (name, title, visibility, tools, users (the share list), url, updatedAt; `live` is false until the first upload lands; `delegate_access` is true when calls run with your connections, `delegation_suspended` when the tool list changed since you confirmed it in the portal). Admins may pass `all: true` to list every Space with its owner's email.",
     integration: SPACES_INTEGRATION_NAME,
     effect: "read",
     inputSchema: z.object({ all: z.boolean().optional() }),
@@ -278,6 +322,8 @@ const tools: PluginTool[] = [
             url: spaceUrl(s.name),
             updatedAt: s.updatedAt,
             live: hasFiles(s.name),
+            delegate_access: s.accessMode === "owner",
+            delegation_suspended: delegationSuspended(s),
             ownerEmail: s.ownerEmail,
           }))),
         };
@@ -293,6 +339,8 @@ const tools: PluginTool[] = [
           url: spaceUrl(s.name),
           updatedAt: s.updatedAt,
           live: hasFiles(s.name),
+          delegate_access: s.accessMode === "owner",
+          delegation_suspended: delegationSuspended(s),
         }))),
       };
     },
