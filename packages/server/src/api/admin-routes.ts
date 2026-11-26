@@ -4,6 +4,7 @@ import { db } from "../db";
 import { activeProfiles, profileDirName, profilesBaseDir } from "../auth/profile-chromium";
 import { adminScope, adminActor } from "./admin-scope";
 import { listUsers, disableUser, enableUser, revokeUserKey } from "../admin/users";
+import { getUserPermissions, grantPermission, resetPermission } from "../admin/permissions";
 import { getConfigView, setIntegrationEnabled, setCustomAppsPolicy, setBrowserBlockedDomains } from "../admin/config";
 import { getInstanceInfo } from "../admin/instance";
 import { adminActivity, adminActivityPayload } from "../admin/activity";
@@ -41,6 +42,29 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
         return { ok: true };
       });
     }
+    scope.get<{ Params: { id: string } }>("/users/:id/permissions", async (request, reply) => {
+      const result = await getUserPermissions(request.params.id);
+      if (!result.ok) return reply.status(result.status).send({ error: result.error });
+      return result.view;
+    });
+    scope.put<{ Params: { id: string; capability: string }; Body: unknown }>(
+      "/users/:id/permissions/:capability",
+      async (request, reply) => {
+        const { id, capability } = request.params;
+        const result = await grantPermission(adminActor(request), id, capability, request.body);
+        if (!result.ok) return reply.status(result.status).send({ error: result.error });
+        return { ok: true };
+      }
+    );
+    scope.delete<{ Params: { id: string; capability: string } }>(
+      "/users/:id/permissions/:capability",
+      async (request, reply) => {
+        const { id, capability } = request.params;
+        const result = await resetPermission(adminActor(request), id, capability);
+        if (!result.ok) return reply.status(result.status).send({ error: result.error });
+        return { ok: true };
+      }
+    );
     scope.get("/config", async () => getConfigView());
     scope.put<{ Params: { name: string }; Body: unknown }>("/config/integrations/:name", async (request, reply) => {
       const result = await setIntegrationEnabled(adminActor(request), request.params.name, request.body);
