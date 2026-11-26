@@ -69,3 +69,11 @@
 .af-kv dd { margin: 0; overflow-wrap: anywhere; }
 .af-err { color: var(--danger); font-size: 13px; background: var(--danger-soft); border: 1px solid var(--danger);
   border-radius: var(--radius); padding: var(--s-8); overflow-wrap: anywhere; margin-top: var(--s-8); }
+
+/* Muted sub-line inside a table cell (the stat-note footer style draws a hairline). */
+.af-cell-sub { display: block; font-size: 12px; color: var(--text-3); margin-top: var(--s-4); }
+
+/* The popover hangs below the bar; boxes clip overflow by default, which cut the
+   Apply button off on a short table. */
+.ui-box:has(.af-pop) { overflow: visible; }
+.ui-box:has(.af-pop) > .ui-box-head { border-radius: var(--radius) var(--radius) 0 0; }

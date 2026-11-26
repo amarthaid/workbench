@@ -19,8 +19,11 @@ const first = (v: string | string[] | undefined): string | undefined => (Array.i
 /**
  * Search Spaces by name prefix or title substring for the admin picker.
  * Never loads the whole table: LIMIT limit+1 gives `has_more` without a count.
- * Names are lowercase slugs, so q is lowercased once and compared on both
- * backends; title goes through LOWER() + LIKE ... ESCAPE, which both support.
+ * Names are lowercase slugs, so q is lowercased once. Prefix is LIKE, not a
+ * `name >= q AND name < q + high` range: that comparison follows the column
+ * collation, and PostgreSQL's locale collations ignore punctuation (a name
+ * like `rep_live` was not found by `rep_`). The spaces table is small and the
+ * query is limited, so a scan is fine.
  */
 export async function searchAdminSpaces(
   query: Record<string, string | string[] | undefined>
@@ -35,16 +38,18 @@ export async function searchAdminSpaces(
     if (!/^\d+$/.test(rawLimit) || Number(rawLimit) < 1) return { ok: false, status: 400, error: "invalid_limit" };
     limit = Math.min(Number(rawLimit), SPACE_SEARCH_MAX);
   }
-  const like = `%${q.replace(/[\\%_]/g, "\\$&")}%`;
+  const escaped = q.replace(/[\\%_]/g, "\\$&");
+  const like = `%${escaped}%`;
+  const prefix = `${escaped}%`;
   const rows = await db.all<{ name: string; title: string; owner_email: string | null }>(
     `SELECT s.name, s.title, u.email AS owner_email,
-            CASE WHEN s.name >= ? AND s.name < ? THEN 0 ELSE 1 END AS match_rank
+            CASE WHEN s.name LIKE ? ESCAPE '\\' THEN 0 ELSE 1 END AS match_rank
        FROM spaces s
        LEFT JOIN users u ON u.id = s.owner_id
-      WHERE (s.name >= ? AND s.name < ?) OR LOWER(s.title) LIKE ? ESCAPE '\\'
+      WHERE s.name LIKE ? ESCAPE '\\' OR LOWER(s.title) LIKE ? ESCAPE '\\'
       ORDER BY match_rank, s.name
       LIMIT ?`,
-    [q, q + "￿", q, q + "￿", like, limit + 1]
+    [prefix, prefix, like, limit + 1]
   );
   return {
     ok: true,

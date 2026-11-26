@@ -51,7 +51,10 @@ wire.
 The email and person boxes fetch one capped list and filter it in the browser,
 so typing makes no request. The admin Space search cannot (the list can be
 huge): it waits for 2 characters and a 250 ms pause, aborts a superseded
-request, caches per query, and the server answers with a prefix range on the
-unique `name` index plus a bounded title match, `limit+1` rows for `has_more`,
-no count. Filters are a draft until Apply, so none of this touches the audit
+request, caches per query, and the server answers with a `LIKE` prefix and title
+match over the small `spaces` table, `limit+1` rows for `has_more`, no count.
+A `name >= q AND name < q || high` prefix range was tried first (it is index
+friendly) and failed on PostgreSQL: the comparison follows the column collation,
+which ignores punctuation in locale collations, so `rep_` did not find
+`rep_live` and `rel` missed `release-notes`. SQLite tests alone passed. Filters are a draft until Apply, so none of this touches the audit
 table while typing.

@@ -151,7 +151,7 @@ export default function ActivityCard() {
                         </span>
                       </div>
                     ) : (
-                      space && <div className="ui-stat-note">via Space {space}</div>
+                      space && <div className="af-cell-sub">via Space {space}</div>
                     )}
                     {!e.success && e.error && <div className="wb-cell-error" title={e.error}>{e.error}</div>}
                   </td>
@@ -284,7 +284,7 @@ function RequestOrigin({ event: e }: { event: AdminActivityEvent }) {
   ].filter(Boolean);
   if (parts.length === 0 && !e.user_agent) return null;
   return (
-    <div className="ui-stat-note" title={e.user_agent ?? undefined}>
+    <div className="af-cell-sub" title={e.user_agent ?? undefined}>
       {parts.join(" · ") || "—"}
       {e.user_agent && <span className="ui-sr-only"> · {e.user_agent}</span>}
     </div>

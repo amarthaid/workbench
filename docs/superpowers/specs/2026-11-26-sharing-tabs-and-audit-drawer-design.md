@@ -180,11 +180,14 @@ Admin search rules, to keep the database quiet:
 - A newer keystroke aborts the request still in flight.
 - Results are cached per query string (React Query, long `staleTime`), so
   backspacing or reopening costs nothing.
-- Server: `limit` max 20, `q` max 64 characters. Name prefix is a range
-  (`name >= q AND name < q || high`, on the unique index, case-folded the same
-  on both backends); title is `LOWER(title) LIKE ? ESCAPE '\\'` with `%` and
-  `_` escaped, read from the small `spaces` table under `LIMIT`. Prefix hits
-  sort first. No `total_matches` (a count would scan); `has_more` instead.
+- Server: `limit` max 20, `q` max 64 characters, lowercased (names are lowercase
+  slugs). Name prefix and title substring are both `LIKE ... ESCAPE '\'` with
+  `%`, `_` and `\` escaped; prefix hits sort first, then name. Not an index
+  range on `name`: a `name >= q AND name < q || high` comparison follows the
+  column collation and PostgreSQL's locale collations ignore punctuation (found
+  by running it: `rep_` missed `rep_live`). The `spaces` table is small and the
+  query is `LIMIT`ed (`limit+1` rows for `has_more`, no count), so no index is
+  needed.
 - Empty box on open shows nothing to fetch; an empty-state hint says "Type 2 or
   more characters".
 - Picking a result sets the draft; the activity query changes only on Apply.
@@ -236,7 +239,7 @@ owner (`for_me`): those four are returned as null (decision 8).
   `space` and `auth` then filter inside the date window.
 - The email autocomplete adds no queries per keystroke.
 - The admin Space search adds at most one small, limited query per typing
-  pause, over the `spaces` table only.
+  pause, over the small `spaces` table only.
 
 ## Out of scope
 

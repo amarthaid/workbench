@@ -93,6 +93,15 @@ describe("GET /spaces (admin search)", () => {
     expect(res.json().spaces.map((s: { name: string }) => s.name)).toEqual(["sales-a", "sales-b", "aaa-report"]);
   });
 
+  it("treats a hyphen or underscore in q as part of the prefix", async () => {
+    await seedSpace("rel-desk", "One");
+    await seedSpace("reldesk", "Two");
+    await seedSpace("rel_tool", "Three");
+    const names = async (q: string) => (await get("/api/admin/spaces?q=" + q)).json().spaces.map((s: { name: string }) => s.name);
+    expect(await names("rel-")).toEqual(["rel-desk"]);
+    expect(await names("rel_")).toEqual(["rel_tool"]);
+  });
+
   it("matches % and _ literally", async () => {
     await seedSpace("plain-one", "100% done");
     await seedSpace("plain-two", "1000 done");
