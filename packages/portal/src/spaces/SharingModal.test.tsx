@@ -385,7 +385,7 @@ describe("SharingModal: Delegate my access", () => {
       access.focus();
       fireEvent.keyDown(access, { key: "ArrowRight" });
       expect(people).toHaveAttribute("aria-selected", "true");
-      expect(people).toHaveFocus();
+      await waitFor(() => expect(people).toHaveFocus());
       expect(screen.getByRole("tabpanel")).toHaveAccessibleName(/People/);
       expect(screen.getByRole("radio", { name: /Specific people/ })).toBeInTheDocument();
       fireEvent.keyDown(people, { key: "ArrowLeft" });
