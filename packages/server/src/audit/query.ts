@@ -60,6 +60,12 @@ export interface AuditFilterOptions {
 export type AuditAuth = "api_key" | "oauth" | "session" | "curl_token" | "space";
 const AUDIT_AUTHS: readonly string[] = ["api_key", "oauth", "session", "curl_token", "space"];
 const MAX_RANGE_SECONDS = 90 * 86400;
+/**
+ * Slack on the cap: `since` is computed on the caller's clock and `until`
+ * defaults to the server's now, so a range of exactly 90 days arrives a few
+ * seconds over. The cap bounds scan size; it does not need to be to the second.
+ */
+const RANGE_SLACK_SECONDS = 300;
 const MAX_EMAIL = 254;
 
 export interface ListAuditOptions extends AuditFilterOptions {
@@ -125,7 +131,7 @@ export function parseAuditFilters(
   if (f.since !== undefined) {
     const end = f.until ?? Math.floor(Date.now() / 1000);
     if (end < f.since) return { ok: false, error: "invalid_range" };
-    if (end - f.since > MAX_RANGE_SECONDS) return { ok: false, error: "range_too_large" };
+    if (end - f.since > MAX_RANGE_SECONDS + RANGE_SLACK_SECONDS) return { ok: false, error: "range_too_large" };
   } else if (f.until !== undefined && f.until < 0) {
     return { ok: false, error: "invalid_until" };
   }

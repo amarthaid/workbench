@@ -418,6 +418,12 @@ describe("parseAuditFilters", () => {
     expect(ok({ since: String(now - 90 * 86400) }).ok).toBe(true);
   });
 
+  it("allows a few seconds over 90 days (clock skew, a tick between computing since and the call)", () => {
+    expect(ok({ since: String(now - 90 * 86400 - 10) }).ok).toBe(true);
+    expect(ok({ since: "1000", until: String(1000 + 90 * 86400 + 60) }).ok).toBe(true);
+    expect(ok({ since: String(now - 90 * 86400 - 3600) })).toEqual({ ok: false, error: "range_too_large" });
+  });
+
   it("keeps today's behaviour with no since", () => {
     expect(ok({})).toEqual({ ok: true, filters: {} });
     expect(ok({ until: "5" }).ok).toBe(true);

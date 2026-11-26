@@ -123,7 +123,8 @@ Filters and query parameters:
 
 The UI sends `since` for the last 7 days by default. When a caller sends
 `since` (and optionally `until`, default now), the server **caps the range at 90
-days** and returns 400 beyond that. A caller that sends no `since` keeps
+days** (plus 5 minutes of slack for clock skew between the browser and the
+server) and returns 400 beyond that. A caller that sends no `since` keeps
 today's behaviour (newest first, limited, keyset paged): the home cards, agents
 and existing tests do this. Unknown values for `space`, `auth`, `status` or
 `delegated` are refused with 400 on both endpoints. Changing any filter resets
