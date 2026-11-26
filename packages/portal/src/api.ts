@@ -847,6 +847,9 @@ export interface AdminActivityEvent extends ActivityEvent {
   auth_method?: string | null;
   client_id?: string | null;
   client_name?: string | null;
+  /** Who triggered a delegated call (the owner's `user_email` is whose access ran). */
+  actor_user_id?: string | null;
+  actor_email?: string | null;
 }
 
 export interface AdminAuditPayload {

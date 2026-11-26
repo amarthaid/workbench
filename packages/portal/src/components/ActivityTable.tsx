@@ -1,8 +1,9 @@
 import { Fragment } from "react";
-import type { ActivityDelegation, ActivityEvent, IntegrationSummary } from "../api";
+import type { ActivityEvent, IntegrationSummary } from "../api";
 import { DataTable } from "./ui/DataTable";
 import IntegrationLogo from "./IntegrationLogo";
 import { Badge } from "./ui/Badge";
+import { activityRowProps } from "./ActivityDrawer";
 import { dayLabel, timeLabel, durationLabel } from "../format";
 
 export interface AppLabel {
@@ -36,12 +37,12 @@ function groupByDay(events: ActivityEvent[]): { day: string; events: ActivityEve
   return groups;
 }
 
-/** Who used whose access, for a call that ran with delegated access. */
-export function delegationText(d: ActivityDelegation, spaceTitle: (name: string) => string = (n) => n): string {
-  const via = d.space ? ` via ${spaceTitle(d.space)}` : "";
-  return d.direction === "for_me"
-    ? `${d.other_email ?? "Someone"} used your access${via}`
-    : `You used ${d.other_email ? `${d.other_email}'s` : "someone else's"} access${via}`;
+const SPACE_CLIENT_PREFIX = "space:";
+
+/** The Space a non-delegated call came through, from its client name. */
+function viaSpace(e: ActivityEvent): string | null {
+  const c = e.client_name;
+  return c && c.startsWith(SPACE_CLIENT_PREFIX) ? c.slice(SPACE_CLIENT_PREFIX.length) : null;
 }
 
 export function ActivityTable({
@@ -49,6 +50,10 @@ export function ActivityTable({
   caption,
   appFor,
   spaceTitle,
+  selectedId = null,
+  onSelect,
+  onPerson,
+  onSpace,
 }: {
   events: ActivityEvent[];
   caption: string;
@@ -56,8 +61,20 @@ export function ActivityTable({
   appFor?: (name: string) => AppLabel;
   /** Map a Space's name to its title, for delegated rows; the name if unknown. */
   spaceTitle?: (name: string) => string;
+  /** The open row; rows open the drawer through onSelect. */
+  selectedId?: number | null;
+  onSelect?: (id: number) => void;
+  /** Person link: apply that person as the filter. */
+  onPerson?: (email: string) => void;
+  /** Space link: apply that Space as the filter. */
+  onSpace?: (name: string) => void;
 }) {
   const app: (name: string) => AppLabel = appFor ?? ((n) => ({ label: n }));
+  const title = spaceTitle ?? ((n: string) => n);
+
+  const spaceLink = (name: string) => (
+    <button type="button" className="af-link" onClick={() => onSpace?.(name)}>{title(name)}</button>
+  );
 
   return (
     <DataTable
@@ -78,7 +95,7 @@ export function ActivityTable({
             <th scope="colgroup" colSpan={5}>{g.day}</th>
           </tr>
           {g.events.map((e) => (
-            <tr key={e.id}>
+            <tr key={e.id} {...(onSelect ? activityRowProps(e.id, selectedId, onSelect) : {})}>
               <td className="wb-cell-time">{timeLabel(e.created_at)}</td>
               <td>
                 {e.integration ? (
@@ -101,11 +118,31 @@ export function ActivityTable({
               </td>
               <td>
                 <code className="wb-mono">{e.tool ?? "—"}</code>
-                {e.delegation && (
+                {e.delegation ? (
                   <div className="wb-cell-delegation">
                     <Badge variant="orange">Delegated</Badge>
-                    <span>{delegationText(e.delegation, spaceTitle)}</span>
+                    {e.delegation.other_email && (
+                      <>
+                        <span>{e.delegation.direction === "for_me" ? "Used by" : "On access of"}</span>
+                        <button type="button" className="af-link" onClick={() => onPerson?.(e.delegation!.other_email!)}>
+                          {e.delegation.other_email}
+                        </button>
+                      </>
+                    )}
+                    {e.delegation.space && (
+                      <>
+                        <span aria-hidden>&middot;</span>
+                        {spaceLink(e.delegation.space)}
+                      </>
+                    )}
                   </div>
+                ) : (
+                  viaSpace(e) && (
+                    <div className="wb-cell-delegation">
+                      <span>via Space</span>
+                      {spaceLink(viaSpace(e)!)}
+                    </div>
+                  )
                 )}
                 {!e.success && e.error && (
                   <div className="wb-cell-error" title={e.error}>{e.error}</div>

@@ -219,7 +219,7 @@ export function ActivityFilters({ value, onChange, integrations, spaceField, par
   }
 
   function apply() {
-    onChange({ ...value, ...draft, delegated: draft.delegated || !!draft[party] });
+    onChange({ ...value, ...draft, delegated: draft.delegated || (party === "person" && !!draft.person) });
     closePopover();
   }
 

@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import Activity from "./Activity";
 
 vi.mock("../api", () => ({
   fetchActivity: vi.fn(),
+  fetchActivityPeople: vi.fn(async () => ({ stored: true, people: [] })),
   fetchIntegrations: vi.fn(async () => ({
     integrations: [
       { name: "acme", displayName: "Acme", version: "1.0.0", toolCount: 2, logo: "/logos/acme.svg" },
@@ -95,7 +96,9 @@ describe("Activity", () => {
   it("requests one integration when it is selected", async () => {
     renderPage();
     await screen.findByText("acme_search");
-    fireEvent.change(screen.getByLabelText("Integration"), { target: { value: "demo-repo" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Filters/ }));
+    fireEvent.change(screen.getByLabelText("App"), { target: { value: "demo-repo" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
     await waitFor(() =>
       expect(fetchActivity).toHaveBeenCalledWith(expect.objectContaining({ integration: "demo-repo" }))
     );
@@ -143,7 +146,7 @@ describe("Activity", () => {
       delegation,
     });
 
-    it("tags them and says who used whose access, with the Space's title", async () => {
+    it("shows who used whose access on a second line under the tool, with the Space's title", async () => {
       vi.mocked(fetchActivity).mockResolvedValue({
         stored: true,
         next_cursor: null,
@@ -155,10 +158,19 @@ describe("Activity", () => {
       });
       renderPage();
       const forMe = (await screen.findByText("acme_tool_10")).closest("tr")!;
+      const cell = screen.getByText("acme_tool_10").closest("td")!;
+      expect(cell).toHaveTextContent("Delegated");
+      expect(cell).toHaveTextContent("Used by");
+      expect(within(cell).getByRole("button", { name: "qa@example.com" })).toBeInTheDocument();
+      expect(await within(cell).findByRole("button", { name: "Sprint Board" })).toBeInTheDocument();
+      const byMe = screen.getByText("acme_tool_11").closest("td")!;
+      expect(byMe).toHaveTextContent("On access of");
+      expect(byMe).not.toHaveTextContent("Used by");
+      expect(within(byMe).getByRole("button", { name: "dev@example.com" })).toBeInTheDocument();
+      const plain = screen.getByText("acme_tool_12").closest("tr")!;
+      expect(plain).not.toHaveTextContent("Delegated");
+      expect(plain.querySelector(".wb-cell-delegation")).toBeNull();
       expect(forMe).toHaveTextContent("Delegated");
-      expect(await screen.findByText("qa@example.com used your access via Sprint Board")).toBeInTheDocument();
-      expect(screen.getByText("You used dev@example.com's access via Sprint Board")).toBeInTheDocument();
-      expect(screen.getByText("acme_tool_12").closest("tr")).not.toHaveTextContent("Delegated");
       expect(screen.getAllByText("Delegated")).toHaveLength(2);
     });
 
@@ -172,14 +184,79 @@ describe("Activity", () => {
         ],
       });
       renderPage();
-      expect(await screen.findByText("qa@example.com used your access")).toBeInTheDocument();
-      expect(await screen.findByText("You used dev@example.com's access via gone-space")).toBeInTheDocument();
+      const a = (await screen.findByText("acme_tool_20")).closest("td")!;
+      expect(a.querySelectorAll("button")).toHaveLength(1);
+      const b = screen.getByText("acme_tool_21").closest("td")!;
+      expect(await within(b).findByRole("button", { name: "gone-space" })).toBeInTheDocument();
     });
 
-    it("does not fetch the Spaces list when no row is delegated", async () => {
+    it("shows only 'via Space' for a call through a Space on the caller's own access", async () => {
+      vi.mocked(fetchActivity).mockResolvedValue({
+        stored: true,
+        next_cursor: null,
+        events: [{ ...row(30, null), client_name: "space:sprint-board" }],
+      });
+      renderPage();
+      const cell = (await screen.findByText("acme_tool_30")).closest("td")!;
+      expect(cell).toHaveTextContent("via Space");
+      expect(cell).not.toHaveTextContent("Delegated");
+      expect(await within(cell).findByRole("button", { name: "Sprint Board" })).toBeInTheDocument();
+    });
+
+    it("applies the person filter from a person link without opening the drawer", async () => {
+      vi.mocked(fetchActivity).mockResolvedValue({
+        stored: true,
+        next_cursor: null,
+        events: [row(40, { direction: "for_me", other_email: "qa@example.com", space: null })],
+      });
+      renderPage();
+      fireEvent.click(await screen.findByRole("button", { name: "qa@example.com" }));
+      await waitFor(() =>
+        expect(fetchActivity).toHaveBeenCalledWith(expect.objectContaining({ person: "qa@example.com", delegated: true }))
+      );
+      expect(screen.queryByRole("dialog", { name: /call/i })).toBeNull();
+      expect(document.querySelector(".af-drawer")).toBeNull();
+      expect(screen.getByText("Person: qa@example.com")).toBeInTheDocument();
+    });
+
+    it("applies the Space filter from a Space link", async () => {
+      vi.mocked(fetchActivity).mockResolvedValue({
+        stored: true,
+        next_cursor: null,
+        events: [row(41, { direction: "by_me", other_email: "dev@example.com", space: "sprint-board" })],
+      });
+      renderPage();
+      fireEvent.click(await screen.findByRole("button", { name: "Sprint Board" }));
+      await waitFor(() => expect(fetchActivity).toHaveBeenCalledWith(expect.objectContaining({ space: "sprint-board" })));
+      expect(document.querySelector(".af-drawer")).toBeNull();
+    });
+
+    it("opens the drawer on row click and on Enter, and notes withheld origin for a for_me row", async () => {
+      vi.mocked(fetchActivity).mockResolvedValue({
+        stored: true,
+        next_cursor: null,
+        events: [
+          row(50, { direction: "for_me", other_email: "qa@example.com", space: "sprint-board" }),
+          row(51, null),
+        ],
+      });
+      renderPage();
+      const r = (await screen.findByText("acme_tool_50")).closest("tr")!;
+      fireEvent.click(r);
+      expect(await screen.findByText(/Their IP address and browser are not shown to you/)).toBeInTheDocument();
+      fireEvent.keyDown(document, { key: "Escape" });
+      await waitFor(() => expect(document.querySelector(".af-drawer")).toBeNull());
+
+      const r2 = screen.getByText("acme_tool_51").closest("tr")!;
+      fireEvent.keyDown(r2, { key: "Enter" });
+      expect(await screen.findByText(/Origin/)).toBeInTheDocument();
+      expect(document.querySelector(".af-drawer")).not.toBeNull();
+    });
+
+    it("loads the viewer's Spaces for the Space filter and for row titles", async () => {
       renderPage();
       await screen.findByText("acme_search");
-      expect(fetchSpaces).not.toHaveBeenCalled();
+      await waitFor(() => expect(fetchSpaces).toHaveBeenCalledTimes(1));
     });
   });
 });

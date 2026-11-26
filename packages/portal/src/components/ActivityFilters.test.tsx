@@ -19,7 +19,7 @@ vi.mock("../api", async (orig) => ({ ...(await orig<typeof import("../api")>()),
 const NOW = 1_800_000_000;
 const SPACES = [{ name: "release-desk", title: "Release desk" }, { name: "cockpit", title: "Branch Cockpit" }];
 
-function Harness({ onChange, initial }: { onChange: (f: AppliedFilters) => void; initial?: Partial<AppliedFilters> }) {
+function Harness({ onChange, initial, kind = "person" }: { onChange: (f: AppliedFilters) => void; initial?: Partial<AppliedFilters>; kind?: "person" | "user" }) {
   const [value, setValue] = useState<AppliedFilters>({ ...defaultFilters(NOW), ...initial });
   return (
     <ActivityFilters
@@ -31,7 +31,15 @@ function Harness({ onChange, initial }: { onChange: (f: AppliedFilters) => void;
       now={() => NOW}
       integrations={[{ name: "jira", label: "Jira" }, { name: "github", label: "GitHub" }]}
       spaceField={(s) => <SpaceCombobox source={{ kind: "local", spaces: SPACES }} {...s} />}
-      partyField={{ kind: "person", render: (s) => <PersonCombobox since={NOW - 1000} {...s} /> }}
+      partyField={{
+        kind,
+        render: (s) =>
+          kind === "person" ? (
+            <PersonCombobox since={NOW - 1000} {...s} />
+          ) : (
+            <input id={s.id} aria-label="User" value={s.value} onChange={(e) => s.onChange(e.target.value)} />
+          ),
+      }}
     />
   );
 }
@@ -128,6 +136,15 @@ describe("ActivityFilters", () => {
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(filtersToOpts(onChange.mock.calls[0][0], "personal")).toMatchObject({ person: "ana@example.com", delegated: true });
+  });
+
+  it("applying a User filter on the admin page does not force Delegated only", () => {
+    const onChange = vi.fn();
+    renderWithClient(<Harness onChange={onChange} kind="user" initial={{ user: "ana@example.com" }} />);
+    openPopover();
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange.mock.calls[0][0]).toMatchObject({ user: "ana@example.com", delegated: false });
   });
 
   it("shows a count badge and chips, each chip clears one filter, Clear all clears the rest", () => {
