@@ -61,6 +61,9 @@ async function open(s: SpaceDetail = space(), stale: SpaceDetail = s) {
   return screen.getByRole("dialog");
 }
 
+const primary = (root: HTMLElement = screen.getByRole("dialog")) =>
+  within(root).getByRole("button", { name: /^(Save|Review and delegate)$/ });
+const toTab = (name: RegExp) => fireEvent.click(screen.getByRole("tab", { name }));
 const theSwitch = () => screen.getByRole("switch", { name: "Delegate my access" });
 
 beforeEach(() => {
@@ -95,7 +98,9 @@ describe("SharingModal: Delegate my access", () => {
     const dialog = await open();
     fireEvent.click(theSwitch());
     expect(theSwitch()).toHaveAttribute("aria-checked", "true");
-    fireEvent.click(within(dialog).getByLabelText(/Only me/));
+    toTab(/^People/);
+    fireEvent.click(within(dialog).getByRole("radio", { name: /Only me/ }));
+    toTab(/^Access/);
     expect(theSwitch()).toHaveAttribute("aria-checked", "false");
     expect(theSwitch()).toBeDisabled();
     expect(within(dialog).queryByText("jira_search")).not.toBeInTheDocument();
@@ -119,7 +124,7 @@ describe("SharingModal: Delegate my access", () => {
   it("Save asks a second time, and Back returns without saving", async () => {
     const dialog = await open();
     fireEvent.click(theSwitch());
-    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    fireEvent.click(primary(dialog));
     const confirm = screen.getByRole("dialog");
     expect(within(confirm).getByRole("heading", { name: "Delegate your access?" })).toBeInTheDocument();
     expect(confirm).toHaveTextContent(
@@ -138,7 +143,7 @@ describe("SharingModal: Delegate my access", () => {
     const dialog = await open(space({ visibility: "private" }));
     fireEvent.click(within(dialog).getByLabelText(/Everyone signed in/));
     fireEvent.click(theSwitch());
-    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    fireEvent.click(primary(dialog));
     fireEvent.click(screen.getByRole("button", { name: "Delegate access" }));
     await waitFor(() =>
       expect(updateSpaceSharing).toHaveBeenCalledWith("sprint-board", {
@@ -154,7 +159,7 @@ describe("SharingModal: Delegate my access", () => {
   it("names the people when shared with specific people", async () => {
     const dialog = await open(space({ visibility: "users", users: ["qa@example.com", "ops@example.com"] }));
     fireEvent.click(theSwitch());
-    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    fireEvent.click(primary(dialog));
     expect(screen.getByRole("dialog")).toHaveTextContent("The 2 people you shared Sprint Board with will run its tools as you");
   });
 
@@ -162,22 +167,24 @@ describe("SharingModal: Delegate my access", () => {
     let dialog = await open(space({ delegate_access: true }));
     expect(theSwitch()).toHaveAttribute("aria-checked", "true");
     expect(within(dialog).queryByRole("note")).not.toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    fireEvent.click(primary(dialog));
     await waitFor(() => expect(updateSpaceSharing).toHaveBeenCalledWith("sprint-board", {}));
 
     vi.clearAllMocks();
     document.body.innerHTML = "";
     dialog = await open(space({ delegate_access: true }));
     fireEvent.click(theSwitch());
-    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    fireEvent.click(primary(dialog));
     await waitFor(() => expect(updateSpaceSharing).toHaveBeenCalledWith("sprint-board", { delegate_access: false }));
   });
 
   it("on, then Only me: saves the private audience with the mode off", async () => {
     const dialog = await open(space({ delegate_access: true }));
-    fireEvent.click(within(dialog).getByLabelText(/Only me/));
+    toTab(/^People/);
+    fireEvent.click(within(dialog).getByRole("radio", { name: /Only me/ }));
+    toTab(/^Access/);
     expect(theSwitch()).toHaveAttribute("aria-checked", "false");
-    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    fireEvent.click(primary(dialog));
     await waitFor(() =>
       expect(updateSpaceSharing).toHaveBeenCalledWith("sprint-board", { visibility: "private", delegate_access: false })
     );
@@ -201,7 +208,7 @@ describe("SharingModal: Delegate my access", () => {
 
     it("a plain Save leaves it paused", async () => {
       const dialog = await open(paused());
-      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+      fireEvent.click(primary(dialog));
       await waitFor(() => expect(updateSpaceSharing).toHaveBeenCalledWith("sprint-board", {}));
     });
   });
@@ -214,14 +221,14 @@ describe("SharingModal: Delegate my access", () => {
     const dialog = await open();
     vi.mocked(fetchSpace).mockResolvedValue(space({ tools: [...TOOLS, newTool], tools_hash: "hash-3" }));
     fireEvent.click(theSwitch());
-    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    fireEvent.click(primary(dialog));
     fireEvent.click(screen.getByRole("button", { name: "Delegate access" }));
     expect(await screen.findByText(/The tool list changed while you were reviewing it/)).toBeInTheDocument();
     expect(fetchSpace).toHaveBeenCalledTimes(2);
     const note = within(screen.getByRole("dialog")).getByRole("note");
     expect(within(note).getByText("github_delete_repo")).toBeInTheDocument();
 
-    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }));
+    fireEvent.click(primary());
     fireEvent.click(screen.getByRole("button", { name: "Delegate access" }));
     await waitFor(() =>
       expect(updateSpaceSharing).toHaveBeenLastCalledWith("sprint-board", { delegate_access: true, tools_hash: "hash-3" })
@@ -235,19 +242,30 @@ describe("SharingModal: Delegate my access", () => {
     vi.mocked(updateSpaceSharing).mockRejectedValueOnce(new SpaceApiError(status, { code, message: "server text" }));
     const dialog = await open();
     fireEvent.click(theSwitch());
-    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    fireEvent.click(primary(dialog));
     fireEvent.click(screen.getByRole("button", { name: "Delegate access" }));
     expect(await screen.findByText(text)).toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it("permission revoked while on: shown so it can be turned off, but not back on", async () => {
-    const dialog = await open(space({ delegate_access: true, can_delegate: false }));
-    expect(dialog).toHaveTextContent("An admin removed your permission to delegate access");
-    expect(theSwitch()).toBeEnabled();
-    fireEvent.click(theSwitch());
-    expect(theSwitch()).toHaveAttribute("aria-checked", "false");
-    expect(theSwitch()).toBeDisabled();
+  it("permission revoked while on: no tabs, a muted line, and Turn off sends delegate_access:false", async () => {
+    const dialog = await open(space({ delegate_access: true, can_delegate: true, delegation_blocked: "no_permission" }));
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    expect(dialog).toHaveTextContent("Delegated access is off because an admin removed your permission.");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Turn off" }));
+    expect(within(dialog).queryByRole("button", { name: "Turn off" })).not.toBeInTheDocument();
+    fireEvent.click(primary(dialog));
+    await waitFor(() => expect(updateSpaceSharing).toHaveBeenCalledWith("sprint-board", { delegate_access: false }));
+  });
+
+  it("blocked but never on: no tabs and no line, and a plain Save sends nothing about delegation", async () => {
+    const dialog = await open(space({ delegation_blocked: "no_permission" }));
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(dialog).not.toHaveTextContent("admin removed your permission");
+    expect(within(dialog).queryByRole("button", { name: "Turn off" })).not.toBeInTheDocument();
+    fireEvent.click(primary(dialog));
+    await waitFor(() => expect(updateSpaceSharing).toHaveBeenCalledWith("sprint-board", {}));
   });
 
   it("reads the Space again on open, so a stale page copy is never what is confirmed", async () => {
@@ -280,7 +298,7 @@ describe("SharingModal: Delegate my access", () => {
       expect(note).toHaveTextContent("Viewers can call these with your access, with any input.");
       expect(note).toHaveTextContent("Everyone signed in will be able to use your access.");
       for (const t of TOOLS) expect(within(note).getByText(t.name)).toBeInTheDocument();
-      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+      fireEvent.click(primary(dialog));
       expect(screen.getByRole("heading", { name: "Delegate your access?" })).toBeInTheDocument();
       expect(updateSpaceSharing).not.toHaveBeenCalled();
       fireEvent.click(screen.getByRole("button", { name: "Delegate access" }));
@@ -298,7 +316,7 @@ describe("SharingModal: Delegate my access", () => {
       const dialog = await open(space({ visibility: "org", users: ["qa@example.com"], delegate_access: true }));
       fireEvent.click(within(dialog).getByLabelText(/Specific people/));
       expect(within(dialog).queryByRole("note")).not.toBeInTheDocument();
-      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+      fireEvent.click(primary(dialog));
       await waitFor(() => expect(updateSpaceSharing).toHaveBeenCalledWith("sprint-board", { visibility: "users" }));
       expect(screen.queryByRole("heading", { name: "Delegate your access?" })).not.toBeInTheDocument();
     });
@@ -307,7 +325,7 @@ describe("SharingModal: Delegate my access", () => {
   it("without a tools_hash in the detail, sends nothing and asks for a reload", async () => {
     const dialog = await open(space({ tools_hash: undefined }));
     fireEvent.click(theSwitch());
-    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    fireEvent.click(primary(dialog));
     fireEvent.click(screen.getByRole("button", { name: "Delegate access" }));
     expect(await screen.findByText("Reload this Space and try again.")).toBeInTheDocument();
     expect(updateSpaceSharing).not.toHaveBeenCalled();
@@ -328,7 +346,7 @@ describe("SharingModal: Delegate my access", () => {
     expect(screen.queryByText("Who can open this Space")).not.toBeInTheDocument();
     resolve(space({ visibility: "private" }));
     await screen.findByText("Who can open this Space");
-    expect(screen.getByLabelText(/Only me/)).toBeChecked();
+    expect(screen.getByRole("radio", { name: /Only me/, hidden: true })).toBeChecked();
     expect(fetchSpace).toHaveBeenCalledTimes(2);
   });
 
@@ -342,17 +360,122 @@ describe("SharingModal: Delegate my access", () => {
         "Turn off Delegate my access to change who can open this Space, or ask an admin to allow it again."
       )
     ).toBeInTheDocument();
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(primary(dialog)).toBeDisabled();
     expect(within(dialog).queryByRole("note")).not.toBeInTheDocument();
     expect(updateSpaceSharing).not.toHaveBeenCalled();
 
     // Turning it off lifts the block: the audience change saves with the mode off.
-    fireEvent.click(theSwitch());
+    fireEvent.click(within(dialog).getByRole("button", { name: "Turn off" }));
     expect(within(dialog).queryByText(/Turn off Delegate my access/)).not.toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    fireEvent.click(primary(dialog));
     await waitFor(() =>
       expect(updateSpaceSharing).toHaveBeenCalledWith("sprint-board", { visibility: "org", delegate_access: false })
     );
   });
-});
 
+  describe("tabs", () => {
+    it("renders Access first and selected, People second, and switches with the arrow keys", async () => {
+      await open(space({ visibility: "users", users: ["qa@example.com"] }));
+      const access = screen.getByRole("tab", { name: /^Access/ });
+      const people = screen.getByRole("tab", { name: /^People/ });
+      expect(screen.getAllByRole("tab")).toEqual([access, people]);
+      expect(access).toHaveAttribute("aria-selected", "true");
+      expect(people).toHaveAttribute("aria-selected", "false");
+      expect(screen.getByRole("tabpanel")).toHaveAccessibleName(/Access/);
+      access.focus();
+      fireEvent.keyDown(access, { key: "ArrowRight" });
+      expect(people).toHaveAttribute("aria-selected", "true");
+      await waitFor(() => expect(people).toHaveFocus());
+      expect(screen.getByRole("tabpanel")).toHaveAccessibleName(/People/);
+      expect(screen.getByRole("radio", { name: /Specific people/ })).toBeInTheDocument();
+      fireEvent.keyDown(people, { key: "ArrowLeft" });
+      expect(access).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("switch", { name: "Delegate my access" })).toBeInTheDocument();
+    });
+
+    it("badges: Access is empty when off, On when on, Paused, and Not saved after a local change", async () => {
+      await open();
+      const access = () => screen.getByRole("tab", { name: /^Access/ });
+      expect(access()).toHaveTextContent(/^Access$/);
+      fireEvent.click(theSwitch());
+      expect(access()).toHaveTextContent("Not saved");
+      document.body.innerHTML = "";
+      await open(space({ delegate_access: true }));
+      expect(access()).toHaveTextContent("On");
+      document.body.innerHTML = "";
+      await open(space({ delegate_access: true, delegation_suspended: true }));
+      expect(access()).toHaveTextContent("Paused");
+    });
+
+    it("badges: People shows the count, Only me or Everyone", async () => {
+      const people = () => screen.getByRole("tab", { name: /^People/ });
+      await open(space({ visibility: "users", users: ["a@example.com", "b@example.com"] }));
+      expect(people()).toHaveTextContent("2");
+      document.body.innerHTML = "";
+      await open(space({ visibility: "private" }));
+      expect(people()).toHaveTextContent("Only me");
+      document.body.innerHTML = "";
+      await open(space({ visibility: "org" }));
+      expect(people()).toHaveTextContent("Everyone");
+    });
+
+    it("off view says viewers use their own access and what turning on would lend", async () => {
+      const dialog = await open();
+      expect(dialog).toHaveTextContent("Viewers use their own access");
+      expect(dialog).toHaveTextContent("Turning this on would lend 5 tools across 4 apps.");
+    });
+
+    it("on and saved: a status line and the lent tools grouped by app, no warning", async () => {
+      const dialog = await open(space({ delegate_access: true }));
+      expect(dialog).toHaveTextContent("Everyone signed in can use your access");
+      expect(within(dialog).getByText("github_merge_pr")).toBeInTheDocument();
+      expect(within(dialog).getByText("GitHub")).toBeInTheDocument();
+    });
+
+    it("has no tab strip when delegation is blocked, and shows the People content", async () => {
+      await open(space({ delegation_blocked: "no_permission" }));
+      expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+      expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+      expect(screen.getByRole("radio", { name: /Everyone signed in/ })).toBeInTheDocument();
+    });
+
+    it("primary button: Save normally, Review and delegate when Save leads to the confirm step", async () => {
+      const dialog = await open();
+      expect(within(dialog).getByRole("button", { name: "Save" })).toBeInTheDocument();
+      fireEvent.click(theSwitch());
+      expect(within(dialog).getByRole("button", { name: "Review and delegate" })).toBeInTheDocument();
+      expect(within(dialog).queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+      fireEvent.click(theSwitch());
+      expect(within(dialog).getByRole("button", { name: "Save" })).toBeInTheDocument();
+    });
+
+    it("primary button says Review and delegate when widening, and Save while paused", async () => {
+      let dialog = await open(space({ visibility: "users", users: ["qa@example.com"], delegate_access: true }));
+      expect(within(dialog).getByRole("button", { name: "Save" })).toBeInTheDocument();
+      fireEvent.click(within(dialog).getByLabelText(/Everyone signed in/));
+      expect(within(dialog).getByRole("button", { name: "Review and delegate" })).toBeInTheDocument();
+      document.body.innerHTML = "";
+      dialog = await open(space({ delegate_access: true, delegation_suspended: true }));
+      expect(within(dialog).getByRole("button", { name: "Save" })).toBeInTheDocument();
+    });
+
+    it("Only me: the switch is disabled and a link jumps to the People tab", async () => {
+      await open(space({ visibility: "private" }));
+      expect(theSwitch()).toBeDisabled();
+      fireEvent.click(screen.getByRole("button", { name: "Choose who can open it" }));
+      expect(screen.getByRole("tab", { name: /^People/ })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("radio", { name: /Only me/ })).toBeChecked();
+    });
+
+    it("the confirm step is unchanged: its own dialog with Back and Delegate access", async () => {
+      const dialog = await open();
+      fireEvent.click(theSwitch());
+      fireEvent.click(primary(dialog));
+      const confirm = screen.getByRole("dialog");
+      expect(within(confirm).getByRole("heading", { name: "Delegate your access?" })).toBeInTheDocument();
+      expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+      expect(within(confirm).getByRole("button", { name: "Back" })).toBeInTheDocument();
+      expect(within(confirm).getByRole("button", { name: "Delegate access" })).toBeInTheDocument();
+    });
+  });
+});

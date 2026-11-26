@@ -64,6 +64,9 @@ import {
   encodeCursor,
   decodeCursor,
   listAuditEvents,
+  listActivityPeople,
+  parseAuditFilters,
+  parseAuditRange,
   summarizeAudit,
 } from "../audit/query";
 
@@ -1231,12 +1234,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       return { stored: false, events: [], next_cursor: null };
     }
 
-    const raw = request.query as {
-      limit?: string | string[];
-      cursor?: string | string[];
-      integration?: string | string[];
-      status?: string | string[];
-    };
+    const raw = request.query as Record<string, string | string[] | undefined>;
     const q = {
       limit: firstQueryValue(raw.limit),
       cursor: firstQueryValue(raw.cursor),
@@ -1259,7 +1257,9 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       cursor = decoded;
     }
 
-    const status = q.status === "success" || q.status === "error" ? q.status : undefined;
+    const parsed = parseAuditFilters(raw, { person: true });
+    if (!parsed.ok) return reply.status(400).send({ error: parsed.error });
+    const { status, ...filters } = parsed.filters;
 
     // Fetch one extra row: its presence is what tells us another page exists,
     // without a second COUNT query.
@@ -1269,6 +1269,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       cursor,
       integration: q.integration,
       status,
+      ...filters,
     });
 
     const events = rows.slice(0, limit);
@@ -1276,6 +1277,17 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     const next_cursor = rows.length > limit && last ? encodeCursor(last.created_at, last.id) : null;
 
     return { stored: true, events, next_cursor };
+  });
+
+  app.get("/api/activity/people", async (request, reply) => {
+    const user = await authenticate(request);
+    if (!user) {
+      return reply.status(401).send({ error: "Unauthorized" });
+    }
+    if (!auditStored()) return { stored: false, people: [] };
+    const range = parseAuditRange(request.query as Record<string, string | string[] | undefined>);
+    if (!range.ok) return reply.status(400).send({ error: range.error });
+    return { stored: true, people: await listActivityPeople(user.userId, range.since, range.until) };
   });
 
   app.get("/api/stats", async (request, reply) => {

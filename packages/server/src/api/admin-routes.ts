@@ -4,6 +4,7 @@ import { db } from "../db";
 import { activeProfiles, profileDirName, profilesBaseDir } from "../auth/profile-chromium";
 import { adminScope, adminActor } from "./admin-scope";
 import { listUsers, disableUser, enableUser, revokeUserKey } from "../admin/users";
+import { searchAdminSpaces } from "../admin/spaces";
 import { getUserPermissions, grantPermission, resetPermission } from "../admin/permissions";
 import { getConfigView, setIntegrationEnabled, setCustomAppsPolicy, setBrowserBlockedDomains } from "../admin/config";
 import { getInstanceInfo } from "../admin/instance";
@@ -29,6 +30,11 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
       const result = await adminActivityPayload(adminActor(request), request.params.id);
       if (!result.ok) return reply.status(result.status).send({ error: result.error });
       return result.payload;
+    });
+    scope.get("/spaces", async (request, reply) => {
+      const result = await searchAdminSpaces(request.query as Record<string, string | string[] | undefined>);
+      if (!result.ok) return reply.status(result.status).send({ error: result.error });
+      return { spaces: result.spaces, has_more: result.has_more };
     });
     scope.get("/users", async () => listUsers());
     for (const [path, act] of [

@@ -4,8 +4,10 @@ import { fetchActivity, fetchIntegrations, UNSTORED_MESSAGE, type ActivityEvent,
 import { PageHeader } from "../components/ui/PageHeader";
 import { Box } from "../components/ui/Box";
 import { EmptyState } from "../components/ui/EmptyState";
-import { Tabs } from "../components/ui/Tabs";
-import { Select } from "../components/ui/Input";
+import { ActivityFilters, defaultFilters, filtersToOpts, type AppliedFilters } from "../components/ActivityFilters";
+import { ActivityDrawer } from "../components/ActivityDrawer";
+import { SpaceCombobox } from "../components/SpaceCombobox";
+import { PersonCombobox } from "../components/PersonCombobox";
 import { Button } from "../components/ui/Button";
 import { ActivityTable, integrationLookup } from "../components/ActivityTable";
 import { fetchSpaces } from "../spaces-api";
@@ -13,8 +15,8 @@ import { fetchSpaces } from "../spaces-api";
 const PAGE_SIZE = 50;
 
 export default function Activity() {
-  const [status, setStatus] = useState<"all" | "error">("all");
-  const [integration, setIntegration] = useState("all");
+  const [applied, setApplied] = useState<AppliedFilters>(() => defaultFilters());
+  const [selectedId, setSelectedId] = useState<number | null>(null);
   // Pages already fetched, kept so "Load more" appends rather than replaces.
   const [older, setOlder] = useState<ActivityEvent[]>([]);
   // Three states, and the distinction matters: `undefined` means we have not
@@ -26,21 +28,15 @@ export default function Activity() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
 
-  const filters = useMemo(
-    () => ({
-      limit: PAGE_SIZE,
-      ...(status === "error" ? { status: "error" as const } : {}),
-      ...(integration !== "all" ? { integration } : {}),
-    }),
-    [status, integration]
-  );
+  const filters = useMemo(() => ({ limit: PAGE_SIZE, ...filtersToOpts(applied, "personal") }), [applied]);
 
   // Changing a filter starts a fresh list. Reset the paged-in tail here, in the
   // event handler — not inside queryFn, which must stay a pure fetch: React
   // Query may call it on refetch, retry or remount, and a setState in there
   // fires on every one of those.
-  function changeFilter(apply: () => void) {
-    apply();
+  function changeFilter(next: AppliedFilters) {
+    setApplied(next);
+    setSelectedId(null);
     setOlder([]);
     setPagedCursor(undefined);
     setLoadMoreError(null);
@@ -99,42 +95,29 @@ export default function Activity() {
   }, [data, older]);
   const integrations = (registry?.integrations ?? []) as IntegrationSummary[];
 
-  // Delegated rows name a Space by its name; show its title when this viewer
-  // can still see it. Fetched only when such a row is on screen.
-  const hasDelegated = events.some((e) => e.delegation?.space);
-  const { data: spaces } = useQuery({ queryKey: ["spaces"], queryFn: fetchSpaces, enabled: hasDelegated });
+  // Spaces the viewer owns or is shared on: the Space filter's options, and
+  // titles for the names rows carry.
+  const { data: spaces } = useQuery({ queryKey: ["spaces"], queryFn: fetchSpaces });
+  const localSpaces = useMemo(() => (spaces ?? []).map((s) => ({ name: s.name, title: s.title })), [spaces]);
   const spaceTitle = useMemo(() => {
     const titles = new Map((spaces ?? []).map((s) => [s.name, s.title]));
-    return (name: string) => titles.get(name) ?? name;
+    return (name: string) => titles.get(name) || name;
   }, [spaces]);
+  const appLabel = (name: string) => appFor(name).label;
 
   return (
     <>
-      <PageHeader
-        title="Activity"
-        toolbar={
-          <>
-            <Tabs
-              label="Filter activity"
-              value={status}
-              onChange={(id) => changeFilter(() => setStatus(id as "all" | "error"))}
-              items={[{ id: "all", label: "All" }, { id: "error", label: "Errors" }]}
-            />
-            <div className="wb-toolbar-controls">
-              <label className="ui-sr-only" htmlFor="activity-integration">Integration</label>
-              <Select
-                id="activity-integration"
-                value={integration}
-                onChange={(e) => changeFilter(() => setIntegration(e.target.value))}
-              >
-                <option value="all">All apps</option>
-                {integrations.map((i) => (
-                  <option key={i.name} value={i.name}>{i.displayName || i.name}</option>
-                ))}
-              </Select>
-            </div>
-          </>
-        }
+      <PageHeader title="Activity" />
+
+      <ActivityFilters
+        value={applied}
+        onChange={changeFilter}
+        integrations={integrations.map((i) => ({ name: i.name, label: i.displayName || i.name }))}
+        spaceField={(slot) => <SpaceCombobox source={{ kind: "local", spaces: localSpaces }} {...slot} />}
+        partyField={{
+          kind: "person",
+          render: (slot) => <PersonCombobox since={applied.since} until={applied.until} {...slot} />,
+        }}
       />
 
       <Box>
@@ -147,9 +130,26 @@ export default function Activity() {
         ) : events.length === 0 ? (
           <EmptyState message="No tool calls recorded yet." />
         ) : (
-          <ActivityTable events={events} caption="Tool call history" appFor={appFor} spaceTitle={spaceTitle} />
+          <ActivityTable
+            events={events}
+            caption="Tool call history"
+            appFor={appFor}
+            spaceTitle={spaceTitle}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+            onPerson={(email) => changeFilter({ ...applied, person: email, delegated: true })}
+            onSpace={(name) => changeFilter({ ...applied, space: name })}
+          />
         )}
       </Box>
+
+      <ActivityDrawer
+        events={events}
+        selectedId={selectedId}
+        onSelect={setSelectedId}
+        appLabel={appLabel}
+        spaceTitle={spaceTitle}
+      />
 
       {loadMoreError && <div className="ui-form-error">{loadMoreError}</div>}
 

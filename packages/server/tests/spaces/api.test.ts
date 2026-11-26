@@ -42,6 +42,7 @@ import { setUserDisabled } from "../../src/auth/user-status";
 import { registerSpaceApiRoutes, containsVaultRef } from "../../src/spaces/api";
 import { getSpace, setShares, toolsHash, updateSpaceMeta, upsertSpace, kvPut } from "../../src/spaces/store";
 import { verifySig } from "../../src/spaces/sig";
+import * as permissionsStore from "../../src/permissions/store";
 import { clearPermission, setPermission } from "../../src/permissions/store";
 import { deleteToken, storeToken } from "../../src/auth/tokens";
 import { storeCookies } from "../../src/auth/cookie";
@@ -463,8 +464,9 @@ describe("delegated access in the portal API", () => {
     // Permission revoked: the owner still sees the stored mode, a viewer sees it off.
     await db.run("DELETE FROM user_permissions WHERE user_id = ?", ["u1"]);
     await upsertSpace({ name: "s1", ownerId: "u1", title: "Items", tools: TOOLS, visibility: "users" });
-    expect(await list("u1")).toMatchObject({ delegate_access: true, delegation_suspended: false });
+    expect(await list("u1")).toMatchObject({ delegate_access: true, delegation_suspended: false, delegation_blocked: "no_permission" });
     expect(await list("u2")).toMatchObject({ delegate_access: false, delegation_suspended: false });
+    expect(await list("u2")).not.toHaveProperty("delegation_blocked");
   });
 
   it("a revoked permission shows as off to everyone, not as the viewer's access", async () => {
@@ -476,7 +478,64 @@ describe("delegated access in the portal API", () => {
     expect(viewer).toMatchObject({ delegate_access: false, delegation_suspended: false });
     expect(viewer.delegation_off).toEqual({ reason: "turned_off", message: "This Space's shared access was turned off." });
     // The owner sees the stored mode, and why it is off.
-    expect(await detail("u1")).toMatchObject({ delegate_access: true, can_delegate: false, delegation_off: { reason: "turned_off" } });
+    expect(await detail("u1")).toMatchObject({
+      delegate_access: true,
+      can_delegate: false,
+      delegation_blocked: "no_permission",
+      delegation_off: { reason: "turned_off" },
+    });
+    expect(viewer).not.toHaveProperty("delegation_blocked");
+  });
+
+  it("delegation_blocked is absent while the owner holds the permission", async () => {
+    await grant();
+    await enable();
+    expect(await detail("u1")).not.toHaveProperty("delegation_blocked");
+  });
+
+  it("a people-only edit while blocked leaves the stored mode and pin alone", async () => {
+    await grant();
+    await enable();
+    const before = (await getSpace("s1"))!;
+    await db.run("DELETE FROM user_permissions WHERE user_id = ?", ["u1"]);
+    const res = await sharing("u1", { add_users: ["new@example.com"] });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ delegate_access: true, delegation_blocked: "no_permission" });
+    const after = (await getSpace("s1"))!;
+    expect(after.accessMode).toBe("owner");
+    expect(after.delegatedToolsHash).toBe(before.delegatedToolsHash);
+    expect((await delegationRows()).map((r) => r.action)).toEqual(["SPACE_DELEGATION_ON"]);
+  });
+
+  it("widening the audience while blocked turns the mode off and audits the reason", async () => {
+    await grant();
+    await enable();
+    await db.run("DELETE FROM user_permissions WHERE user_id = ?", ["u1"]);
+    const res = await sharing("u1", { visibility: "org" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ visibility: "org", delegate_access: false });
+    expect(res.json()).not.toHaveProperty("delegation_blocked");
+    const s = (await getSpace("s1"))!;
+    expect(s.accessMode).toBe("viewer");
+    expect(s.delegatedToolsHash).toBeNull();
+    expect((await delegationRows()).slice(1)).toEqual([
+      { user_id: "u1", action: "SPACE_DELEGATION_OFF", tool: "space:s1 (reason: audience widened without permission)", error: null },
+    ]);
+  });
+
+  it("the list reads the owner's permission once per request", async () => {
+    await grant();
+    await enable();
+    await upsertSpace({ name: "s2", ownerId: "u1", title: "Two", tools: TOOLS, visibility: "users" });
+    writeSpaceFiles(tmp, "s2", { "index.html": "x" });
+    await db.run("UPDATE spaces SET access_mode = 'owner', delegated_tools_hash = ? WHERE name = 's2'", [toolsHash(TOOLS)]);
+    const spy = vi.spyOn(permissionsStore, "can");
+    try {
+      await app.inject({ method: "GET", url: "/api/spaces", headers: as("u1") });
+      expect(spy.mock.calls.filter((c) => c[1] === "spaces.delegate_access")).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("a no-op re-confirm (and a double submit) writes nothing and audits once", async () => {

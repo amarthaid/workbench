@@ -5,6 +5,8 @@ import {
   decodeCursor,
   listAllAuditEvents,
   listAuditEvents,
+  listActivityPeople,
+  parseAuditFilters,
   summarizeAudit,
 } from "../src/audit/query";
 
@@ -24,11 +26,15 @@ async function seed(o: {
   actorUserId?: string | null;
   actorEmail?: string | null;
   clientName?: string | null;
+  authMethod?: string | null;
+  sourceIp?: string | null;
+  userAgent?: string | null;
 }) {
   await db.run(
     `INSERT INTO audit_log (user_id, integration, tool, action, success, error, duration_ms, created_at,
-                            user_email, actor_user_id, actor_email, client_name)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                            user_email, actor_user_id, actor_email, client_name,
+                            auth_method, source_ip, user_agent)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       o.userId,
       o.integration === undefined ? "acme" : o.integration,
@@ -42,6 +48,9 @@ async function seed(o: {
       o.actorUserId ?? null,
       o.actorEmail ?? null,
       o.clientName ?? null,
+      o.authMethod ?? null,
+      o.sourceIp ?? null,
+      o.userAgent ?? null,
     ]
   );
 }
@@ -320,5 +329,226 @@ describe("summarizeAudit", () => {
     await seedDelegated();
     expect((await summarizeAudit(OWNER.id, 30)).toolCalls).toBe(1);
     expect((await summarizeAudit(VIEWER.id, 30)).toolCalls).toBe(0);
+  });
+});
+
+
+describe("audit filters", () => {
+  const T = NOW - 10 * 86400;
+
+  async function seedMix() {
+    await seed({ userId: "u1", tool: "old", createdAt: T - 100, authMethod: "api_key" });
+    await seed({ userId: "u1", tool: "mid", createdAt: T, authMethod: "oauth" });
+    await seed({ userId: "u1", tool: "new", createdAt: T + 100, authMethod: "session" });
+    await seed({ userId: "u1", tool: "curl", createdAt: T + 200, authMethod: "curl_token" });
+    await seed({
+      userId: "u1",
+      tool: "viaspace",
+      createdAt: T + 300,
+      authMethod: "oauth",
+      clientName: "space:team-dash",
+      actorUserId: "u2",
+      actorEmail: "qa@example.com",
+    });
+    await seed({
+      userId: "u1",
+      tool: "otherspace",
+      createdAt: T + 400,
+      authMethod: "api_key",
+      clientName: "space:other",
+      actorUserId: "u2",
+      actorEmail: "qa@example.com",
+    });
+  }
+  const tools = (rows: { tool: string | null }[]) => rows.map((r) => r.tool).sort();
+
+  for (const [name, list] of [
+    ["listAuditEvents", (f: object) => listAuditEvents({ userId: "u1", limit: 50, ...f })],
+    ["listAllAuditEvents", (f: object) => listAllAuditEvents({ limit: 50, ...f })],
+  ] as const) {
+    describe(name, () => {
+      it("filters by since and until, inclusive", async () => {
+        await seedMix();
+        expect(tools(await list({ since: T, until: T + 100 }))).toEqual(["mid", "new"]);
+        expect(tools(await list({ since: T + 300 }))).toEqual(["otherspace", "viaspace"]);
+        expect(tools(await list({ until: T }))).toEqual(["mid", "old"]);
+      });
+
+      it("filters delegated rows", async () => {
+        await seedMix();
+        expect(tools(await list({ delegated: true }))).toEqual(["otherspace", "viaspace"]);
+      });
+
+      it("filters by space name", async () => {
+        await seedMix();
+        expect(tools(await list({ space: "team-dash" }))).toEqual(["viaspace"]);
+      });
+
+      it("filters by credential; space is the client prefix, others exclude it", async () => {
+        await seedMix();
+        expect(tools(await list({ auth: "space" }))).toEqual(["otherspace", "viaspace"]);
+        expect(tools(await list({ auth: "oauth" }))).toEqual(["mid"]);
+        expect(tools(await list({ auth: "api_key" }))).toEqual(["old"]);
+        expect(tools(await list({ auth: "session" }))).toEqual(["new"]);
+        expect(tools(await list({ auth: "curl_token" }))).toEqual(["curl"]);
+      });
+
+      it("pages with filters set without repeating or skipping", async () => {
+        for (let i = 0; i < 5; i++) await seed({ userId: "u1", tool: `t${i}`, createdAt: T, authMethod: "oauth" });
+        await seed({ userId: "u1", tool: "excluded", createdAt: T, authMethod: "api_key" });
+        const f = { since: T - 5, auth: "oauth" as const };
+        const p1 = await list({ ...f, limit: 3 });
+        const last = p1[2];
+        const p2 = await list({ ...f, limit: 3, cursor: { createdAt: last.created_at, id: last.id } });
+        expect(p1).toHaveLength(3);
+        expect(tools([...p1, ...p2])).toEqual(["t0", "t1", "t2", "t3", "t4"]);
+        expect(p2).toHaveLength(2);
+      });
+    });
+  }
+});
+
+describe("parseAuditFilters", () => {
+  const ok = (q: Record<string, string>, o?: { person?: boolean }) => parseAuditFilters(q, o);
+  const now = Math.floor(Date.now() / 1000);
+
+  it("rejects a range over 90 days, with or without until", () => {
+    expect(ok({ since: String(now - 91 * 86400) })).toEqual({ ok: false, error: "range_too_large" });
+    expect(ok({ since: "1000", until: String(1000 + 91 * 86400) })).toEqual({ ok: false, error: "range_too_large" });
+    expect(ok({ since: String(now - 90 * 86400) }).ok).toBe(true);
+  });
+
+  it("allows a few seconds over 90 days (clock skew, a tick between computing since and the call)", () => {
+    expect(ok({ since: String(now - 90 * 86400 - 10) }).ok).toBe(true);
+    expect(ok({ since: "1000", until: String(1000 + 90 * 86400 + 60) }).ok).toBe(true);
+    expect(ok({ since: String(now - 90 * 86400 - 3600) })).toEqual({ ok: false, error: "range_too_large" });
+  });
+
+  it("keeps today's behaviour with no since", () => {
+    expect(ok({})).toEqual({ ok: true, filters: {} });
+    expect(ok({ until: "5" }).ok).toBe(true);
+  });
+
+  it("refuses bad values", () => {
+    expect(ok({ since: "abc" })).toEqual({ ok: false, error: "invalid_since" });
+    expect(ok({ since: "1.5" })).toEqual({ ok: false, error: "invalid_since" });
+    expect(ok({ until: "x" })).toEqual({ ok: false, error: "invalid_until" });
+    expect(ok({ since: "100", until: "50" })).toEqual({ ok: false, error: "invalid_range" });
+    expect(ok({ delegated: "0" })).toEqual({ ok: false, error: "invalid_delegated" });
+    expect(ok({ space: "a b" })).toEqual({ ok: false, error: "invalid_space" });
+    expect(ok({ space: "x'; --" })).toEqual({ ok: false, error: "invalid_space" });
+    expect(ok({ auth: "bogus" })).toEqual({ ok: false, error: "invalid_auth" });
+    expect(ok({ status: "bogus" })).toEqual({ ok: false, error: "invalid_status" });
+    expect(ok({ person: "a".repeat(255) }, { person: true })).toEqual({ ok: false, error: "invalid_person" });
+  });
+
+  it("only reads person when asked", () => {
+    expect(ok({ person: "dev@example.com" })).toEqual({ ok: true, filters: {} });
+    expect(ok({ person: "dev@example.com" }, { person: true })).toEqual({
+      ok: true,
+      filters: { person: "dev@example.com" },
+    });
+  });
+});
+
+describe("person filter and request fields", () => {
+  beforeEach(seedUsers);
+
+  async function seedScene() {
+    await seedDelegated({ tool: "owner_ran_for_viewer" }); // OWNER access, VIEWER actor
+    await seed({
+      userId: VIEWER.id,
+      userEmail: VIEWER.email,
+      tool: "viewer_own",
+      authMethod: "api_key",
+      sourceIp: "203.0.113.9",
+      userAgent: "agent/1",
+    });
+    // A third party's delegated rows: BYSTANDER used OWNER's access, and VIEWER used BYSTANDER's.
+    await seed({
+      userId: OWNER.id,
+      userEmail: OWNER.email,
+      actorUserId: BYSTANDER.id,
+      actorEmail: BYSTANDER.email,
+      clientName: "space:other",
+      tool: "bystander_on_owner",
+    });
+    await seed({
+      userId: BYSTANDER.id,
+      userEmail: BYSTANDER.email,
+      actorUserId: OWNER.id,
+      actorEmail: OWNER.email,
+      clientName: "space:other",
+      tool: "owner_on_bystander",
+    });
+  }
+
+  it("matches the other party, case-insensitively, inside the reader's scope", async () => {
+    await seedScene();
+    const asViewer = await listAuditEvents({ userId: VIEWER.id, limit: 50, person: "DEV@example.com" });
+    expect(asViewer.map((r) => r.tool)).toEqual(["owner_ran_for_viewer"]);
+    const asOwner = await listAuditEvents({ userId: OWNER.id, limit: 50, person: VIEWER.email });
+    expect(asOwner.map((r) => r.tool)).toEqual(["owner_ran_for_viewer"]);
+  });
+
+  it("never returns rows outside the reader's own scope", async () => {
+    await seedScene();
+    // VIEWER names the bystander: the bystander rows involve OWNER, not VIEWER.
+    const rows = await listAuditEvents({ userId: VIEWER.id, limit: 50, person: BYSTANDER.email });
+    expect(rows).toEqual([]);
+    // Naming oneself matches nothing either.
+    expect(await listAuditEvents({ userId: VIEWER.id, limit: 50, person: VIEWER.email })).toEqual([]);
+  });
+
+  it("matches the current email, not only the recorded one", async () => {
+    await seedScene();
+    await db.run("UPDATE users SET email = ? WHERE id = ?", ["renamed@example.com", OWNER.id]);
+    const rows = await listAuditEvents({ userId: VIEWER.id, limit: 50, person: "renamed@example.com" });
+    expect(rows.map((r) => r.tool)).toEqual(["owner_ran_for_viewer"]);
+  });
+
+  it("nulls request fields on for_me rows, keeps them on by_me and own rows", async () => {
+    await seedScene();
+    await seed({
+      userId: OWNER.id,
+      userEmail: OWNER.email,
+      actorUserId: VIEWER.id,
+      actorEmail: VIEWER.email,
+      clientName: "space:team-dash",
+      authMethod: "oauth",
+      sourceIp: "203.0.113.7",
+      userAgent: "ua/2",
+      tool: "with_origin",
+    });
+    const asOwner = await listAuditEvents({ userId: OWNER.id, limit: 50 });
+    const forMe = asOwner.find((r) => r.tool === "with_origin")!;
+    expect(forMe.delegation?.direction).toBe("for_me");
+    expect([forMe.auth_method, forMe.client_name, forMe.source_ip, forMe.user_agent]).toEqual([null, null, null, null]);
+
+    const asViewer = await listAuditEvents({ userId: VIEWER.id, limit: 50 });
+    const byMe = asViewer.find((r) => r.tool === "with_origin")!;
+    expect(byMe.delegation?.direction).toBe("by_me");
+    expect(byMe.auth_method).toBe("oauth");
+    expect(byMe.client_name).toBe("space:team-dash");
+    expect(byMe.source_ip).toBe("203.0.113.7");
+    expect(byMe.user_agent).toBe("ua/2");
+
+    const own = asViewer.find((r) => r.tool === "viewer_own")!;
+    expect(own.delegation).toBeNull();
+    expect(own.auth_method).toBe("api_key");
+    expect(own.source_ip).toBe("203.0.113.9");
+  });
+
+  it("lists distinct other parties with counts, most frequent first, in range", async () => {
+    await seedScene();
+    await seedDelegated({ tool: "second" });
+    const people = await listActivityPeople(OWNER.id);
+    // OWNER: VIEWER x2 (for me), BYSTANDER x1 (for me) + x1 (by me) = 2
+    expect(people).toEqual([
+      { email: "ops@example.com", count: 2 },
+      { email: "qa@example.com", count: 2 },
+    ]);
+    expect(await listActivityPeople(VIEWER.id)).toEqual([{ email: "dev@example.com", count: 2 }]);
+    expect(await listActivityPeople(OWNER.id, NOW + 100)).toEqual([]);
   });
 });

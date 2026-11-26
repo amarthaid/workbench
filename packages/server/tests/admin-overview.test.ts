@@ -313,6 +313,16 @@ describe("GET /api/admin/overview/activity", () => {
     expect(res.statusCode).toBe(400);
     expect(JSON.parse(res.body)).toEqual({ error: "invalid_status" });
   });
+
+  it("refuses unknown or out-of-range filters, and applies since/until", async () => {
+    await seedEvent({ userId: "user-dev", tool: "in", createdAt: NOW - 100 });
+    await seedEvent({ userId: "user-dev", tool: "out", createdAt: NOW - 5 * 86400 });
+    for (const q of ["auth=bogus", "delegated=2", "space=a%20b", "since=x", `since=${NOW - 91 * 86400}`]) {
+      expect((await get(`/api/admin/overview/activity?${q}`)).statusCode, q).toBe(400);
+    }
+    const ok = await get(`/api/admin/overview/activity?since=${NOW - 86400}`);
+    expect(JSON.parse(ok.body).events.map((e: { tool: string }) => e.tool)).toEqual(["in"]);
+  });
 });
 
 describe("GET /api/admin/overview/connections", () => {

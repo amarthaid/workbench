@@ -524,6 +524,34 @@ export interface ActivityEvent {
    * access; `by_me`: I used someone else's. Null for an ordinary call.
    */
   delegation?: ActivityDelegation | null;
+  /**
+   * Request origin and credential. Null on a delegated row where the reader is
+   * the owner (someone else's call on my access).
+   */
+  auth_method?: string | null;
+  client_name?: string | null;
+  source_ip?: string | null;
+  user_agent?: string | null;
+}
+
+export type ActivityAuth = "api_key" | "oauth" | "session" | "curl_token" | "space";
+
+/** Filters both Activity endpoints take (`person` is personal-only). */
+export interface ActivityFilterOpts {
+  /** Unix seconds on created_at. */
+  since?: number;
+  until?: number;
+  delegated?: boolean;
+  space?: string;
+  auth?: ActivityAuth;
+}
+
+function setFilterParams(qs: URLSearchParams, opts: ActivityFilterOpts) {
+  if (opts.since !== undefined) qs.set("since", String(opts.since));
+  if (opts.until !== undefined) qs.set("until", String(opts.until));
+  if (opts.delegated) qs.set("delegated", "1");
+  if (opts.space) qs.set("space", opts.space);
+  if (opts.auth) qs.set("auth", opts.auth);
 }
 
 export interface ActivityDelegation {
@@ -553,17 +581,21 @@ export interface Stats {
   most_used_integration: string | null;
 }
 
-export async function fetchActivity(opts: {
+export async function fetchActivity(opts: ActivityFilterOpts & {
   limit?: number;
   cursor?: string;
   integration?: string;
   status?: "success" | "error";
+  /** Other party's email on a delegated row. */
+  person?: string;
 } = {}): Promise<ActivityPage> {
   const qs = new URLSearchParams();
   if (opts.limit) qs.set("limit", String(opts.limit));
   if (opts.cursor) qs.set("cursor", opts.cursor);
   if (opts.integration) qs.set("integration", opts.integration);
   if (opts.status) qs.set("status", opts.status);
+  if (opts.person) qs.set("person", opts.person);
+  setFilterParams(qs, opts);
   const suffix = qs.toString() ? `?${qs}` : "";
 
   const res = await fetch(`${API_URL}/api/activity${suffix}`, { headers: getHeaders() });
@@ -573,6 +605,30 @@ export async function fetchActivity(opts: {
     throw new Error("Unauthorized");
   }
   if (!res.ok) throw new Error("Failed to fetch activity");
+  return res.json();
+}
+
+export interface ActivityPerson {
+  email: string;
+  count: number;
+}
+
+/** Distinct other parties on the caller's delegated rows in a date range. */
+export async function fetchActivityPeople(opts: { since?: number; until?: number } = {}): Promise<{
+  stored: boolean;
+  people: ActivityPerson[];
+}> {
+  const qs = new URLSearchParams();
+  if (opts.since !== undefined) qs.set("since", String(opts.since));
+  if (opts.until !== undefined) qs.set("until", String(opts.until));
+  const suffix = qs.toString() ? `?${qs}` : "";
+  const res = await fetch(`${API_URL}/api/activity/people${suffix}`, { headers: getHeaders() });
+  if (res.status === 401) {
+    localStorage.removeItem("awb_token");
+    window.location.href = "/login";
+    throw new Error("Unauthorized");
+  }
+  if (!res.ok) throw new Error("Failed to fetch people");
   return res.json();
 }
 
@@ -791,6 +847,9 @@ export interface AdminActivityEvent extends ActivityEvent {
   auth_method?: string | null;
   client_id?: string | null;
   client_name?: string | null;
+  /** Who triggered a delegated call (the owner's `user_email` is whose access ran). */
+  actor_user_id?: string | null;
+  actor_email?: string | null;
 }
 
 export interface AdminAuditPayload {
@@ -900,7 +959,7 @@ export const fetchAdminProfiles = () =>
     "browser profiles"
   );
 
-export function fetchAdminActivity(opts: {
+export function fetchAdminActivity(opts: ActivityFilterOpts & {
   limit?: number;
   cursor?: string;
   integration?: string;
@@ -913,6 +972,7 @@ export function fetchAdminActivity(opts: {
   if (opts.integration) qs.set("integration", opts.integration);
   if (opts.status) qs.set("status", opts.status);
   if (opts.email) qs.set("email", opts.email);
+  setFilterParams(qs, opts);
   const suffix = qs.toString() ? `?${qs}` : "";
   return adminGet<AdminActivityPage>(`/api/admin/overview/activity${suffix}`, "activity");
 }
