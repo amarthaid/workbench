@@ -144,6 +144,13 @@ describe("read-only mode", () => {
     expect(screen.queryByRole("switch")).toBeNull();
   });
 
+  it("omits the viewer wording in the owner's lending review", () => {
+    const ro = (t: SpaceTool): SpaceTool => ({ ...t, approvalEditable: false });
+    render(<SpaceToolList tools={[READ, ro(WRITE), ro(DESTROY)]} delegation />);
+    expect(screen.queryByText("The owner decides which actions ask first.")).toBeNull();
+    expect(screen.getByText("Runs without asking")).toBeInTheDocument();
+  });
+
   it("omits the owner line when no tool carries an approval", () => {
     render(<SpaceToolList tools={[READ]} />);
     expect(screen.queryByText("The owner decides which actions ask first.")).toBeNull();
