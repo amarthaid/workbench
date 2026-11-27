@@ -12,6 +12,7 @@ import { registerSpaceRoutes } from "./spaces/routes";
 import { registerSpaceApiRoutes } from "./spaces/api";
 import { registerApprovalRoutes } from "./approvals/routes";
 import { startSpaceUploadReaper } from "./spaces/pending";
+import { backfillDelegatedConsents } from "./spaces/approvals";
 import { registerCurlProxy } from "./api/curl-proxy";
 import { registerRestRoutes } from "./api/rest-routes";
 import { registerWorkspaceRoutes } from "./workspace/routes";
@@ -59,6 +60,12 @@ async function main() {
   registry.setDisabledPredicate(isIntegrationDisabled);
   startSettingsPoll();
   await loadPlugins();
+  // Delegated consents given before approval modes existed: record what they approved.
+  try {
+    await backfillDelegatedConsents();
+  } catch (e) {
+    console.error(`[spaces] consent backfill failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
   await registerApiRoutes(app);
   await registerAdminRoutes(app);
   await registerOAuthRoutes(app);

@@ -8,9 +8,10 @@ let tmp: string;
 vi.mock("../../src/spaces/dir", () => ({ spacesRoot: () => tmp }));
 
 import { db } from "../../src/db";
-import { consentHash, deleteSpace, getConsentRow, grantConsent, upsertSpace } from "../../src/spaces/store";
+import { consentHash, deleteSpace, getConsentRow, getSpace, grantConsent, upsertSpace } from "../../src/spaces/store";
 import {
   approvalEditable,
+  backfillDelegatedConsents,
   approvalFor,
   checkConsent,
   legacyApprovedSet,
@@ -286,5 +287,40 @@ describe("checkConsent", () => {
   it("ignores tools that cannot be delegated", async () => {
     await grantConsent(delegated(), "u2", [WRITE]);
     expect(await checkConsent(delegated(), "u2", { [NOT_DELEGABLE]: "auto" })).toEqual({ consented: true });
+  });
+});
+
+// ---- backfill --------------------------------------------------------------
+
+describe("backfillDelegatedConsents", () => {
+  async function seed() {
+    await seedUser("u2", "viewer@example.com");
+    await seedUser("u3", "other@example.com");
+    const tools = [READ, WRITE, DESTRUCTIVE, NOT_DELEGABLE];
+    await upsertSpace({ name: "s1", ownerId: "u1", title: "T", tools, visibility: "org" });
+    await db.run("UPDATE spaces SET access_mode = 'owner' WHERE name = 's1'");
+    await upsertSpace({ name: "s2", ownerId: "u1", title: "T", tools, visibility: "org" });
+    const s1 = (await getSpace("s1"))!;
+    const s2 = (await getSpace("s2"))!;
+    await grantConsent(s1, "u1");
+    await grantConsent(s1, "u2");
+    await grantConsent(s1, "u3", [DESTRUCTIVE]);
+    await grantConsent(s2, "u2");
+  }
+
+  it("fills only a delegated viewer's NULL row with the current delegable write tools", async () => {
+    await seed();
+    expect(await backfillDelegatedConsents()).toBe(1);
+    expect((await getConsentRow("s1", "u2"))!.autoTools).toEqual([WRITE]);
+    expect((await getConsentRow("s1", "u1"))!.autoTools).toBeNull();
+    expect((await getConsentRow("s1", "u3"))!.autoTools).toEqual([DESTRUCTIVE]);
+    expect((await getConsentRow("s2", "u2"))!.autoTools).toBeNull();
+  });
+
+  it("is idempotent", async () => {
+    await seed();
+    await backfillDelegatedConsents();
+    expect(await backfillDelegatedConsents()).toBe(0);
+    expect((await getConsentRow("s1", "u2"))!.autoTools).toEqual([WRITE]);
   });
 });

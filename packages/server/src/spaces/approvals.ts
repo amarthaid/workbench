@@ -3,7 +3,7 @@ import { effectOf } from "@a-workbench/shared";
 import { db } from "../db";
 import { registry, type PluginTool } from "../plugins/registry";
 import { isInternalIntegration } from "../plugins/internal-names";
-import { consentHash, getConsentRow, type Space } from "./store";
+import { consentHash, getConsentRow, getSpace, type Space } from "./store";
 
 // Per-tool approval modes for Spaces. See
 // docs/internal/superpowers/specs/2026-11-27-space-tool-approvals-design.md.
@@ -180,4 +180,32 @@ export async function checkConsent(space: Space, viewerId: string, rows: Approva
     if (!approved.has(name)) return { consented: false, reason: "approvals" };
   }
   return { consented: true };
+}
+
+// ---- backfill --------------------------------------------------------------
+
+/**
+ * Delegated consents given before auto_tools existed approved today's defaults.
+ * Record that as concrete names: for every delegated viewer's row with no set,
+ * store the Space's current delegable write tools. Needs the plugin registry
+ * (effects), so it runs after plugins load. Idempotent: the guarded UPDATE makes
+ * concurrent workers write the same thing. Returns the number of rows filled.
+ */
+export async function backfillDelegatedConsents(): Promise<number> {
+  const pending = await db.all<{ space_name: string; user_id: string }>(
+    `SELECT c.space_name, c.user_id FROM space_consents c
+     JOIN spaces s ON s.name = c.space_name
+     WHERE c.auto_tools IS NULL AND s.access_mode = 'owner' AND c.user_id <> s.owner_id`
+  );
+  let filled = 0;
+  for (const row of pending) {
+    const space = await getSpace(row.space_name);
+    if (!space) continue;
+    const result = await db.run(
+      "UPDATE space_consents SET auto_tools = ? WHERE space_name = ? AND user_id = ? AND auto_tools IS NULL",
+      [JSON.stringify(legacyApprovedSet(space)), row.space_name, row.user_id]
+    );
+    filled += result.changes;
+  }
+  return filled;
 }
