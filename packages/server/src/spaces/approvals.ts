@@ -224,7 +224,8 @@ export async function checkConsent(space: Space, viewerId: string, rows: Approva
  * Delegated consents given before auto_tools existed approved today's defaults.
  * Record that as concrete names: for every delegated viewer's row with no set,
  * store the Space's current delegable write tools. Needs the plugin registry
- * (effects), so it runs after plugins load. Idempotent: the guarded UPDATE makes
+ * (effects), so it runs after plugins load. A Space with a tool that is not
+ * usable at boot is skipped. Idempotent: the guarded UPDATE makes
  * concurrent workers write the same thing. Returns the number of rows filled.
  */
 export async function backfillDelegatedConsents(): Promise<number> {
@@ -236,7 +237,10 @@ export async function backfillDelegatedConsents(): Promise<number> {
   let filled = 0;
   for (const row of pending) {
     const space = await getSpace(row.space_name);
-    if (!space) continue;
+    // A tool missing now (a plugin that failed to load, a disabled integration)
+    // cannot be classified, so the set recorded would be narrower than what the
+    // viewer approved. Leave the row NULL: it reads as today's set later.
+    if (!space || space.tools.some((name) => !usableTool(name))) continue;
     const result = await db.run(
       "UPDATE space_consents SET auto_tools = ? WHERE space_name = ? AND user_id = ? AND auto_tools IS NULL",
       [JSON.stringify(legacyApprovedSet(space)), row.space_name, row.user_id]

@@ -317,6 +317,19 @@ describe("backfillDelegatedConsents", () => {
     expect((await getConsentRow("s2", "u2"))!.autoTools).toBeNull();
   });
 
+  it("leaves a Space alone when one of its tools is not usable at boot, and fills the others", async () => {
+    await seed();
+    await upsertSpace({ name: "s3", ownerId: "u1", title: "T", tools: [WRITE, GONE], visibility: "org" });
+    await db.run("UPDATE spaces SET access_mode = 'owner' WHERE name = 's3'");
+    await grantConsent((await getSpace("s3"))!, "u2");
+    expect(await backfillDelegatedConsents()).toBe(1);
+    expect((await getConsentRow("s3", "u2"))!.autoTools).toBeNull();
+    expect((await getConsentRow("s1", "u2"))!.autoTools).toEqual([WRITE]);
+    // Once the tool is usable again the next boot fills it.
+    await db.run("UPDATE spaces SET tools = ? WHERE name = 's3'", [JSON.stringify([WRITE])]);
+    expect(await backfillDelegatedConsents()).toBe(1);
+  });
+
   it("re-asks after the backfill when a tool is reclassified so it now runs without asking", async () => {
     await seed();
     await backfillDelegatedConsents();
