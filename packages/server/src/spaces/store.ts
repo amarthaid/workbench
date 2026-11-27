@@ -505,6 +505,11 @@ export async function grantConsent(space: Space, userId: string, autoTools: stri
   );
 }
 
+/** Record `updatedAt` as the Space version this person has approved, keeping the rest of their consent. */
+export async function refreshConsentVersion(name: string, userId: string, updatedAt: number): Promise<void> {
+  await db.run("UPDATE space_consents SET space_updated_at = ? WHERE space_name = ? AND user_id = ?", [updatedAt, name, userId]);
+}
+
 export async function revokeConsent(name: string, userId: string): Promise<void> {
   await db.run("DELETE FROM space_consents WHERE space_name = ? AND user_id = ?", [name, userId]);
 }

@@ -198,22 +198,42 @@ export function legacyApprovedSet(space: Space): string[] {
   return out.sort();
 }
 
-export type ConsentCheck = { consented: boolean; reason?: "tools" | "approvals" };
+export type ConsentCheck = { consented: boolean; reason?: "tools" | "approvals" | "page" };
+
+/**
+ * True when something that would otherwise ask first runs without asking for
+ * this viewer: a tool in their auto set whose default is not auto (a destructive
+ * or unclassified tool set to Always allow, or Allow all over one). For a
+ * delegated viewer the set follows the owner's rows and leaves out tools that
+ * cannot be delegated. Such a person approves again when the Space changes.
+ */
+export function isElevated(space: Space, viewerId: string, rows: ApprovalRows): boolean {
+  return autoSet(space, viewerId, rows).some((name) => {
+    const tool = usableTool(name);
+    return !!tool && defaultMode(tool) !== "auto";
+  });
+}
 
 /**
  * Has this viewer approved what they would run now? The stored hash must match
  * consentHash; a delegated viewer must also have approved every tool that now
  * runs without asking. Tightening shrinks the set and stays approved;
- * loosening adds a tool and asks again.
+ * loosening adds a tool and asks again. An elevated person (see isElevated)
+ * must also have approved the Space as it is now: any change to the Space
+ * (a page upload, a tool list change) since their approval asks again.
  */
 export async function checkConsent(space: Space, viewerId: string, rows: ApprovalRows): Promise<ConsentCheck> {
   const row = await getConsentRow(space.name, viewerId);
   if (!row) return { consented: false };
   if (row.hash !== consentHash(space, viewerId)) return { consented: false, reason: "tools" };
-  if (!delegatedFor(space, viewerId)) return { consented: true };
-  const approved = new Set(row.autoTools ?? legacyApprovedSet(space));
-  for (const name of autoSet(space, viewerId, rows)) {
-    if (!approved.has(name)) return { consented: false, reason: "approvals" };
+  if (delegatedFor(space, viewerId)) {
+    const approved = new Set(row.autoTools ?? legacyApprovedSet(space));
+    for (const name of autoSet(space, viewerId, rows)) {
+      if (!approved.has(name)) return { consented: false, reason: "approvals" };
+    }
+  }
+  if (isElevated(space, viewerId, rows) && row.spaceUpdatedAt !== space.updatedAt) {
+    return { consented: false, reason: "page" };
   }
   return { consented: true };
 }

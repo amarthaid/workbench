@@ -14,6 +14,7 @@ import {
   checkConsent,
   delegatedFor,
   defaultMode,
+  getApprovalRows,
   isInternalTool,
   policyRows,
   recordApprovalChange,
@@ -35,6 +36,7 @@ import {
   favoriteCounts,
   grantConsent,
   hasFiles,
+  refreshConsentVersion,
   isValidKvKey,
   kvDelete,
   kvGet,
@@ -612,7 +614,13 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
             message: "The owner of this Space decides which tools ask first.",
           });
         }
+        // A person who is consented now must not be asked again for their own
+        // change: judge that on the rows before the write, and after it record
+        // the Space version they read as the one they approved. A page upload
+        // landing in between still differs and asks.
+        const wasConsented = (await checkConsent(space, viewer.userId, await getApprovalRows(space.name, viewer.userId))).consented;
         const changes = await writeApprovals(space.name, viewer.userId, next, defaults);
+        if (wasConsented) await refreshConsentVersion(space.name, viewer.userId, space.updatedAt);
         // The mode can change while the write runs (the owner turns sharing on
         // or off), so audit when either the read before or the read after says
         // owner: a change that landed under the owner policy is never skipped.

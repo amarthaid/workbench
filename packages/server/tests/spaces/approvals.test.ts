@@ -20,6 +20,7 @@ import {
   defaultMode,
   delegatedFor,
   getApprovalRows,
+  isElevated,
   policyRows,
   policySource,
   writeApprovals,
@@ -294,6 +295,77 @@ describe("checkConsent", () => {
   it("ignores tools that cannot be delegated", async () => {
     await grantConsent(delegated(), "u2", [WRITE]);
     expect(await checkConsent(delegated(), "u2", { [NOT_DELEGABLE]: "auto" })).toEqual({ consented: true });
+  });
+});
+
+describe("isElevated", () => {
+  it("is false for the defaults and for Always allow on a write tool only", () => {
+    expect(isElevated(space(), "u2", {})).toBe(false);
+    expect(isElevated(space(), "u2", { [WRITE]: "auto" })).toBe(false);
+  });
+
+  it("is true when a destructive or unclassified tool is Always allow", () => {
+    expect(isElevated(space(), "u2", { [DESTRUCTIVE]: "auto" })).toBe(true);
+    expect(isElevated(space({ tools: [READ, "acme_unlabelled"] }), "u2", { acme_unlabelled: "auto" })).toBe(true);
+  });
+
+  it("is true for the owner through their own rows", () => {
+    expect(isElevated(space(), "u1", { [DESTRUCTIVE]: "auto" })).toBe(true);
+    expect(isElevated(space(), "u1", {})).toBe(false);
+  });
+
+  it("is true for Allow all on a Space with a destructive tool", () => {
+    expect(isElevated(space(), "u2", { [WRITE]: "auto", [DESTRUCTIVE]: "auto", [NOT_DELEGABLE]: "auto" })).toBe(true);
+  });
+
+  it("follows the owner's rows for a delegated viewer and ignores tools that cannot be delegated", () => {
+    const d = space({ accessMode: "owner" });
+    expect(isElevated(d, "u2", {})).toBe(false);
+    expect(isElevated(d, "u2", { [DESTRUCTIVE]: "auto" })).toBe(true);
+    expect(isElevated(space({ accessMode: "owner", tools: [READ, NOT_DELEGABLE] }), "u2", { [NOT_DELEGABLE]: "auto" })).toBe(false);
+  });
+});
+
+describe("checkConsent after the Space changes", () => {
+  const delegated = () => space({ accessMode: "owner", updatedAt: 1 });
+  const elevated = { [DESTRUCTIVE]: "auto" } as const;
+
+  it("asks an elevated person again with reason page when updatedAt moved", async () => {
+    await grantConsent(space({ updatedAt: 1 }), "u2");
+    expect(await checkConsent(space({ updatedAt: 1 }), "u2", elevated)).toEqual({ consented: true });
+    expect(await checkConsent(space({ updatedAt: 2 }), "u2", elevated)).toEqual({ consented: false, reason: "page" });
+  });
+
+  it("does not ask a non-elevated person again", async () => {
+    await grantConsent(space({ updatedAt: 1 }), "u2");
+    expect(await checkConsent(space({ updatedAt: 2 }), "u2", {})).toEqual({ consented: true });
+    expect(await checkConsent(space({ updatedAt: 2 }), "u2", { [WRITE]: "auto" })).toEqual({ consented: true });
+  });
+
+  it("asks the owner again through their own rows", async () => {
+    await grantConsent(space({ updatedAt: 1 }), "u1");
+    expect(await checkConsent(space({ updatedAt: 2 }), "u1", elevated)).toEqual({ consented: false, reason: "page" });
+  });
+
+  it("asks a delegated viewer again when the owner set a destructive tool to auto", async () => {
+    await grantConsent(delegated(), "u2", [DESTRUCTIVE, WRITE]);
+    expect(await checkConsent(delegated(), "u2", elevated)).toEqual({ consented: true });
+    expect(await checkConsent({ ...delegated(), updatedAt: 2 }, "u2", elevated)).toEqual({ consented: false, reason: "page" });
+    expect(await checkConsent({ ...delegated(), updatedAt: 2 }, "u2", {})).toEqual({ consented: true });
+  });
+
+  it("keeps the order: tools, then approvals, then page", async () => {
+    await grantConsent(delegated(), "u2", [WRITE]);
+    const changed = { ...delegated(), updatedAt: 2 };
+    expect(await checkConsent({ ...changed, tools: [READ] }, "u2", elevated)).toEqual({ consented: false, reason: "tools" });
+    expect(await checkConsent(changed, "u2", elevated)).toEqual({ consented: false, reason: "approvals" });
+  });
+
+  it("treats a legacy NULL as consented for a non-elevated person and as a mismatch for an elevated one", async () => {
+    await grantConsent(space({ updatedAt: 1 }), "u2");
+    await db.run("UPDATE space_consents SET space_updated_at = NULL WHERE space_name = ? AND user_id = ?", ["s1", "u2"]);
+    expect(await checkConsent(space({ updatedAt: 1 }), "u2", {})).toEqual({ consented: true });
+    expect(await checkConsent(space({ updatedAt: 1 }), "u2", elevated)).toEqual({ consented: false, reason: "page" });
   });
 });
 

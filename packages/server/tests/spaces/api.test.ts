@@ -45,7 +45,7 @@ import { signSession } from "../../src/auth/session";
 import { setApiKey } from "../../src/auth/users";
 import { setUserDisabled } from "../../src/auth/user-status";
 import { registerSpaceApiRoutes, containsVaultRef } from "../../src/spaces/api";
-import { consentHash, getConsentRow, getSpace, setShares, toolsHash, updateSpaceMeta, upsertSpace, kvPut } from "../../src/spaces/store";
+import { consentHash, getConsentRow, getSpace, setShares, toolsHash, touchSpace, updateSpaceMeta, upsertSpace, kvPut } from "../../src/spaces/store";
 import { policyRows, writeApprovals } from "../../src/spaces/approvals";
 import { verifySig } from "../../src/spaces/sig";
 import * as permissionsStore from "../../src/permissions/store";
@@ -1709,6 +1709,109 @@ describe("tool approvals in the portal API", () => {
       expect(policySpy).toHaveBeenCalledTimes(1);
       expect((await getConsentRow("s1", "u2"))!.autoTools).toEqual([WRITE]);
       expect((await detail("u2")).consented).toBe(false);
+    });
+  });
+
+  describe("approving again when the Space changes", () => {
+    const pastUpdate = () => db.run("UPDATE spaces SET updated_at = 1000 WHERE name = 's1'");
+
+    it("asks an elevated person again after a page upload, with reason page", async () => {
+      await pastUpdate();
+      await setRow("u2", DESTRUCTIVE, "auto");
+      expect((await consent("u2")).statusCode).toBe(200);
+      expect(await detail("u2")).toMatchObject({ consented: true });
+      await touchSpace("s1");
+      const after = await detail("u2");
+      expect(after).toMatchObject({ consented: false, reconsent_reason: "page" });
+      expect((await call("u2", { tool: DESTRUCTIVE, args: { id: "1" } })).statusCode).toBe(403);
+      expect((await consent("u2")).statusCode).toBe(200);
+      expect(await detail("u2")).toMatchObject({ consented: true });
+    });
+
+    it("does not ask a non-elevated person again, even with Always allow on a write tool only", async () => {
+      await pastUpdate();
+      await setRow("u2", WRITE, "auto");
+      expect((await consent("u2")).statusCode).toBe(200);
+      await touchSpace("s1");
+      expect(await detail("u2")).toMatchObject({ consented: true });
+      expect((await detail("u2")).reconsent_reason).toBeUndefined();
+    });
+
+    it("an Allow all on a Space with a destructive tool elevates", async () => {
+      await pastUpdate();
+      for (const t of [WRITE, DESTRUCTIVE, "acme_unlabelled", "acme_set_secret"]) await setRow("u2", t, "auto");
+      await consent("u2");
+      await touchSpace("s1");
+      expect(await detail("u2")).toMatchObject({ consented: false, reconsent_reason: "page" });
+    });
+
+    it("elevates the owner and an ordinary viewer through their own rows", async () => {
+      await pastUpdate();
+      await setRow("u1", DESTRUCTIVE, "auto");
+      await consent("u1");
+      await consent("u2");
+      await touchSpace("s1");
+      expect(await detail("u1")).toMatchObject({ consented: false, reconsent_reason: "page" });
+      expect(await detail("u2")).toMatchObject({ consented: true });
+    });
+
+    it("elevates a delegated viewer when the owner set a destructive tool to auto", async () => {
+      await pastUpdate();
+      await delegate();
+      await setRow("u1", DESTRUCTIVE, "auto");
+      await pastUpdate();
+      await consent("u2");
+      expect(await detail("u2")).toMatchObject({ consented: true });
+      await touchSpace("s1");
+      expect(await detail("u2")).toMatchObject({ consented: false, reconsent_reason: "page" });
+    });
+
+    it("a metadata-only edit does not ask again", async () => {
+      await pastUpdate();
+      await setRow("u2", DESTRUCTIVE, "auto");
+      await consent("u2");
+      const res = await app.inject({ method: "PATCH", url: "/api/spaces/s1", headers: as("u1"), payload: { title: "Renamed" } });
+      expect(res.statusCode).toBe(200);
+      expect(await detail("u2")).toMatchObject({ consented: true });
+    });
+
+    it("the consent POST stores the updatedAt it read", async () => {
+      await db.run("UPDATE spaces SET updated_at = 4242 WHERE name = 's1'");
+      await consent("u2");
+      expect((await getConsentRow("s1", "u2"))!.spaceUpdatedAt).toBe(4242);
+    });
+
+    it("a legacy NULL stays consented for a non-elevated person and asks an elevated one", async () => {
+      await consent("u2");
+      await consent("u1");
+      await setRow("u1", DESTRUCTIVE, "auto");
+      await db.run("UPDATE space_consents SET space_updated_at = NULL");
+      expect(await detail("u2")).toMatchObject({ consented: true });
+      expect(await detail("u1")).toMatchObject({ consented: false, reconsent_reason: "page" });
+    });
+
+    it("a person who changes their own modes stays consented", async () => {
+      await pastUpdate();
+      await consent("u2");
+      await touchSpace("s1");
+      const res = await app.inject({ method: "PUT", url: "/api/spaces/s1/tool-approvals", headers: as("u2"), payload: { tools: { [DESTRUCTIVE]: "auto" } } });
+      expect(res.statusCode).toBe(200);
+      expect(await detail("u2")).toMatchObject({ consented: true });
+      expect((await getConsentRow("s1", "u2"))!.spaceUpdatedAt).toBe((await getSpace("s1"))!.updatedAt);
+    });
+
+    it("a person who is not consented gets no refresh from their own change", async () => {
+      const res = await app.inject({ method: "PUT", url: "/api/spaces/s1/tool-approvals", headers: as("u2"), payload: { tools: { [DESTRUCTIVE]: "auto" } } });
+      expect(res.statusCode).toBe(200);
+      expect(await getConsentRow("s1", "u2")).toBeNull();
+      // Asked again for the page: the change must not have refreshed anything.
+      await pastUpdate();
+      await consent("u2");
+      await touchSpace("s1");
+      await db.run("UPDATE space_consents SET space_updated_at = 1 WHERE user_id = 'u2'");
+      await app.inject({ method: "PUT", url: "/api/spaces/s1/tool-approvals", headers: as("u2"), payload: { tools: { [WRITE]: "ask" } } });
+      expect(await detail("u2")).toMatchObject({ consented: false, reconsent_reason: "page" });
+      expect((await getConsentRow("s1", "u2"))!.spaceUpdatedAt).toBe(1);
     });
   });
 
