@@ -1,4 +1,8 @@
+import { effectOf } from "@a-workbench/shared";
 import { db } from "../db";
+import { registry, type PluginTool } from "../plugins/registry";
+import { isInternalIntegration } from "../plugins/internal-names";
+import type { Space } from "./store";
 
 // Per-tool approval modes for Spaces. See
 // docs/internal/superpowers/specs/2026-11-27-space-tool-approvals-design.md.
@@ -60,4 +64,75 @@ export async function writeApprovals(
     }
     return changes;
   });
+}
+
+// ---- policy ----------------------------------------------------------------
+
+/** A tool the Space cannot use: internal integrations never run from a Space. */
+export function isInternalTool(tool: PluginTool): boolean {
+  return isInternalIntegration(tool.integration);
+}
+
+/**
+ * True when this viewer's calls follow the owner's policy: the stored access
+ * mode is "owner" and the viewer is not the owner. It uses the stored mode, not
+ * whether delegation is in effect, so a paused delegation still follows the
+ * owner and needs no permission lookup.
+ */
+export function delegatedFor(space: Space, viewerId: string): boolean {
+  return space.accessMode === "owner" && viewerId !== space.ownerId;
+}
+
+/** Whose approval rows decide for this viewer. */
+export function policySource(space: Space, viewerId: string): string {
+  return delegatedFor(space, viewerId) ? space.ownerId : viewerId;
+}
+
+/** Read the policy rows that apply to this viewer. Callers read once per request. */
+export async function policyRows(space: Space, viewerId: string): Promise<ApprovalRows> {
+  return getApprovalRows(space.name, policySource(space, viewerId));
+}
+
+/** The mode a tool has with no row: write runs, anything else non-read asks. Reads have none. */
+export function defaultMode(tool: PluginTool): ApprovalMode | null {
+  const effect = effectOf(tool);
+  if (effect === "read") return null;
+  return effect === "write" ? "auto" : "ask";
+}
+
+function usableTool(toolName: string): PluginTool | null {
+  const tool = registry.getTool(toolName);
+  if (!tool || !registry.getIntegration(tool.integration) || isInternalTool(tool)) return null;
+  return tool;
+}
+
+/** Effective mode: null for a read tool (never asks), "ask" for a missing or internal one. */
+export function approvalFor(_space: Space, _viewerId: string, toolName: string, rows: ApprovalRows): ApprovalMode | null {
+  const tool = usableTool(toolName);
+  if (!tool) return "ask";
+  const def = defaultMode(tool);
+  if (def === null) return null;
+  return rows[toolName] ?? def;
+}
+
+/**
+ * Sorted names of the tools that run without asking. For a delegated viewer,
+ * tools that cannot be delegated are left out: they never run for them.
+ */
+export function autoSet(space: Space, viewerId: string, rows: ApprovalRows): string[] {
+  const delegated = delegatedFor(space, viewerId);
+  const out: string[] = [];
+  for (const name of space.tools) {
+    if (approvalFor(space, viewerId, name, rows) !== "auto") continue;
+    if (delegated && registry.getTool(name)?.delegable === false) continue;
+    out.push(name);
+  }
+  return out.sort();
+}
+
+/** Whether this viewer may change the tool's mode: not a read or missing tool, not a delegated viewer. */
+export function approvalEditable(space: Space, viewerId: string, toolName: string): boolean {
+  const tool = usableTool(toolName);
+  if (!tool || defaultMode(tool) === null) return false;
+  return !delegatedFor(space, viewerId);
 }

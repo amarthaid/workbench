@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,8 +8,25 @@ vi.mock("../../src/spaces/dir", () => ({ spacesRoot: () => tmp }));
 
 import { db } from "../../src/db";
 import { deleteSpace, upsertSpace } from "../../src/spaces/store";
-import { getApprovalRows, writeApprovals } from "../../src/spaces/approvals";
+import {
+  approvalEditable,
+  approvalFor,
+  autoSet,
+  defaultMode,
+  delegatedFor,
+  getApprovalRows,
+  policyRows,
+  policySource,
+  writeApprovals,
+} from "../../src/spaces/approvals";
+import { registry } from "../../src/plugins/registry";
+import type { Space } from "../../src/spaces/store";
+import { registerFixtures } from "./fixtures";
 import { resetSpacesDb, seedUser } from "./helpers";
+
+beforeAll(() => {
+  registerFixtures();
+});
 
 beforeEach(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "spaces-approvals-"));
@@ -74,5 +91,106 @@ describe("approval rows", () => {
     expect(await db.all("SELECT * FROM space_tool_approvals")).toEqual([]);
     await upsertSpace({ name: "s1", ownerId: "u1", title: "T", tools: ["a"], visibility: "org" });
     expect(await getApprovalRows("s1", "u1")).toEqual({});
+  });
+});
+
+// ---- policy ----------------------------------------------------------------
+
+const READ = "acme_list_items";
+const WRITE = "acme_update_item";
+const DESTRUCTIVE = "acme_delete_item";
+const NOT_DELEGABLE = "acme_set_secret";
+const GONE = "acme_removed_tool";
+
+function space(over: Partial<Space> = {}): Space {
+  return {
+    name: "s1",
+    ownerId: "u1",
+    title: "T",
+    description: null,
+    tools: [READ, WRITE, DESTRUCTIVE, NOT_DELEGABLE, GONE],
+    visibility: "org",
+    accessMode: "viewer",
+    delegatedToolsHash: null,
+    createdAt: 0,
+    updatedAt: 0,
+    ...over,
+  };
+}
+
+describe("delegatedFor and policySource", () => {
+  it("is true only for the stored owner mode and a viewer who is not the owner", () => {
+    expect(delegatedFor(space({ accessMode: "owner" }), "u2")).toBe(true);
+    expect(delegatedFor(space({ accessMode: "owner" }), "u1")).toBe(false);
+    expect(delegatedFor(space({ accessMode: "viewer" }), "u2")).toBe(false);
+  });
+
+  it("stays true while delegation is paused by a tool change (stale pin)", () => {
+    expect(delegatedFor(space({ accessMode: "owner", delegatedToolsHash: "stale" }), "u2")).toBe(true);
+  });
+
+  it("follows the owner's rows only when delegated", async () => {
+    expect(policySource(space({ accessMode: "owner" }), "u2")).toBe("u1");
+    expect(policySource(space({ accessMode: "owner" }), "u1")).toBe("u1");
+    expect(policySource(space(), "u2")).toBe("u2");
+    await writeApprovals("s1", "u1", { [WRITE]: "ask" }, { [WRITE]: "auto" });
+    expect(await policyRows(space({ accessMode: "owner" }), "u2")).toEqual({ [WRITE]: "ask" });
+    expect(await policyRows(space(), "u2")).toEqual({});
+  });
+});
+
+describe("defaultMode", () => {
+  it("is auto for a write, ask for destructive and unlabelled, none for a read", () => {
+    expect(defaultMode(registry.getTool(WRITE)!)).toBe("auto");
+    expect(defaultMode(registry.getTool(DESTRUCTIVE)!)).toBe("ask");
+    expect(defaultMode(registry.getTool("acme_unlabelled")!)).toBe("ask");
+    expect(defaultMode(registry.getTool(READ)!)).toBeNull();
+  });
+});
+
+describe("approvalFor", () => {
+  it.each([
+    [READ, {}, null],
+    [GONE, {}, "ask"],
+    [GONE, { [GONE]: "auto" }, "ask"],
+    [WRITE, {}, "auto"],
+    [WRITE, { [WRITE]: "ask" }, "ask"],
+    [DESTRUCTIVE, {}, "ask"],
+    [DESTRUCTIVE, { [DESTRUCTIVE]: "auto" }, "auto"],
+    [READ, { [READ]: "ask" }, null],
+  ] as const)("%s with rows %j is %s", (tool, rows, expected) => {
+    expect(approvalFor(space(), "u2", tool, rows as Record<string, "auto" | "ask">)).toBe(expected);
+  });
+
+  it("treats a tool of an internal integration as ask", () => {
+    expect(approvalFor(space(), "u2", "deploy_space", {})).toBe("ask");
+  });
+});
+
+describe("autoSet", () => {
+  it("lists the auto tools in sorted order for an ordinary viewer, non-delegable included", () => {
+    expect(autoSet(space(), "u2", {})).toEqual([NOT_DELEGABLE, WRITE].sort());
+    expect(autoSet(space(), "u2", { [DESTRUCTIVE]: "auto", [WRITE]: "ask" })).toEqual([DESTRUCTIVE, NOT_DELEGABLE].sort());
+  });
+
+  it("leaves out tools that cannot be delegated for a delegated viewer", () => {
+    const s = space({ accessMode: "owner" });
+    expect(autoSet(s, "u2", {})).toEqual([WRITE]);
+    expect(autoSet(s, "u2", { [DESTRUCTIVE]: "auto" })).toEqual([DESTRUCTIVE, WRITE].sort());
+    expect(autoSet(s, "u1", {})).toEqual([NOT_DELEGABLE, WRITE].sort());
+  });
+});
+
+describe("approvalEditable", () => {
+  it("is false for reads, missing tools and delegated viewers", () => {
+    expect(approvalEditable(space(), "u2", READ)).toBe(false);
+    expect(approvalEditable(space(), "u2", GONE)).toBe(false);
+    expect(approvalEditable(space({ accessMode: "owner" }), "u2", WRITE)).toBe(false);
+  });
+
+  it("is true for a write or destructive tool of an ordinary viewer and for the owner", () => {
+    expect(approvalEditable(space(), "u2", WRITE)).toBe(true);
+    expect(approvalEditable(space(), "u2", DESTRUCTIVE)).toBe(true);
+    expect(approvalEditable(space({ accessMode: "owner" }), "u1", WRITE)).toBe(true);
   });
 });

@@ -6,8 +6,8 @@ import { verifySession } from "../auth/session";
 import { getUserById } from "../auth/users";
 import { getToken } from "../auth/tokens";
 import { hasValidCookies } from "../auth/cookie";
-import { registry, type PluginTool } from "../plugins/registry";
-import { isInternalIntegration } from "../plugins/internal-names";
+import { registry } from "../plugins/registry";
+import { isInternalTool } from "./approvals";
 import { executeDelegated, executeSingle } from "../mcp/meta-tools";
 import { can } from "../permissions/store";
 import { canView, type Viewer } from "./access";
@@ -108,9 +108,7 @@ async function isConnected(integration: string, userId: string): Promise<boolean
   return !!(await getToken(userId, integration));
 }
 
-function isInternal(tool: PluginTool): boolean {
-  return isInternalIntegration(tool.integration);
-}
+const isInternal = isInternalTool;
 
 /**
  * Display names of the integrations the Space's tools need that the viewer has
