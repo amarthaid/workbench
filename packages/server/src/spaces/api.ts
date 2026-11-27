@@ -613,8 +613,14 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           });
         }
         const changes = await writeApprovals(space.name, viewer.userId, next, defaults);
-        if (space.ownerId === viewer.userId && space.accessMode === "owner") {
-          await recordApprovalChange(space, viewer.userId, changes);
+        // The mode can change while the write runs (the owner turns sharing on
+        // or off), so audit when either the read before or the read after says
+        // owner: a change that landed under the owner policy is never skipped.
+        if (space.ownerId === viewer.userId && changes.length > 0) {
+          const after = space.accessMode === "owner" ? space : await getSpace(space.name);
+          if (space.accessMode === "owner" || after?.accessMode === "owner") {
+            await recordApprovalChange(space, viewer.userId, changes);
+          }
         }
         const rows = await policyRows(space, viewer.userId);
         return { tools: await buildToolList(space, viewer.userId, viewer.userId, rows) };

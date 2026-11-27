@@ -14,7 +14,7 @@ vi.mock("../../src/spaces/store", async (importOriginal) => {
 // Passes through; a test counts the policy reads of one request.
 vi.mock("../../src/spaces/approvals", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/spaces/approvals")>();
-  return { ...actual, policyRows: vi.fn(actual.policyRows) };
+  return { ...actual, policyRows: vi.fn(actual.policyRows), writeApprovals: vi.fn(actual.writeApprovals) };
 });
 
 // The reconnect runner, observed without replacing ensureCookieSession or
@@ -46,7 +46,7 @@ import { setApiKey } from "../../src/auth/users";
 import { setUserDisabled } from "../../src/auth/user-status";
 import { registerSpaceApiRoutes, containsVaultRef } from "../../src/spaces/api";
 import { consentHash, getConsentRow, getSpace, setShares, toolsHash, updateSpaceMeta, upsertSpace, kvPut } from "../../src/spaces/store";
-import { policyRows } from "../../src/spaces/approvals";
+import { policyRows, writeApprovals } from "../../src/spaces/approvals";
 import { verifySig } from "../../src/spaces/sig";
 import * as permissionsStore from "../../src/permissions/store";
 import { clearPermission, setPermission } from "../../src/permissions/store";
@@ -1884,6 +1884,26 @@ describe("tool approvals in the portal API", () => {
       expect((await put("u1", { tools: { [WRITE]: "ask" } })).statusCode).toBe(200);
       expect((await put("u2", { tools: { [WRITE]: "ask" } })).statusCode).toBe(200);
       expect(await approvalRows()).toEqual([]);
+    });
+
+    it("audits when the mode turns to owner while the write is in flight, and not when it turns away", async () => {
+      const actual = await vi.importActual<typeof import("../../src/spaces/approvals")>("../../src/spaces/approvals");
+      vi.mocked(writeApprovals).mockImplementationOnce(async (...args) => {
+        const changes = await actual.writeApprovals(...args);
+        await db.run("UPDATE spaces SET access_mode = 'owner' WHERE name = 's1'");
+        return changes;
+      });
+      expect((await put("u1", { tools: { [WRITE]: "ask" } })).statusCode).toBe(200);
+      expect((await approvalRows()).map((r) => r.tool)).toEqual([`space:s1 approvals: ${WRITE}=ask`]);
+
+      await db.exec("DELETE FROM audit_log");
+      vi.mocked(writeApprovals).mockImplementationOnce(async (...args) => {
+        const changes = await actual.writeApprovals(...args);
+        await db.run("UPDATE spaces SET access_mode = 'viewer' WHERE name = 's1'");
+        return changes;
+      });
+      expect((await put("u1", { tools: { [WRITE]: "auto" } })).statusCode).toBe(200);
+      expect((await approvalRows()).map((r) => r.tool)).toEqual([`space:s1 approvals: ${WRITE}=auto`]);
     });
 
     it("a failing audit logger still returns 200", async () => {
