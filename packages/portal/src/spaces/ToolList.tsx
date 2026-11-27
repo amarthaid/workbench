@@ -142,7 +142,7 @@ export function SpaceToolList({
           {g.tools.map((t) => {
             const effect = effectLabel(t);
             return (
-              <BoxRow key={t.name} className="space-tool-row">
+              <BoxRow key={t.name} className={editing && isEditable(t) ? "space-tool-row space-tool-row-control" : "space-tool-row"}>
                 <span className="space-tool-text">
                   <span className="wb-mono">{t.name}</span>
                   {t.description && <span className="space-tool-desc">{t.description}</span>}
