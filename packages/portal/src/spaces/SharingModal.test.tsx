@@ -123,7 +123,7 @@ describe("SharingModal: Delegate my access", () => {
     for (const t of TOOLS) expect(within(warning).getByText(t.name)).toBeInTheDocument();
     const row = (name: string) => within(warning).getByText(name).closest(".ui-box-row")!;
     expect(row("jira_search")).toHaveTextContent("Reads");
-    expect(row("github_merge_pr")).toHaveTextContent("Asks first");
+    expect(row("github_merge_pr")).toHaveTextContent("Deletes or changes");
     expect(row("sheets_append_row")).toHaveTextContent("Writes");
     expect(row("acme_set_secret")).toHaveTextContent("Owner only");
     expect(row("jira_search")).not.toHaveTextContent("Owner only");

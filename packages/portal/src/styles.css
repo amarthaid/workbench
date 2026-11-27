@@ -1806,3 +1806,7 @@ body {
 .space-card-left .space-card-title { text-align: left; }
 .space-ask { display: grid; gap: var(--s-8); text-align: left; width: 100%; }
 .space-ask .space-consent-actions { justify-content: flex-end; margin-top: var(--s-4); }
+/* Tool approvals: Allow all switches and the hint under the top one. */
+.space-allow-all { display: grid; gap: var(--s-4); }
+.space-allow-all-row { display: inline-flex; align-items: center; gap: var(--s-8); font-size: 13px; }
+.space-tool-tags { align-items: center; }
