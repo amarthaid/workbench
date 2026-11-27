@@ -221,7 +221,9 @@ export function createSpaceBridge(opts: BridgeOptions): SpaceBridge {
     });
 
     let confirmed = false;
-    if (isDestructive(tool)) {
+    // A tool with no approval field (an older server) keeps the old rule: ask only for a non-read, destructive-classified tool.
+    const needsAsk = tool.approval === "ask" || (tool.approval === undefined && isDestructive(tool) && tool.effect !== "read");
+    if (needsAsk) {
       await confirmOrDeny(tool, args);
       confirmed = true;
     }

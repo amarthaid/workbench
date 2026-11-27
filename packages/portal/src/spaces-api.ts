@@ -49,7 +49,13 @@ export interface SpaceTool {
   missing?: boolean;
   /** False: refused when the Space runs with delegated access. */
   delegable?: boolean;
+  /** How a call runs for this viewer. Absent on a read tool. */
+  approval?: "auto" | "ask";
+  /** The viewer may change `approval` (false for a delegated viewer or a missing tool). */
+  approvalEditable?: boolean;
 }
+
+export type ApprovalMode = "auto" | "ask";
 
 /**
  * Why a delegated Space cannot run calls right now. "owner_not_connected" is
@@ -92,6 +98,8 @@ export interface SpaceDetail {
   tools_hash?: string;
   /** Owner only: an admin allowed this user to delegate access. */
   can_delegate?: boolean;
+  /** Set with consented false when the viewer had approved before: why they are asked again. */
+  reconsent_reason?: "tools" | "approvals";
 }
 
 /**
@@ -271,6 +279,14 @@ export async function grantSpaceConsent(name: string, consentHash: string | unde
     method: "POST",
     body: { consent_hash: consentHash },
   });
+}
+
+/**
+ * Set the viewer's approval modes (only the tools that change). Answers the
+ * Space's tool list as it now stands for this viewer.
+ */
+export function setToolApprovals(name: string, tools: Record<string, ApprovalMode>): Promise<{ tools: SpaceTool[] }> {
+  return request<{ tools: SpaceTool[] }>(`/api/spaces/${seg(name)}/tool-approvals`, { method: "PUT", body: { tools } });
 }
 
 export async function revokeSpaceConsent(name: string): Promise<void> {
