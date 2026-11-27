@@ -139,7 +139,7 @@ describe("read-only mode", () => {
     render(<SpaceToolList tools={[READ, ro(WRITE), ro(DESTROY), MISSING]} hideConnection />);
     expect(screen.getByText("The owner decides which actions ask first.")).toBeInTheDocument();
     expect(screen.getByText("Runs without asking")).toBeInTheDocument();
-    expect(screen.getAllByText("Asks first")).toHaveLength(1);
+    expect(screen.getAllByText("Asks first")).toHaveLength(2);
     expect(screen.queryByRole("group")).toBeNull();
     expect(screen.queryByRole("switch")).toBeNull();
   });

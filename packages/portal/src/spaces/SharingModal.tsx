@@ -16,6 +16,11 @@ import {
 import { SpaceToolList } from "./ToolList";
 import { OpenRequests } from "./SpaceRequestList";
 
+/** Tools a viewer's call would run without asking: delegable, not a read, set to Always allow. */
+function runsWithoutAsking(tools: SpaceDetail["tools"]): number {
+  return tools.filter((t) => t.delegable !== false && !t.missing && t.effect !== "read" && t.approval === "auto").length;
+}
+
 const EMAIL = /^[^\s@]+@[^\s@]+$/;
 
 const CHOICES: { value: SpaceVisibility; label: string; hint: string }[] = [
@@ -498,6 +503,13 @@ function AccessTab({ m }: { m: FormModel }) {
             across {apps} {apps === 1 ? "app" : "apps"}.
           </span>
         </div>
+      )}
+
+      {delegate && (
+        <p className="space-muted">
+          {runsWithoutAsking(latest.tools)} {runsWithoutAsking(latest.tools) === 1 ? "action runs" : "actions run"} without
+          asking for viewers. Change in View tools.
+        </p>
       )}
 
       {reviewing && (

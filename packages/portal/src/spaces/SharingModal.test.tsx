@@ -79,6 +79,29 @@ beforeEach(() => {
   vi.mocked(updateSpaceSharing).mockResolvedValue(saved());
 });
 
+describe("SharingModal: approvals summary", () => {
+  const withApprovals = (modes: Record<string, "auto" | "ask">): SpaceDetail["tools"] =>
+    TOOLS.map((t) => (modes[t.name] ? { ...t, approval: modes[t.name], approvalEditable: true } : t));
+
+  it("counts delegable non-read tools that run without asking", async () => {
+    const tools = withApprovals({ github_merge_pr: "ask", sheets_append_row: "auto", acme_set_secret: "auto" });
+    const dialog = await open(space({ delegate_access: true, tools }));
+    expect(dialog).toHaveTextContent("1 action runs without asking for viewers. Change in View tools.");
+  });
+
+  it("uses the plural for several", async () => {
+    const tools = withApprovals({ github_merge_pr: "auto", sheets_append_row: "auto" });
+    const dialog = await open(space({ delegate_access: true, tools }));
+    expect(dialog).toHaveTextContent("2 actions run without asking for viewers. Change in View tools.");
+  });
+
+  it("is hidden when delegation is off", async () => {
+    const tools = withApprovals({ sheets_append_row: "auto" });
+    const dialog = await open(space({ delegate_access: false, tools }));
+    expect(dialog).not.toHaveTextContent("without asking for viewers");
+  });
+});
+
 describe("SharingModal: Delegate my access", () => {
   it("is hidden without the admin permission", async () => {
     await open(space({ can_delegate: false }));

@@ -155,9 +155,7 @@ export function SpaceToolList({
                       onChange={(next) => onApprovalChange?.({ [t.name]: next })}
                     />
                   ) : (
-                    !editing &&
                     t.effect !== "read" &&
-                    !t.missing &&
                     t.approval !== undefined && (
                       <Badge variant={t.approval === "auto" ? "neutral" : "red"}>
                         {t.approval === "auto" ? "Runs without asking" : "Asks first"}
