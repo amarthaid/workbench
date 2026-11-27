@@ -21,7 +21,22 @@ import path from "path";
 import { applySchema, createDb } from "../src/db";
 import type { DbAdapter } from "../src/db-adapter";
 import { can, clearPermission, listPermissions, setPermission } from "../src/permissions/store";
-import { countDelegatedSpaces, delegationSuspended, getSpace, toolsHash, updateSpaceMeta, upsertSpace } from "../src/spaces/store";
+import {
+  _setNowForTest,
+  countDelegatedSpaces,
+  deleteSpace,
+  delegationSuspended,
+  distinctOpeners,
+  favoriteCounts,
+  getSpace,
+  recordOpen,
+  setFavorite,
+  setShares,
+  toolsHash,
+  updateSpaceMeta,
+  upsertSpace,
+  userSpaceStates,
+} from "../src/spaces/store";
 import { delegationFor, recordDelegationChange } from "../src/spaces/delegation";
 
 // Modules that use the process-wide `db` (the permissions store) run against
@@ -461,6 +476,112 @@ for (const backend of backends) {
           tool: "space:s1 (reason: audience set to only me)",
           error: null,
         });
+      });
+    });
+
+    // The counts join the share list to users by lowercased email and use
+    // EXISTS, COALESCE and an upsert with DO UPDATE: the parts most likely to
+    // read differently on the two backends.
+    describe("space favorites and opens", () => {
+      beforeAll(() => {
+        target.current = db;
+      });
+      afterAll(() => {
+        target.current = null;
+        _setNowForTest(() => Date.now());
+      });
+      beforeEach(async () => {
+        for (const t of ["space_user_state", "space_shares", "spaces", "users"]) await db.run(`DELETE FROM ${t}`);
+        for (const [id, email] of [
+          ["owner", "Owner@Example.com"],
+          ["a", "A@Example.com"],
+          ["b", "b@example.com"],
+          ["c", "c@example.com"],
+        ]) {
+          await db.run("INSERT INTO users (id, email) VALUES (?, ?)", [id, email]);
+        }
+        _setNowForTest(() => 1_000_000);
+      });
+      const mk = (name: string, visibility: "private" | "org" | "users") =>
+        upsertSpace({ name, ownerId: "owner", title: name, tools: [], visibility });
+
+      it("setFavorite is idempotent and keeps the first time; unfavoriting keeps the row for the open time", async () => {
+        await mk("s1", "org");
+        await setFavorite("s1", "a", true);
+        _setNowForTest(() => 2_000_000);
+        await setFavorite("s1", "a", true);
+        const row = await db.get<{ favorited_at: number | string }>("SELECT favorited_at FROM space_user_state WHERE space_name = ? AND user_id = ?", ["s1", "a"]);
+        expect(Number(row!.favorited_at)).toBe(1_000_000);
+
+        await recordOpen("s1", "a");
+        await setFavorite("s1", "a", false);
+        expect((await userSpaceStates("a")).get("s1")).toEqual({ favorited: false, lastOpenedAt: 2_000_000 });
+      });
+
+      it("recordOpen upserts: one row per person, the time moves forward, a favorite survives", async () => {
+        await mk("s1", "org");
+        await setFavorite("s1", "a", true);
+        await recordOpen("s1", "a");
+        _setNowForTest(() => 3_000_000);
+        await recordOpen("s1", "a");
+        const rows = await db.all<{ n: number }>("SELECT COUNT(*) AS n FROM space_user_state WHERE space_name = ?", ["s1"]);
+        expect(Number(rows[0].n)).toBe(1);
+        expect((await userSpaceStates("a")).get("s1")).toEqual({ favorited: true, lastOpenedAt: 3_000_000 });
+        expect((await userSpaceStates("b")).size).toBe(0);
+      });
+
+      it("favoriteCounts counts people who can still open the Space, by lowercased email, and skips private ones", async () => {
+        await mk("shared", "users");
+        await mk("wide", "org");
+        await mk("solo", "private");
+        // Shares are stored lowercased; the user's email has capitals.
+        await setShares("shared", "owner", ["a@example.com", "b@example.com"]);
+        for (const u of ["owner", "a", "b", "c"]) await setFavorite("shared", u, true);
+        for (const u of ["a", "c"]) await setFavorite("wide", u, true);
+        await setFavorite("solo", "owner", true);
+
+        // c is not on the list, so does not count; the owner always does.
+        expect(await favoriteCounts()).toEqual(new Map([["shared", 3], ["wide", 2]]));
+        expect(await favoriteCounts("shared")).toEqual(new Map([["shared", 3]]));
+
+        await setShares("shared", "owner", ["b@example.com"]);
+        expect((await favoriteCounts("shared")).get("shared")).toBe(2);
+        await setShares("shared", "owner", ["a@example.com", "b@example.com"]);
+        expect((await favoriteCounts("shared")).get("shared")).toBe(3);
+      });
+
+      it("distinctOpeners counts other people in the window who can still open it, once each", async () => {
+        await mk("shared", "users");
+        await setShares("shared", "owner", ["a@example.com", "b@example.com"]);
+        _setNowForTest(() => 10_000_000);
+        for (const u of ["owner", "a", "b", "c"]) await recordOpen("shared", u);
+        await recordOpen("shared", "a");
+        await db.run("UPDATE space_user_state SET last_opened_at = ? WHERE space_name = ? AND user_id = ?", [1, "shared", "b"]);
+
+        // Owner excluded, c has no access, b opened before the window: only a.
+        expect(await distinctOpeners("owner", 5_000_000)).toEqual(new Map([["shared", 1]]));
+        expect(await distinctOpeners("owner", 0)).toEqual(new Map([["shared", 2]]));
+        expect(await distinctOpeners("someone-else", 0)).toEqual(new Map());
+      });
+
+      it("a title, description or audience edit does not move updatedAt; a new tool list does", async () => {
+        await mk("s1", "org");
+        const before = (await getSpace("s1"))!.updatedAt;
+        _setNowForTest(() => 9_000_000);
+        await updateSpaceMeta("s1", "owner", { title: "Renamed", description: "d" });
+        await updateSpaceMeta("s1", "owner", { visibility: "private" });
+        expect((await getSpace("s1"))!.updatedAt).toBe(before);
+        await updateSpaceMeta("s1", "owner", { tools: ["acme_new"] });
+        expect((await getSpace("s1"))!.updatedAt).toBe(9_000_000);
+      });
+
+      it("deleting a Space clears the per-person rows", async () => {
+        await mk("s1", "org");
+        await setFavorite("s1", "a", true);
+        await recordOpen("s1", "b");
+        await deleteSpace("s1");
+        const left = await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM space_user_state", []);
+        expect(Number(left!.n)).toBe(0);
       });
     });
   });
