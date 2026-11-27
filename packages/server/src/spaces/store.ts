@@ -598,6 +598,7 @@ export async function deleteSpace(name: string): Promise<void> {
   await db.transaction(async (tx) => {
     await tx.run("DELETE FROM space_kv WHERE space_name = ?", [name]);
     await tx.run("DELETE FROM space_consents WHERE space_name = ?", [name]);
+    await tx.run("DELETE FROM space_tool_approvals WHERE space_name = ?", [name]);
     await tx.run("DELETE FROM space_user_state WHERE space_name = ?", [name]);
     await tx.run("DELETE FROM space_shares WHERE space_name = ?", [name]);
     await tx.run("DELETE FROM spaces WHERE name = ?", [name]);

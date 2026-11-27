@@ -161,6 +161,15 @@ const SQLITE_SCHEMA = `
     PRIMARY KEY (space_name, user_id)
   );
 
+  CREATE TABLE IF NOT EXISTS space_tool_approvals (
+    space_name TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    tool TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (space_name, user_id, tool)
+  );
+
   CREATE TABLE IF NOT EXISTS space_user_state (
     space_name TEXT NOT NULL,
     user_id TEXT NOT NULL,
@@ -355,6 +364,15 @@ const POSTGRES_SCHEMA = `
     PRIMARY KEY (space_name, user_id)
   );
 
+  CREATE TABLE IF NOT EXISTS space_tool_approvals (
+    space_name TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    tool TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    PRIMARY KEY (space_name, user_id, tool)
+  );
+
   CREATE TABLE IF NOT EXISTS space_user_state (
     space_name TEXT NOT NULL,
     user_id TEXT NOT NULL,
@@ -434,6 +452,7 @@ async function initSqliteSchema(db: DbAdapter): Promise<void> {
     "ALTER TABLE spaces ADD COLUMN access_mode TEXT NOT NULL DEFAULT 'viewer'",
     "ALTER TABLE spaces ADD COLUMN delegated_tools_hash TEXT",
     "ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
+    "ALTER TABLE space_consents ADD COLUMN auto_tools TEXT",
   ]) {
     try {
       await db.exec(stmt);
@@ -494,6 +513,7 @@ async function initPostgresSchema(db: DbAdapter): Promise<void> {
     ALTER TABLE spaces ADD COLUMN IF NOT EXISTS access_mode TEXT NOT NULL DEFAULT 'viewer';
     ALTER TABLE spaces ADD COLUMN IF NOT EXISTS delegated_tools_hash TEXT;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
+    ALTER TABLE space_consents ADD COLUMN IF NOT EXISTS auto_tools TEXT;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_keycloak_sub ON users(keycloak_sub) WHERE keycloak_sub IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_users_api_key_sha ON users(api_key_sha) WHERE api_key_sha IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_audit_actor_nn ON audit_log(actor_user_id, created_at) WHERE actor_user_id IS NOT NULL;
