@@ -166,6 +166,17 @@ describe("read-only mode", () => {
     expect(within(row).getByText("Writes")).toBeInTheDocument();
   });
 
+  it("shows the owner line when the list is editable in principle but no tool can be changed", () => {
+    const ro = (t: SpaceTool): SpaceTool => ({ ...t, approvalEditable: false });
+    render(<SpaceToolList tools={[READ, ro(WRITE), ro(DESTROY)]} approvals={{}} onApprovalChange={vi.fn()} />);
+    expect(screen.getByText("The owner decides which actions ask first.")).toBeInTheDocument();
+  });
+
+  it("omits the owner line when some tool can be changed", () => {
+    render(<SpaceToolList tools={[WRITE, { ...DESTROY, approvalEditable: false }]} approvals={{}} onApprovalChange={vi.fn()} />);
+    expect(screen.queryByText("The owner decides which actions ask first.")).toBeNull();
+  });
+
   it("omits the viewer wording in the owner's lending review", () => {
     const ro = (t: SpaceTool): SpaceTool => ({ ...t, approvalEditable: false });
     render(<SpaceToolList tools={[READ, ro(WRITE), ro(DESTROY)]} delegation />);

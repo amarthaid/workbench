@@ -60,7 +60,7 @@ function changedApprovals(tools: SpaceTool[], choices: Record<string, ApprovalMo
   const out: Record<string, ApprovalMode> = {};
   for (const t of tools) {
     const chosen = choices[t.name];
-    if (chosen && chosen !== t.approval) out[t.name] = chosen;
+    if (chosen && chosen !== t.approval && t.approvalEditable !== false) out[t.name] = chosen;
   }
   return out;
 }
@@ -558,6 +558,9 @@ export default function SpaceShell() {
   if (!data.consented) {
     return (
       <ConsentScreen
+        // A new consent_hash is a different screen: local choices made on the
+        // old one must not be sent again.
+        key={data.consent_hash ?? ""}
         space={data}
         busy={approve.isPending}
         error={

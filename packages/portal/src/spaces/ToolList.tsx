@@ -85,8 +85,12 @@ export function SpaceToolList({
   };
   const editable = editing ? tools.filter(isEditable) : [];
   const boxesWithControls = editing ? groups.filter((g) => g.tools.some(isEditable)).length : 0;
-  // Not in the owner's lending review: the owner is the one who decides.
-  const showBadges = !editing && !delegation && tools.some((t) => t.effect !== "read" && !t.missing && t.approval !== undefined);
+  // The viewer's own line: some tool has a mode and none of them can be changed
+  // here. Not in the owner's lending review: the owner is the one who decides.
+  const showBadges =
+    !delegation &&
+    !tools.some(isEditable) &&
+    tools.some((t) => t.effect !== "read" && !t.missing && t.approval !== undefined);
   return (
     <div className="space-tool-groups">
       {showBadges && <p className="space-muted">The owner decides which actions ask first.</p>}
