@@ -245,12 +245,13 @@ body: { tools: Record<string, "auto" | "ask"> }
   change is audited with a new action `SPACE_APPROVAL_CHANGE` (added to the
   `AuditEvent.action` union in `packages/shared/src/types.ts`). One row per
   request, `user_id` = owner, `integration` = `spaces`, `tool` =
-  `<space>:` followed by the changes that took effect, as
+  `space:<name> approvals:` followed by the changes that took effect, as
   `tool=auto|ask` pairs joined by commas (tools set to the mode they already
   had are left out; no row if nothing changed). A failed audit write is
   logged and the PUT still succeeds, as with `recordDelegationChange`. The
-  Activity page gets a label ("Changed which actions ask first") and the
-  action filter lists it.
+  `tool` uses the same `space:<name> ...` prefix as the delegation rows, so
+  Activity shows it the way it already shows `SPACE_DELEGATION_ON` (Activity
+  has no per-action labels or action filter today).
 
 **POST `/api/spaces/:name/call`**: step 7 becomes
 
