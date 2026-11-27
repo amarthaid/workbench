@@ -289,6 +289,21 @@ describe("editing from the gallery", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
+  it("the audience badge on an owned tile opens Sharing, and on someone else's it is plain text", async () => {
+    vi.mocked(fetchSpaces).mockResolvedValue([
+      space({ name: "a", title: "Mine", mine: true, visibility: "users" }),
+      space({ name: "b", title: "Theirs", visibility: "users" }),
+    ]);
+    vi.mocked(fetchSpace).mockReturnValue(new Promise(() => {}));
+    renderPage();
+    await screen.findByRole("link", { name: "Mine" });
+    expect(within(tileOf("Theirs")).queryByRole("button", { name: /Change who can open/ })).not.toBeInTheDocument();
+    const badge = within(tileOf("Mine")).getByRole("button", { name: "Change who can open Mine. Now: Shared" });
+    fireEvent.click(badge);
+    expect(await screen.findByRole("dialog")).toHaveTextContent("Loading sharing settings");
+    expect(fetchSpace).toHaveBeenCalledWith("a");
+  });
+
   it("opens the sharing settings from the same menu, without opening the Space", async () => {
     vi.mocked(fetchSpaces).mockResolvedValue([space({ name: "a", title: "Mine", mine: true })]);
     vi.mocked(fetchSpace).mockReturnValue(new Promise(() => {}));

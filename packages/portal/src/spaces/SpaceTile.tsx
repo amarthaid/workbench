@@ -135,7 +135,21 @@ export function SpaceTile({ space, size, isNew, onToggleFavorite, onEditDetails,
         <span className="space-tile-badges">
           {isNew && <Badge variant="green">New</Badge>}
           {space.mine && <Badge variant="green">Yours</Badge>}
-          <Badge variant={vis.variant}>{vis.label}</Badge>
+          {space.mine ? (
+            // The owner can change the audience from here: the badge that says who
+            // can open it is also the way to change it.
+            <button
+              type="button"
+              className="space-tile-badge-button"
+              aria-label={`Change who can open ${space.title}. Now: ${vis.label}`}
+              title="Change who can open this"
+              onClick={() => onEditSharing(space)}
+            >
+              <Badge variant={vis.variant}>{vis.label}</Badge>
+            </button>
+          ) : (
+            <Badge variant={vis.variant}>{vis.label}</Badge>
+          )}
           {space.delegation_suspended ? (
             <Badge variant="neutral">Delegated, paused</Badge>
           ) : (

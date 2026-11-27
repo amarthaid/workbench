@@ -149,7 +149,7 @@ Order never depends on how popular a Space is. A popularity order would put Spac
 
 **What is counted.** The number next to the heart is how many people have favorited the Space, among people who can still open it: someone removed from the share list stops counting, and counts again if they are added back. It is not shown for a private Space or when it is zero, and never says who. An open is recorded when the portal shell mounts the Space for someone who has approved its tools, once per person however often they reload, and what is kept per person is only when they last opened it. The owner, and only the owner, sees **N people this month** on the tile: people other than the owner who opened it in the last 30 days. It is shown for a Space open to everyone signed in, and for a shared one only from five people up, because a smaller number on a short share list would say who.
 
-**Editing from the gallery.** The owner's tile has a menu: **Edit details** changes the title and description, and **Sharing** opens the same dialog as inside the Space, both without opening it. The tool list stays with the agent: changing it asks every viewer to approve again.
+**Editing from the gallery.** The owner's tile has a menu: **Edit details** changes the title and description, and **Sharing** opens the same dialog as inside the Space, both without opening it. The audience badge on your own tile (**Private**, **Shared**, **Everyone signed in**) is a shortcut to the same Sharing dialog. The tool list stays with the agent: changing it asks every viewer to approve again.
 
 ## Portal API
 
