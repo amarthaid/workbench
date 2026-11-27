@@ -260,7 +260,7 @@ Check the real column names in `spaces` (owner column) in `db.ts` before writing
 - `effectLabel`: read -> Reads, write -> Writes, destructive and unknown -> "Deletes or changes".
 - Editable mode (`approvals` + `onApprovalChange` props): each non-read row shows a Segmented "Always allow | Ask first" reflecting the mode; changing it calls `onApprovalChange({ [tool]: mode })`.
 - Per-box Allow all switch: on when every non-read, editable tool in the box is auto; turning on sends every such tool as auto; turning off sends each tool's default (write auto, destructive ask), not all ask.
-- Top-level Allow all (shown when there is more than one box with non-read tools, otherwise the box switch is enough): same, across boxes. Hint text under it: "Actions run without asking you, even after this Space's page changes."
+- Top-level Allow all (shown when there is more than one box with non-read tools, otherwise the box switch is enough): same, across boxes. Hint text under it: "Actions run without asking you. If this Space changes later, you approve it again."
 - Read-only mode (`approvalEditable: false` tools, delegated viewer): badges "Runs without asking" / "Asks first", no controls, and the line "The owner decides which actions ask first." above the list.
 - Missing tools: no control.
 
