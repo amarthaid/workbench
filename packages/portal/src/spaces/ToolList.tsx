@@ -133,8 +133,8 @@ export function SpaceToolList({
           action={
             boxEditable.length > 0 ? (
               <label className="space-allow-all-row">
-                <Switch aria-label={`Allow all for ${g.integrationName}`} {...allowAllProps(boxEditable)} />
                 <span>Allow all</span>
+                <Switch aria-label={`Allow all for ${g.integrationName}`} {...allowAllProps(boxEditable)} />
               </label>
             ) : null
           }
