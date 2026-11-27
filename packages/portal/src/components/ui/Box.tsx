@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 
 export interface BoxProps {
   title?: ReactNode;
+  /** Sits right beside the title, on the left of the header, outside the heading element. */
+  titleAside?: ReactNode;
   action?: ReactNode;
   className?: string;
   children: ReactNode;
@@ -11,12 +13,19 @@ export interface BoxProps {
 // an optional header strip, holding rows that are divided by hairlines rather
 // than separated by gaps. Nothing here casts a shadow — depth is not how this
 // interface communicates hierarchy.
-export function Box({ title, action, className, children }: BoxProps) {
+export function Box({ title, titleAside, action, className, children }: BoxProps) {
   return (
     <section className={["ui-box", className].filter(Boolean).join(" ")}>
       {(title || action) && (
         <header className="ui-box-head">
-          {title && <h2 className="ui-box-title">{title}</h2>}
+          {titleAside ? (
+            <div className="ui-box-heading">
+              {title && <h2 className="ui-box-title">{title}</h2>}
+              {titleAside}
+            </div>
+          ) : (
+            title && <h2 className="ui-box-title">{title}</h2>
+          )}
           {action && <div className="ui-box-action">{action}</div>}
         </header>
       )}

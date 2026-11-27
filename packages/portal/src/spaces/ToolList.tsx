@@ -97,9 +97,9 @@ export function SpaceToolList({
       {editable.length > 0 && (
         <div className="space-allow-all">
           {boxesWithControls > 1 && (
-            <label className="space-allow-all-row">
-              <Switch aria-label="Allow all" {...allowAllProps(editable)} />
+            <label className="space-allow-all-row space-allow-all-row-top">
               <span>Allow all</span>
+              <Switch aria-label="Allow all" {...allowAllProps(editable)} />
             </label>
           )}
           <p className="space-muted">Actions run without asking you. If this Space changes later, you approve it again.</p>
@@ -111,15 +111,8 @@ export function SpaceToolList({
         <Box
           key={g.integration}
           title={g.integrationName}
-          action={
-            <>
-            {boxEditable.length > 0 && (
-              <label className="space-allow-all-row">
-                <Switch aria-label={`Allow all for ${g.integrationName}`} {...allowAllProps(boxEditable)} />
-                <span>Allow all</span>
-              </label>
-            )}
-            {hideConnection ? null : g.connected ? (
+          titleAside={
+            hideConnection ? null : g.connected ? (
               connectHref ? <Badge variant="green">Connected</Badge> : null
             ) : (
               <span className="space-tool-connect">
@@ -135,8 +128,15 @@ export function SpaceToolList({
                   </a>
                 )}
               </span>
-            )}
-            </>
+            )
+          }
+          action={
+            boxEditable.length > 0 ? (
+              <label className="space-allow-all-row">
+                <Switch aria-label={`Allow all for ${g.integrationName}`} {...allowAllProps(boxEditable)} />
+                <span>Allow all</span>
+              </label>
+            ) : null
           }
         >
           {g.tools.map((t) => {

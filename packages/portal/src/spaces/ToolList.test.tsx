@@ -23,6 +23,52 @@ const SHEET_WRITE = tool({
 });
 const MISSING = tool({ name: "github_gone", effect: "destructive", missing: true, approval: "ask", approvalEditable: false });
 
+describe("header layout", () => {
+  const OFFLINE = tool({ name: "github_create_issue", effect: "write", approval: "auto", approvalEditable: true, connected: false });
+  const headOf = (container: HTMLElement, i = 0) => container.querySelectorAll<HTMLElement>(".ui-box-head")[i];
+
+  it("puts the connection badge beside the app name and the Allow all switch in the action area", () => {
+    const { container } = render(
+      <SpaceToolList tools={[WRITE]} connectHref={() => "/apps/github"} approvals={{}} onApprovalChange={vi.fn()} />
+    );
+    const head = headOf(container);
+    const title = head.querySelector<HTMLElement>(".ui-box-heading")!;
+    const action = head.querySelector<HTMLElement>(".ui-box-action")!;
+    expect(within(title).getByRole("heading", { name: "GitHub" })).toBeInTheDocument();
+    expect(within(title).getByText("Connected")).toBeInTheDocument();
+    expect(within(title).queryByRole("switch")).toBeNull();
+    expect(within(action).getByRole("switch", { name: "Allow all for GitHub" })).toBeInTheDocument();
+    expect(within(action).queryByText("Connected")).toBeNull();
+  });
+
+  it("puts Not connected and the Connect link beside the app name", () => {
+    const { container } = render(
+      <SpaceToolList tools={[OFFLINE]} connectHref={() => "/apps/github"} approvals={{}} onApprovalChange={vi.fn()} />
+    );
+    const head = headOf(container);
+    const title = head.querySelector<HTMLElement>(".ui-box-heading")!;
+    expect(within(title).getByText("Not connected")).toBeInTheDocument();
+    expect(within(title).getByRole("link", { name: "Connect" })).toHaveAttribute("href", "/apps/github");
+    expect(head.querySelector(".ui-box-action")).not.toContainElement(within(title).getByText("Not connected"));
+  });
+
+  it("keeps the action area empty of connection state when it is hidden", () => {
+    const { container } = render(<SpaceToolList tools={[OFFLINE]} hideConnection />);
+    expect(headOf(container).querySelector(".ui-box-heading")).toBeNull();
+    expect(screen.queryByText("Not connected")).toBeNull();
+  });
+
+  it("puts the top-level Allow all label on the left and its switch on the right, with the hint under it", () => {
+    const { container } = render(<SpaceToolList tools={[WRITE, SHEET_WRITE]} approvals={{}} onApprovalChange={vi.fn()} />);
+    const wrap = container.querySelector<HTMLElement>(".space-allow-all")!;
+    const row = wrap.querySelector<HTMLElement>(".space-allow-all-row-top")!;
+    const kids = Array.from(row.children);
+    expect(kids[0]).toHaveTextContent("Allow all");
+    expect(kids[kids.length - 1]).toBe(within(row).getByRole("switch", { name: "Allow all" }));
+    expect(row.nextElementSibling).toHaveTextContent("Actions run without asking you.");
+  });
+});
+
 describe("effectLabel", () => {
   it("is a pure effect label", () => {
     expect(effectLabel(READ).label).toBe("Reads");

@@ -596,6 +596,14 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
+.ui-box-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-8);
+  min-width: 0;
+}
+
 .ui-box-title {
   font-size: 14px;
   font-weight: 600;
@@ -1814,4 +1822,5 @@ body {
 .space-allow-all .space-muted { font-size: 12px; }
 .space-tool-groups > .space-muted { margin-bottom: var(--s-4); }
 .space-allow-all-row { display: inline-flex; align-items: center; gap: var(--s-8); font-size: 13px; }
+.space-allow-all-row-top { display: flex; justify-content: space-between; }
 .space-tool-tags { align-items: center; }

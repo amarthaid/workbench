@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { Box, BoxRow } from "./Box";
 
 describe("Box", () => {
@@ -17,6 +17,20 @@ describe("Box", () => {
     );
     expect(screen.getByRole("heading", { name: "Recent activity" })).toHaveClass("ui-box-title");
     expect(screen.getByRole("link", { name: "View all" })).toBeInTheDocument();
+  });
+
+  it("puts titleAside next to the title, on the left, apart from the action, and out of the heading", () => {
+    const { container } = render(
+      <Box title="GitHub" titleAside={<span>Connected</span>} action={<button type="button">Allow all</button>}>
+        <BoxRow>a row</BoxRow>
+      </Box>
+    );
+    const heading = container.querySelector(".ui-box-heading") as HTMLElement;
+    expect(within(heading).getByRole("heading", { name: "GitHub" })).toBeInTheDocument();
+    expect(within(heading).getByText("Connected")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "GitHub" })).not.toHaveTextContent("Connected");
+    expect(heading).not.toContainElement(screen.getByRole("button", { name: "Allow all" }));
+    expect(container.querySelector(".ui-box-action")).toContainElement(screen.getByRole("button", { name: "Allow all" }));
   });
 
   it("appends a caller className to the box element", () => {
