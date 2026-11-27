@@ -469,11 +469,13 @@ export interface ConsentRow {
   hash: string;
   /** Tools that ran without asking on the screen a delegated viewer approved; null when never recorded. */
   autoTools: string[] | null;
+  /** The Space's updated_at when the viewer approved; null for a consent given before it was recorded. */
+  spaceUpdatedAt: number | null;
 }
 
 export async function getConsentRow(name: string, userId: string): Promise<ConsentRow | null> {
-  const row = await db.get<{ tools_hash: string; auto_tools: string | null }>(
-    "SELECT tools_hash, auto_tools FROM space_consents WHERE space_name = ? AND user_id = ?",
+  const row = await db.get<{ tools_hash: string; auto_tools: string | null; space_updated_at: number | string | null }>(
+    "SELECT tools_hash, auto_tools, space_updated_at FROM space_consents WHERE space_name = ? AND user_id = ?",
     [name, userId]
   );
   if (!row) return null;
@@ -486,18 +488,20 @@ export async function getConsentRow(name: string, userId: string): Promise<Conse
       // Unparsable counts as never recorded.
     }
   }
-  return { hash: row.tools_hash, autoTools };
+  const spaceUpdatedAt = row.space_updated_at === null || row.space_updated_at === undefined ? null : Number(row.space_updated_at);
+  return { hash: row.tools_hash, autoTools, spaceUpdatedAt };
 }
 
 // The column is still named tools_hash; it holds consentHash(space).
 // `autoTools` is the set a delegated viewer saw run without asking; null for
-// everyone else.
+// everyone else. `space.updatedAt` is recorded too: a person whose modes
+// let a tool run that would otherwise ask approves again when the Space changes.
 export async function grantConsent(space: Space, userId: string, autoTools: string[] | null = null): Promise<void> {
   const auto = autoTools ? JSON.stringify(autoTools) : null;
   await db.run(
-    `INSERT INTO space_consents (space_name, user_id, tools_hash, granted_at, auto_tools) VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT (space_name, user_id) DO UPDATE SET tools_hash = excluded.tools_hash, granted_at = excluded.granted_at, auto_tools = excluded.auto_tools`,
-    [space.name, userId, consentHash(space, userId), now(), auto]
+    `INSERT INTO space_consents (space_name, user_id, tools_hash, granted_at, auto_tools, space_updated_at) VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT (space_name, user_id) DO UPDATE SET tools_hash = excluded.tools_hash, granted_at = excluded.granted_at, auto_tools = excluded.auto_tools, space_updated_at = excluded.space_updated_at`,
+    [space.name, userId, consentHash(space, userId), now(), auto, space.updatedAt]
   );
 }
 

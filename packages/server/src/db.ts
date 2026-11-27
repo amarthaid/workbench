@@ -453,6 +453,7 @@ async function initSqliteSchema(db: DbAdapter): Promise<void> {
     "ALTER TABLE spaces ADD COLUMN delegated_tools_hash TEXT",
     "ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
     "ALTER TABLE space_consents ADD COLUMN auto_tools TEXT",
+    "ALTER TABLE space_consents ADD COLUMN space_updated_at INTEGER",
   ]) {
     try {
       await db.exec(stmt);
@@ -514,6 +515,7 @@ async function initPostgresSchema(db: DbAdapter): Promise<void> {
     ALTER TABLE spaces ADD COLUMN IF NOT EXISTS delegated_tools_hash TEXT;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
     ALTER TABLE space_consents ADD COLUMN IF NOT EXISTS auto_tools TEXT;
+    ALTER TABLE space_consents ADD COLUMN IF NOT EXISTS space_updated_at BIGINT;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_keycloak_sub ON users(keycloak_sub) WHERE keycloak_sub IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_users_api_key_sha ON users(api_key_sha) WHERE api_key_sha IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_audit_actor_nn ON audit_log(actor_user_id, created_at) WHERE actor_user_id IS NOT NULL;

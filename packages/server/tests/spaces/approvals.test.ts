@@ -230,11 +230,18 @@ describe("grantConsent auto_tools", () => {
   it("stores the set as JSON, and null when none is given", async () => {
     const d = space({ accessMode: "owner" });
     await grantConsent(d, "u2", [WRITE]);
-    expect(await getConsentRow("s1", "u2")).toEqual({ hash: consentHash(d, "u2"), autoTools: [WRITE] });
+    expect(await getConsentRow("s1", "u2")).toEqual({ hash: consentHash(d, "u2"), autoTools: [WRITE], spaceUpdatedAt: 0 });
     await grantConsent(d, "u2", null);
     expect((await getConsentRow("s1", "u2"))!.autoTools).toBeNull();
     await grantConsent(d, "u2");
     expect((await getConsentRow("s1", "u2"))!.autoTools).toBeNull();
+  });
+
+  it("stores the updatedAt of the Space it was given, and null for a legacy row", async () => {
+    await grantConsent(space({ updatedAt: 1234 }), "u2");
+    expect((await getConsentRow("s1", "u2"))!.spaceUpdatedAt).toBe(1234);
+    await db.run("UPDATE space_consents SET space_updated_at = NULL WHERE space_name = ? AND user_id = ?", ["s1", "u2"]);
+    expect((await getConsentRow("s1", "u2"))!.spaceUpdatedAt).toBeNull();
   });
 
   it("treats an unparsable stored set as never recorded", async () => {
