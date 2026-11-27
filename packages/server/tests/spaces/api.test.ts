@@ -1670,6 +1670,22 @@ describe("tool approvals in the portal API", () => {
       expect((await getConsentRow("s1", "u2"))!.autoTools).toEqual([DESTRUCTIVE, WRITE]);
     });
 
+    it("a consent given while delegation is paused stores the owner's current auto set, and a later loosening re-asks once it resumes", async () => {
+      await delegate();
+      await connectAllIntegrations("u2");
+      await setRow("u1", DESTRUCTIVE, "auto");
+      const pinned = (await getSpace("s1"))!.delegatedToolsHash;
+      await db.run("UPDATE spaces SET delegated_tools_hash = 'stale' WHERE name = 's1'");
+      expect(await detail("u2")).toMatchObject({ delegation_suspended: true });
+      expect((await consent("u2")).statusCode).toBe(200);
+      expect((await getConsentRow("s1", "u2"))!.autoTools).toEqual([DESTRUCTIVE, WRITE]);
+
+      await db.run("UPDATE spaces SET delegated_tools_hash = ? WHERE name = 's1'", [pinned]);
+      expect(await detail("u2")).toMatchObject({ consented: true, delegation_suspended: false });
+      await setRow("u1", "acme_unlabelled", "auto");
+      expect(await detail("u2")).toMatchObject({ consented: false, reconsent_reason: "approvals" });
+    });
+
     it("the owner and an ordinary viewer store no auto set", async () => {
       expect((await consent("u2")).statusCode).toBe(200);
       expect((await consent("u1")).statusCode).toBe(200);

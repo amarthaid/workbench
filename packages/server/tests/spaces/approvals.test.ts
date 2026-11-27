@@ -317,6 +317,22 @@ describe("backfillDelegatedConsents", () => {
     expect((await getConsentRow("s2", "u2"))!.autoTools).toBeNull();
   });
 
+  it("re-asks after the backfill when a tool is reclassified so it now runs without asking", async () => {
+    await seed();
+    await backfillDelegatedConsents();
+    const delegated = (await getSpace("s1"))!;
+    expect(await checkConsent(delegated, "u2", {})).toEqual({ consented: true });
+    const tool = registry.getTool(DESTRUCTIVE)!;
+    const original = tool.effect;
+    tool.effect = "write";
+    try {
+      expect(await checkConsent(delegated, "u2", {})).toEqual({ consented: false, reason: "approvals" });
+    } finally {
+      tool.effect = original;
+    }
+    expect(await checkConsent(delegated, "u2", {})).toEqual({ consented: true });
+  });
+
   it("is idempotent", async () => {
     await seed();
     await backfillDelegatedConsents();
