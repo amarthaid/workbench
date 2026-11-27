@@ -467,6 +467,36 @@ describe("SpaceShell", () => {
         expect(callSpaceTool).toHaveBeenCalledWith("pr-timeline", { tool: "github_merge_pr" });
       });
 
+      it("two quick toggles end with the server's last answer, even if the answers arrive out of order", async () => {
+        const answers: Array<(v: { tools: SpaceDetail["tools"] }) => void> = [];
+        vi.mocked(setToolApprovals).mockImplementation(() => new Promise((resolve) => answers.push(resolve)));
+        renderShell();
+        const dialog = await openTools();
+        choose("github_merge_pr", "Always allow");
+        choose("github_merge_pr", "Ask first");
+        const pressed = (label: string) =>
+          within(within(dialog).getByRole("group", { name: "Approval for github_merge_pr" })).getByRole("button", { name: label });
+        // Whether the second request waits for the first or is already out, the
+        // later answer must be the one that stays.
+        const first = withModes(space().tools, { github_merge_pr: "auto" });
+        const last = withModes(space().tools, { github_merge_pr: "ask" });
+        await new Promise((r) => setTimeout(r, 0));
+        if (answers.length === 2) {
+          answers[1]({ tools: last });
+          answers[0]({ tools: first });
+        } else {
+          answers[0]({ tools: first });
+          await waitFor(() => expect(answers).toHaveLength(2));
+          answers[1]({ tools: last });
+        }
+        await waitFor(() => expect(setToolApprovals).toHaveBeenLastCalledWith("pr-timeline", { github_merge_pr: "ask" }));
+        await waitFor(() => expect(pressed("Ask first")).toHaveAttribute("aria-pressed", "true"));
+        // Nothing is left pending: the control follows the cache again.
+        await new Promise((r) => setTimeout(r, 20));
+        expect(pressed("Ask first")).toHaveAttribute("aria-pressed", "true");
+        expect(pressed("Always allow")).toHaveAttribute("aria-pressed", "false");
+      });
+
       it("shows a failed save's message", async () => {
         vi.mocked(setToolApprovals).mockRejectedValue(new SpaceApiError(500, { code: "UPSTREAM_ERROR", message: "Could not save." }));
         renderShell();

@@ -170,22 +170,28 @@ function SpaceRunner({
   // Choices being saved, shown until the server's answer replaces them.
   const [saving, setSaving] = useState<Record<string, ApprovalMode>>({});
   const [approvalError, setApprovalError] = useState<string | null>(null);
-  const changeApprovals = async (change: Record<string, ApprovalMode>) => {
+  // Saves run one at a time, in the order they were made, so the last answer
+  // the server gives is the last one written to the cache.
+  const saveChain = useRef<Promise<void>>(Promise.resolve());
+  const pendingSaves = useRef(0);
+  const changeApprovals = (change: Record<string, ApprovalMode>) => {
     setApprovalError(null);
     setSaving((prev) => ({ ...prev, ...change }));
-    try {
-      const saved = await setToolApprovals(space.name, change);
-      // The bridge reads the cached detail on its next call.
-      queryClient.setQueryData<SpaceDetail>(["space", space.name], (d) => (d ? { ...d, tools: saved.tools } : d));
-    } catch (e) {
-      setApprovalError(e instanceof Error ? e.message : "Could not save that change.");
-    } finally {
-      setSaving((prev) => {
-        const next = { ...prev };
-        for (const k of Object.keys(change)) delete next[k];
-        return next;
-      });
-    }
+    pendingSaves.current += 1;
+    saveChain.current = saveChain.current.then(async () => {
+      try {
+        const saved = await setToolApprovals(space.name, change);
+        // The bridge reads the cached detail on its next call.
+        queryClient.setQueryData<SpaceDetail>(["space", space.name], (d) => (d ? { ...d, tools: saved.tools } : d));
+      } catch (e) {
+        setApprovalError(e instanceof Error ? e.message : "Could not save that change.");
+      } finally {
+        // The choices stay on screen until the last pending save has answered.
+        pendingSaves.current -= 1;
+        if (pendingSaves.current === 0) setSaving({});
+      }
+    });
+    return saveChain.current;
   };
   const frameRef = useRef<HTMLIFrameElement>(null);
   // Fixed at mount: a refetch mints a new sig, and changing src would reload
