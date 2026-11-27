@@ -1,8 +1,9 @@
+import crypto from "node:crypto";
 import { effectOf } from "@a-workbench/shared";
 import { db } from "../db";
 import { registry, type PluginTool } from "../plugins/registry";
 import { isInternalIntegration } from "../plugins/internal-names";
-import type { Space } from "./store";
+import { consentHash, getConsentRow, type Space } from "./store";
 
 // Per-tool approval modes for Spaces. See
 // docs/internal/superpowers/specs/2026-11-27-space-tool-approvals-design.md.
@@ -135,4 +136,48 @@ export function approvalEditable(space: Space, viewerId: string, toolName: strin
   const tool = usableTool(toolName);
   if (!tool || defaultMode(tool) === null) return false;
   return !delegatedFor(space, viewerId);
+}
+
+// ---- consent ---------------------------------------------------------------
+
+/**
+ * The hash a viewer is shown and sends back to approve. A delegated viewer's
+ * also covers the auto set on the screen, so a policy change between loading
+ * the screen and approving is a CONSENT_CHANGED. For everyone else it is the
+ * plain consentHash: their modes are their own.
+ */
+export function shownConsentHash(space: Space, viewerId: string, auto: string[]): string {
+  const base = consentHash(space, viewerId);
+  if (!delegatedFor(space, viewerId)) return base;
+  return crypto.createHash("sha256").update(JSON.stringify([base, auto])).digest("hex");
+}
+
+/** What a delegated consent that predates auto_tools approved: today's delegable write tools. */
+export function legacyApprovedSet(space: Space): string[] {
+  const out: string[] = [];
+  for (const name of space.tools) {
+    const tool = usableTool(name);
+    if (tool && effectOf(tool) === "write" && tool.delegable !== false) out.push(name);
+  }
+  return out.sort();
+}
+
+export type ConsentCheck = { consented: boolean; reason?: "tools" | "approvals" };
+
+/**
+ * Has this viewer approved what they would run now? The stored hash must match
+ * consentHash; a delegated viewer must also have approved every tool that now
+ * runs without asking. Tightening shrinks the set and stays approved;
+ * loosening adds a tool and asks again.
+ */
+export async function checkConsent(space: Space, viewerId: string, rows: ApprovalRows): Promise<ConsentCheck> {
+  const row = await getConsentRow(space.name, viewerId);
+  if (!row) return { consented: false };
+  if (row.hash !== consentHash(space, viewerId)) return { consented: false, reason: "tools" };
+  if (!delegatedFor(space, viewerId)) return { consented: true };
+  const approved = new Set(row.autoTools ?? legacyApprovedSet(space));
+  for (const name of autoSet(space, viewerId, rows)) {
+    if (!approved.has(name)) return { consented: false, reason: "approvals" };
+  }
+  return { consented: true };
 }

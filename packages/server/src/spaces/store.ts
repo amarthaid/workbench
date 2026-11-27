@@ -478,12 +478,39 @@ export async function hasConsent(space: Space, userId: string): Promise<boolean>
   return (await getConsentHash(space.name, userId)) === consentHash(space, userId);
 }
 
+export interface ConsentRow {
+  hash: string;
+  /** Tools that ran without asking on the screen a delegated viewer approved; null when never recorded. */
+  autoTools: string[] | null;
+}
+
+export async function getConsentRow(name: string, userId: string): Promise<ConsentRow | null> {
+  const row = await db.get<{ tools_hash: string; auto_tools: string | null }>(
+    "SELECT tools_hash, auto_tools FROM space_consents WHERE space_name = ? AND user_id = ?",
+    [name, userId]
+  );
+  if (!row) return null;
+  let autoTools: string[] | null = null;
+  if (row.auto_tools) {
+    try {
+      const parsed: unknown = JSON.parse(row.auto_tools);
+      if (Array.isArray(parsed) && parsed.every((x) => typeof x === "string")) autoTools = parsed;
+    } catch {
+      // Unparsable counts as never recorded.
+    }
+  }
+  return { hash: row.tools_hash, autoTools };
+}
+
 // The column is still named tools_hash; it holds consentHash(space).
-export async function grantConsent(space: Space, userId: string): Promise<void> {
+// `autoTools` is the set a delegated viewer saw run without asking; null for
+// everyone else.
+export async function grantConsent(space: Space, userId: string, autoTools: string[] | null = null): Promise<void> {
+  const auto = autoTools ? JSON.stringify(autoTools) : null;
   await db.run(
-    `INSERT INTO space_consents (space_name, user_id, tools_hash, granted_at) VALUES (?, ?, ?, ?)
-     ON CONFLICT (space_name, user_id) DO UPDATE SET tools_hash = excluded.tools_hash, granted_at = excluded.granted_at`,
-    [space.name, userId, consentHash(space, userId), now()]
+    `INSERT INTO space_consents (space_name, user_id, tools_hash, granted_at, auto_tools) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT (space_name, user_id) DO UPDATE SET tools_hash = excluded.tools_hash, granted_at = excluded.granted_at, auto_tools = excluded.auto_tools`,
+    [space.name, userId, consentHash(space, userId), now(), auto]
   );
 }
 

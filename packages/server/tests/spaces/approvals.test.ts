@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,10 +8,13 @@ let tmp: string;
 vi.mock("../../src/spaces/dir", () => ({ spacesRoot: () => tmp }));
 
 import { db } from "../../src/db";
-import { deleteSpace, upsertSpace } from "../../src/spaces/store";
+import { consentHash, deleteSpace, getConsentRow, grantConsent, upsertSpace } from "../../src/spaces/store";
 import {
   approvalEditable,
   approvalFor,
+  checkConsent,
+  legacyApprovedSet,
+  shownConsentHash,
   autoSet,
   defaultMode,
   delegatedFor,
@@ -192,5 +196,95 @@ describe("approvalEditable", () => {
     expect(approvalEditable(space(), "u2", WRITE)).toBe(true);
     expect(approvalEditable(space(), "u2", DESTRUCTIVE)).toBe(true);
     expect(approvalEditable(space({ accessMode: "owner" }), "u1", WRITE)).toBe(true);
+  });
+});
+
+// ---- consent ---------------------------------------------------------------
+
+describe("shownConsentHash", () => {
+  it("equals consentHash for the owner and an ordinary viewer", () => {
+    const s = space();
+    expect(shownConsentHash(s, "u1", [WRITE])).toBe(consentHash(s, "u1"));
+    expect(shownConsentHash(s, "u2", [WRITE])).toBe(consentHash(s, "u2"));
+    const d = space({ accessMode: "owner" });
+    expect(shownConsentHash(d, "u1", [WRITE])).toBe(consentHash(d, "u1"));
+  });
+
+  it("covers the auto set for a delegated viewer", () => {
+    const d = space({ accessMode: "owner" });
+    const expected = crypto.createHash("sha256").update(JSON.stringify([consentHash(d, "u2"), [WRITE]])).digest("hex");
+    expect(shownConsentHash(d, "u2", [WRITE])).toBe(expected);
+    expect(shownConsentHash(d, "u2", [WRITE, DESTRUCTIVE])).not.toBe(expected);
+    expect(shownConsentHash(d, "u2", [WRITE])).not.toBe(consentHash(d, "u2"));
+  });
+});
+
+describe("legacyApprovedSet", () => {
+  it("is the current delegable write tools", () => {
+    expect(legacyApprovedSet(space())).toEqual([WRITE]);
+  });
+});
+
+describe("grantConsent auto_tools", () => {
+  it("stores the set as JSON, and null when none is given", async () => {
+    const d = space({ accessMode: "owner" });
+    await grantConsent(d, "u2", [WRITE]);
+    expect(await getConsentRow("s1", "u2")).toEqual({ hash: consentHash(d, "u2"), autoTools: [WRITE] });
+    await grantConsent(d, "u2", null);
+    expect((await getConsentRow("s1", "u2"))!.autoTools).toBeNull();
+    await grantConsent(d, "u2");
+    expect((await getConsentRow("s1", "u2"))!.autoTools).toBeNull();
+  });
+
+  it("treats an unparsable stored set as never recorded", async () => {
+    await grantConsent(space(), "u2");
+    await db.run("UPDATE space_consents SET auto_tools = ? WHERE space_name = ? AND user_id = ?", ["not json", "s1", "u2"]);
+    expect((await getConsentRow("s1", "u2"))!.autoTools).toBeNull();
+  });
+});
+
+describe("checkConsent", () => {
+  const delegated = () => space({ accessMode: "owner" });
+
+  it("is not consented, with no reason, when there is no row", async () => {
+    expect(await checkConsent(space(), "u2", {})).toEqual({ consented: false });
+  });
+
+  it("reports tools when the stored hash no longer matches", async () => {
+    await grantConsent(space(), "u2");
+    expect(await checkConsent(space({ tools: [READ] }), "u2", {})).toEqual({ consented: false, reason: "tools" });
+  });
+
+  it("consents an ordinary viewer and the owner without the subset check", async () => {
+    await grantConsent(space(), "u2");
+    await grantConsent(space(), "u1");
+    expect(await checkConsent(space(), "u2", { [DESTRUCTIVE]: "auto" })).toEqual({ consented: true });
+    expect(await checkConsent(space(), "u1", { [DESTRUCTIVE]: "auto" })).toEqual({ consented: true });
+  });
+
+  it("consents a delegated viewer whose current auto set is within what they approved", async () => {
+    await grantConsent(delegated(), "u2", [WRITE]);
+    expect(await checkConsent(delegated(), "u2", {})).toEqual({ consented: true });
+  });
+
+  it("asks again with reason approvals when the owner loosens a destructive tool", async () => {
+    await grantConsent(delegated(), "u2", [WRITE]);
+    expect(await checkConsent(delegated(), "u2", { [DESTRUCTIVE]: "auto" })).toEqual({ consented: false, reason: "approvals" });
+  });
+
+  it("stays consented when the owner tightens a write", async () => {
+    await grantConsent(delegated(), "u2", [WRITE]);
+    expect(await checkConsent(delegated(), "u2", { [WRITE]: "ask" })).toEqual({ consented: true });
+  });
+
+  it("counts NULL auto_tools as the current delegable write tools", async () => {
+    await grantConsent(delegated(), "u2", null);
+    expect(await checkConsent(delegated(), "u2", {})).toEqual({ consented: true });
+    expect(await checkConsent(delegated(), "u2", { [DESTRUCTIVE]: "auto" })).toEqual({ consented: false, reason: "approvals" });
+  });
+
+  it("ignores tools that cannot be delegated", async () => {
+    await grantConsent(delegated(), "u2", [WRITE]);
+    expect(await checkConsent(delegated(), "u2", { [NOT_DELEGABLE]: "auto" })).toEqual({ consented: true });
   });
 });
