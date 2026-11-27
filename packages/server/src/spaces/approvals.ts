@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { effectOf } from "@a-workbench/shared";
+import { auditLogger } from "../audit/logger";
 import { db } from "../db";
 import { registry, type PluginTool } from "../plugins/registry";
 import { isInternalIntegration } from "../plugins/internal-names";
@@ -65,6 +66,41 @@ export async function writeApprovals(
     }
     return changes;
   });
+}
+
+/**
+ * Audit a change of the owner's approvals in a Space whose stored access mode
+ * is "owner" (there they are the policy for everyone). One row per request:
+ * `space:<name> approvals: <tool>=<mode>,...` in tool order. The caller checks
+ * that the change is auditable; nothing is written for an empty list.
+ *
+ * Never throws: it runs after the change is saved, and a failed audit write
+ * must not turn a saved change into an error. The failure is logged.
+ */
+export async function recordApprovalChange(
+  space: Pick<Space, "name">,
+  ownerId: string,
+  changes: ApprovalChange[]
+): Promise<void> {
+  if (changes.length === 0) return;
+  const text = [...changes]
+    .sort((a, b) => (a.tool < b.tool ? -1 : a.tool > b.tool ? 1 : 0))
+    .map((c) => `${c.tool}=${c.to}`)
+    .join(",");
+  try {
+    await auditLogger.log({
+      user_id: ownerId,
+      integration: "spaces",
+      tool: `space:${space.name} approvals: ${text}`,
+      action: "SPACE_APPROVAL_CHANGE",
+      success: true,
+    });
+  } catch (err) {
+    console.error(
+      `[spaces] audit of approval change failed: space=${space.name} owner=${ownerId}: ` +
+        (err instanceof Error ? err.message : String(err))
+    );
+  }
 }
 
 // ---- policy ----------------------------------------------------------------

@@ -1745,6 +1745,147 @@ describe("tool approvals in the portal API", () => {
     });
   });
 
+  describe("PUT tool-approvals", () => {
+    const put = (user: string, payload: unknown, name = "s1") =>
+      app.inject({ method: "PUT", url: `/api/spaces/${name}/tool-approvals`, headers: as(user), payload: payload as any });
+    const rowsOf = (user: string) =>
+      db.all<{ tool: string; mode: string }>("SELECT tool, mode FROM space_tool_approvals WHERE space_name = 's1' AND user_id = ? ORDER BY tool", [user]);
+    const approvalRows = () =>
+      db.all<{ user_id: string; integration: string; tool: string; success: unknown }>(
+        "SELECT user_id, integration, tool, success FROM audit_log WHERE action = 'SPACE_APPROVAL_CHANGE' ORDER BY id"
+      );
+
+    it("an ordinary viewer sets a mode and gets the updated list; setting the default again deletes the row", async () => {
+      const res = await put("u2", { tools: { [WRITE]: "ask" } });
+      expect(res.statusCode).toBe(200);
+      const by = Object.fromEntries(res.json().tools.map((t: any) => [t.name, t]));
+      expect(by[WRITE]).toMatchObject({ approval: "ask", approvalEditable: true });
+      expect(by.acme_list_items).not.toHaveProperty("approval");
+      expect(await rowsOf("u2")).toEqual([{ tool: WRITE, mode: "ask" }]);
+      expect(res.json().tools).toEqual((await detail("u2")).tools);
+
+      const back = await put("u2", { tools: { [WRITE]: "auto" } });
+      expect(back.statusCode).toBe(200);
+      expect(await rowsOf("u2")).toEqual([]);
+    });
+
+    it("sets many tools in one request", async () => {
+      const res = await put("u2", { tools: { [WRITE]: "ask", [DESTRUCTIVE]: "auto", acme_unlabelled: "auto" } });
+      expect(res.statusCode).toBe(200);
+      expect(await rowsOf("u2")).toEqual([
+        { tool: DESTRUCTIVE, mode: "auto" },
+        { tool: "acme_unlabelled", mode: "auto" },
+        { tool: WRITE, mode: "ask" },
+      ]);
+    });
+
+    it("needs no consent", async () => {
+      expect((await detail("u2")).consented).toBe(false);
+      expect((await put("u2", { tools: { [WRITE]: "ask" } })).statusCode).toBe(200);
+    });
+
+    it("400 INVALID_APPROVAL for an undeclared, read or missing tool, a bad mode or a bad body; nothing is applied", async () => {
+      await setTools([...TOOLS, WRITE, "acme_ghost"]);
+      const bad: unknown[] = [
+        { tools: { acme_get_thing: "ask" } },
+        { tools: { acme_list_items: "ask" } },
+        { tools: { acme_ghost: "auto" } },
+        { tools: { [WRITE]: "never" } },
+        { tools: { [WRITE]: true } },
+        { tools: [WRITE] },
+        { tools: "x" },
+        {},
+        [],
+        null,
+      ];
+      for (const body of bad) {
+        const res = await put("u2", body);
+        expect(res.statusCode, JSON.stringify(body)).toBe(400);
+        expect(res.json().code).toBe("INVALID_APPROVAL");
+      }
+      const mixed = await put("u2", { tools: { [WRITE]: "ask", acme_list_items: "ask" } });
+      expect(mixed.statusCode).toBe(400);
+      expect(await rowsOf("u2")).toEqual([]);
+    });
+
+    it("403 APPROVAL_SET_BY_OWNER for a delegated viewer, also while paused and while the owner lacks the permission", async () => {
+      await delegate();
+      let res = await put("u2", { tools: { [WRITE]: "ask" } });
+      expect(res.statusCode).toBe(403);
+      expect(res.json().code).toBe("APPROVAL_SET_BY_OWNER");
+      expect(await rowsOf("u2")).toEqual([]);
+
+      await clearPermission("u1", "spaces.delegate_access");
+      expect((await put("u2", { tools: { [WRITE]: "ask" } })).statusCode).toBe(403);
+      await grant();
+      await setTools([...TOOLS, WRITE, "acme_ghost"]);
+      res = await put("u2", { tools: { [WRITE]: "ask" } });
+      expect(res.statusCode).toBe(403);
+      expect(res.json().code).toBe("APPROVAL_SET_BY_OWNER");
+      expect(await rowsOf("u2")).toEqual([]);
+    });
+
+    it("validates before the owner check: a delegated viewer with an invalid body gets 400, not 403", async () => {
+      await delegate();
+      expect((await put("u2", { tools: { [WRITE]: "never" } })).statusCode).toBe(400);
+    });
+
+    it("404 for someone who cannot open the Space", async () => {
+      expect((await put("u3", { tools: { [WRITE]: "ask" } })).statusCode).toBe(404);
+      expect((await put("u2", { tools: { [WRITE]: "ask" } }, "nope")).statusCode).toBe(404);
+    });
+
+    it("audits the owner of a delegated-mode Space: one row, only real changes, sorted", async () => {
+      await delegate();
+      const res = await put("u1", { tools: { [WRITE]: "ask", [DESTRUCTIVE]: "auto", acme_unlabelled: "ask", acme_set_secret: "auto" } });
+      expect(res.statusCode).toBe(200);
+      expect((await approvalRows()).map((r) => ({ ...r, success: Boolean(Number(r.success)) }))).toEqual([
+        { user_id: "u1", integration: "spaces", tool: `space:s1 approvals: ${DESTRUCTIVE}=auto,${WRITE}=ask`, success: true },
+      ]);
+      expect(await rowsOf("u1")).toEqual([
+        { tool: DESTRUCTIVE, mode: "auto" },
+        { tool: WRITE, mode: "ask" },
+      ]);
+    });
+
+    it("writes no audit row when nothing changed, or for an ordinary Space's owner or viewer", async () => {
+      await delegate();
+      expect((await put("u1", { tools: { [WRITE]: "auto" } })).statusCode).toBe(200);
+      expect(await approvalRows()).toEqual([]);
+
+      await app.inject({ method: "PATCH", url: "/api/spaces/s1/sharing", headers: as("u1"), payload: { delegate_access: false } });
+      expect((await put("u1", { tools: { [WRITE]: "ask" } })).statusCode).toBe(200);
+      expect((await put("u2", { tools: { [WRITE]: "ask" } })).statusCode).toBe(200);
+      expect(await approvalRows()).toEqual([]);
+    });
+
+    it("a failing audit logger still returns 200", async () => {
+      await delegate();
+      const log = vi.spyOn(auditLogger, "log").mockRejectedValue(new Error("audit down"));
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      const res = await put("u1", { tools: { [WRITE]: "ask" } });
+      expect(res.statusCode).toBe(200);
+      expect(log).toHaveBeenCalled();
+      expect(err).toHaveBeenCalled();
+      expect(await rowsOf("u1")).toEqual([{ tool: WRITE, mode: "ask" }]);
+    });
+
+    it("an owner's change reaches a delegated viewer's policy and asks again only when it loosens", async () => {
+      await delegate();
+      expect((await consent("u2")).statusCode).toBe(200);
+      await put("u1", { tools: { [WRITE]: "ask" } });
+      expect((await detail("u2")).consented).toBe(true);
+      await put("u1", { tools: { [DESTRUCTIVE]: "auto" } });
+      expect((await detail("u2")).consented).toBe(false);
+    });
+
+    it("reads the policy once, after the write, for the list it returns", async () => {
+      policySpy.mockClear();
+      await put("u2", { tools: { [WRITE]: "ask" } });
+      expect(policySpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("open and KV", () => {
     it("refuse after an owner loosening exactly as after a tool change", async () => {
       await delegate();

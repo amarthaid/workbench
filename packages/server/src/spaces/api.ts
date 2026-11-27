@@ -13,9 +13,13 @@ import {
   autoSet,
   checkConsent,
   delegatedFor,
+  defaultMode,
   isInternalTool,
   policyRows,
+  recordApprovalChange,
   shownConsentHash,
+  writeApprovals,
+  type ApprovalMode,
   type ApprovalRows,
 } from "./approvals";
 import { executeDelegated, executeSingle } from "../mcp/meta-tools";
@@ -576,6 +580,44 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
       // detail). If the Space changed since (tools, mode, owner), the screen
       // they approved is not this Space any more: refuse, and the portal
       // shows the new one.
+      // Per-tool approval modes, set in the portal only (the scope accepts only
+      // a portal session). Validated whole before anything is written. A
+      // delegated viewer follows the owner's policy and cannot set their own:
+      // that is decided by the stored mode, so it holds while delegation is paused.
+      scope.put<{ Params: { name: string }; Body: { tools?: unknown } }>("/:name/tool-approvals", async (request, reply) => {
+        const viewer = viewerOf(request);
+        const space = await openable(request.params.name, viewer);
+        if (!space) return notFound(reply);
+        const invalid = (message: string) => fail(reply, 400, { code: "INVALID_APPROVAL", message });
+        const body = request.body as { tools?: unknown } | null | undefined;
+        const input = body && typeof body === "object" && !Array.isArray(body) ? body.tools : undefined;
+        if (!input || typeof input !== "object" || Array.isArray(input)) return invalid("tools must be an object of tool to auto or ask.");
+        const next: Record<string, ApprovalMode> = {};
+        const defaults: Record<string, ApprovalMode> = {};
+        for (const [name, mode] of Object.entries(input as Record<string, unknown>)) {
+          if (mode !== "auto" && mode !== "ask") return invalid(`${name}: mode must be "auto" or "ask".`);
+          if (!space.tools.includes(name)) return invalid(`This Space did not declare ${name}.`);
+          const tool = registry.getTool(name);
+          if (!tool || !registry.getIntegration(tool.integration) || isInternal(tool)) return invalid(`${name} is not available.`);
+          const def = defaultMode(tool);
+          if (def === null) return invalid(`${name} is a read tool and never asks.`);
+          next[name] = mode;
+          defaults[name] = def;
+        }
+        if (delegatedFor(space, viewer.userId)) {
+          return fail(reply, 403, {
+            code: "APPROVAL_SET_BY_OWNER",
+            message: "The owner of this Space decides which tools ask first.",
+          });
+        }
+        const changes = await writeApprovals(space.name, viewer.userId, next, defaults);
+        if (space.ownerId === viewer.userId && space.accessMode === "owner") {
+          await recordApprovalChange(space, viewer.userId, changes);
+        }
+        const rows = await policyRows(space, viewer.userId);
+        return { tools: await buildToolList(space, viewer.userId, viewer.userId, rows) };
+      });
+
       scope.post<{ Params: { name: string }; Body: { consent_hash?: unknown } }>("/:name/consent", async (request, reply) => {
         const viewer = viewerOf(request);
         const space = await openable(request.params.name, viewer);
