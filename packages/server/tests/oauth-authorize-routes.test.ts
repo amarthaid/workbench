@@ -196,4 +196,29 @@ describe("/authorize/resume", () => {
     const secondRedirect = new URL(second.headers.location as string);
     expect(secondRedirect.origin + secondRedirect.pathname).toBe("http://localhost:5173/authorize/choose");
   });
+
+  it("refuses a pending user's session: back to the choice page, no code issued", async () => {
+    const a = await app();
+    const { ticket, cookie } = await startAuthorize(a, "http://127.0.0.1:33418/cb");
+    await db.run("INSERT INTO users (id, email, status, disabled_at) VALUES (?, ?, 'pending', ?)", [
+      "user-pend", "pend@example.com", 1,
+    ]);
+    // A session minted while the account was still active.
+    const token = await signSession({ userId: "user-pend", email: "pend@example.com" });
+
+    const res = await a.inject({
+      method: "POST",
+      url: "/authorize/resume",
+      headers: { cookie, "content-type": "application/x-www-form-urlencoded" },
+      payload: `ticket=${ticket}&token=${token}`,
+    });
+
+    expect(res.statusCode).toBe(302);
+    const redirect = new URL(res.headers.location as string);
+    expect(redirect.origin + redirect.pathname).toBe("http://localhost:5173/authorize/choose");
+    expect(redirect.searchParams.get("error")).toBe("session_invalid");
+    const codes = await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM oauth_auth_codes WHERE user_id = ?", ["user-pend"]);
+    expect(Number(codes?.n)).toBe(0);
+    await db.run("DELETE FROM users WHERE id = ?", ["user-pend"]);
+  });
 });

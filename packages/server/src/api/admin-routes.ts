@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { db } from "../db";
 import { activeProfiles, profileDirName, profilesBaseDir } from "../auth/profile-chromium";
 import { adminScope, adminActor } from "./admin-scope";
+import { registerAdminApprovalRoutes } from "../approvals/routes";
 import { listUsers, disableUser, enableUser, revokeUserKey } from "../admin/users";
 import { searchAdminSpaces } from "../admin/spaces";
 import { getUserPermissions, grantPermission, resetPermission } from "../admin/permissions";
@@ -36,7 +37,12 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
       if (!result.ok) return reply.status(result.status).send({ error: result.error });
       return { spaces: result.spaces, has_more: result.has_more };
     });
-    scope.get("/users", async () => listUsers());
+    // Approvals for account.activate live here, behind the admin gate.
+    registerAdminApprovalRoutes(scope);
+    scope.get("/users", async (request) => {
+      const { status } = request.query as { status?: string };
+      return listUsers(500, status === "pending" || status === "active" || status === "disabled" ? status : undefined);
+    });
     for (const [path, act] of [
       ["disable", disableUser],
       ["enable", enableUser],

@@ -3,7 +3,7 @@ import { config } from "../config";
 import { db } from "../db";
 import crypto from "crypto";
 import { createAuthState, verifyAuthState } from "./oauth";
-import { isUserDisabled } from "./user-status";
+import { createUserForSignup, settleSignInStatus } from "../approvals/signup";
 
 interface OidcDiscovery {
   authorization_endpoint: string;
@@ -121,7 +121,9 @@ export async function handleCallback(
   }
   const tokens = await exchangeCodeForTokens(code);
   const kcUser = await verifyIdToken(tokens.id_token, authState.nonce);
-  if (kcUser.email_verified === false) {
+  // Strictly true: an absent claim would let a sign-in link by email into an
+  // existing account it does not own.
+  if (kcUser.email_verified !== true) {
     throw new Error("Email not verified");
   }
   let user = await db.get<{ id: string; email: string; keycloak_sub: string }>(
@@ -136,12 +138,12 @@ export async function handleCallback(
     if (user) {
       await db.run("UPDATE users SET keycloak_sub = ? WHERE id = ?", [kcUser.sub, user.id]);
     } else {
-      const id = crypto.randomUUID();
-      await db.run("INSERT INTO users (id, email, keycloak_sub) VALUES (?, ?, ?)", [id, kcUser.email, kcUser.sub]);
-      user = { id, email: kcUser.email, keycloak_sub: kcUser.sub };
+      const created = await createUserForSignup({ email: kcUser.email, provider: "keycloak", sub: kcUser.sub });
+      user = { id: created.id, email: created.email, keycloak_sub: kcUser.sub };
     }
   }
-  // After account linking, so a disabled account cannot be re-entered by email.
-  if (await isUserDisabled(user.id)) throw new Error("Account disabled");
+  // After account linking, so a disabled or pending account cannot be re-entered
+  // by email. Throws AccountPendingError / Error("Account disabled").
+  await settleSignInStatus(user);
   return { userId: user.id, email: user.email, loginNonce: authState.config };
 }

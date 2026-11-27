@@ -41,6 +41,7 @@ import {
   type Space,
   type Visibility,
 } from "./store";
+import { pendingRequestCounts } from "../approvals/kinds";
 import { mintSig } from "./sig";
 import { takeOwnerToken, takeToken } from "./rate-limit";
 
@@ -207,10 +208,11 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
         const out = [];
         // One permission read per request, only when the viewer owns a delegated Space.
         let ownerCan: boolean | undefined;
-        const [states, favoriteTotals, openers] = await Promise.all([
+        const [states, favoriteTotals, openers, requestCounts] = await Promise.all([
           userSpaceStates(viewer.userId),
           favoriteCounts(),
           distinctOpeners(viewer.userId, Date.now() - OPENED_WINDOW_MS),
+          pendingRequestCounts(viewer.userId),
         ]);
         for (const s of await listAllSpaces()) {
           if (!hasFiles(s.name)) continue;
@@ -238,6 +240,8 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
             ...(mine && openersShown(s.visibility, openers.get(s.name))
               ? { viewers_30d: openers.get(s.name) as number }
               : {}),
+            // Owner only: open access requests for this Space (people asking to be added).
+            ...(mine ? { pending_requests: requestCounts.get(s.name) ?? 0 } : {}),
             delegate_access: mine ? s.accessMode === "owner" : delegation?.mode === "owner",
             delegation_suspended: mine
               ? delegationSuspended(s)

@@ -13,7 +13,10 @@ export interface UsageStats {
   errors_24h: number;
   active_users_7d: number;
   total_users: number;
+  /** Turned off by an admin (not counting people still waiting for approval). */
   disabled_users: number;
+  /** Signed up and waiting for an admin to approve. */
+  pending_users: number;
   needs_reconnect: number;
 }
 
@@ -33,15 +36,21 @@ const num = (v: unknown): number => Number(v ?? 0);
  * not depend on the audit destination, so they are filled in either way.
  */
 export async function getUsageStats(nowSeconds: number = Math.floor(Date.now() / 1000)): Promise<UsageStats> {
-  const users = await db.get<{ total: number | string; disabled: number | string | null }>(
+  const users = await db.get<{
+    total: number | string;
+    disabled: number | string | null;
+    pending: number | string | null;
+  }>(
     `SELECT COUNT(*) AS total,
-            SUM(CASE WHEN disabled_at IS NOT NULL THEN 1 ELSE 0 END) AS disabled
+            SUM(CASE WHEN status <> 'pending' AND (status <> 'active' OR disabled_at IS NOT NULL) THEN 1 ELSE 0 END) AS disabled,
+            SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending
        FROM users`
   );
   const conns = await getConnectionStats(nowSeconds);
   const base = {
     total_users: num(users?.total),
     disabled_users: num(users?.disabled),
+    pending_users: num(users?.pending),
     needs_reconnect: conns.integrations.reduce((n, c) => n + c.needs_reconnect, 0),
   };
   if (!auditStored()) {

@@ -70,6 +70,15 @@ export const configSchema = z.object({
   // Who may use /api/admin/* and the portal's Admin page. Empty (the default)
   // means nobody: admin is off unless an operator names an admin.
   ADMIN_EMAILS: z.string().default("").transform(parseAdminEmails),
+  // When true, a first sign-in (Google or Keycloak) creates the user `pending`
+  // until an admin approves it. Admins (ADMIN_EMAILS) are never held, and users
+  // that already exist are never moved to pending. Needs ADMIN_EMAILS (checked
+  // below): with nobody to approve, every signup would be stranded. Turn it on
+  // only after a rolling deploy finishes (see docs/findings/2026-11-27-maker-checker.md).
+  REQUIRE_SIGNUP_APPROVAL: z
+    .enum(["true", "false", "1", "0"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1"),
   // How often each process re-reads instance_settings, so a change an admin made
   // through another worker or pod reaches this one. A change made through this
   // process applies immediately.
@@ -205,4 +214,19 @@ export const configSchema = z.object({
     }),
 });
 
-export const config = configSchema.parse(process.env);
+// Cross-field rules. REQUIRE_SIGNUP_APPROVAL with nobody to approve would lock
+// every new person out with no way to let them in, so the server refuses to
+// start instead of running in that state.
+// `configSchema` stays the plain object so callers can read its shape; the server
+// itself parses with this one.
+export const bootConfigSchema = configSchema.superRefine((c, ctx) => {
+  if (c.REQUIRE_SIGNUP_APPROVAL && c.ADMIN_EMAILS.length === 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["REQUIRE_SIGNUP_APPROVAL"],
+      message: "REQUIRE_SIGNUP_APPROVAL=true needs at least one email in ADMIN_EMAILS (nobody could approve signups)",
+    });
+  }
+});
+
+export const config = bootConfigSchema.parse(process.env);

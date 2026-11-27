@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { db } from "../db";
+import type { DbExecutor } from "../db-adapter";
+import { closeOpenForSubject } from "../approvals/store";
 import { config } from "../config";
 import { isValidJotName } from "../jots/paths";
 import { spacesRoot } from "./dir";
@@ -392,18 +394,25 @@ export type ShareChange = string[] | "forbidden" | "empty";
  * `requireNonEmpty` (a Space with visibility 'users') refuses a change that
  * would leave nobody on the list: "empty", and nothing is written. Returns the
  * resulting list, or "forbidden" when the Space is missing or someone else's.
+ *
+ * `executor`: pass the transaction you are already in (an approval being
+ * applied). The function then opens no transaction of its own, which would
+ * queue behind yours on SQLite (a hang) and commit separately on PostgreSQL.
+ * Because the caller owns the transaction, an "empty" answer has already
+ * written the change: the caller must roll back (or not pass `requireNonEmpty`).
  */
 export async function changeShares(
   name: string,
   ownerId: string,
   change: { add?: readonly string[]; remove?: readonly string[] },
-  requireNonEmpty = false
+  requireNonEmpty = false,
+  executor?: DbExecutor
 ): Promise<ShareChange> {
   const norm = (list?: readonly string[]) =>
     Array.from(new Set((list ?? []).map(normalizeEmail).filter((e) => e !== "")));
   const add = norm(change.add);
   const remove = norm(change.remove);
-  return db.transaction(async (tx) => {
+  const body = async (tx: DbExecutor): Promise<ShareChange> => {
     const row = await tx.get<{ owner_id: string }>("SELECT owner_id FROM spaces WHERE name = ?", [name]);
     if (!row || row.owner_id !== ownerId) return "forbidden";
     for (const email of add) {
@@ -422,7 +431,8 @@ export async function changeShares(
     // Throwing rolls the transaction back; the sentinel is caught below.
     if (requireNonEmpty && rows.length === 0) throw new EmptyShares();
     return rows.map((r) => r.email);
-  }).catch((e) => {
+  };
+  return (executor ? body(executor) : db.transaction(body)).catch((e) => {
     if (e instanceof EmptyShares) return "empty" as const;
     throw e;
   });
@@ -591,6 +601,10 @@ export async function deleteSpace(name: string): Promise<void> {
     await tx.run("DELETE FROM space_user_state WHERE space_name = ?", [name]);
     await tx.run("DELETE FROM space_shares WHERE space_name = ?", [name]);
     await tx.run("DELETE FROM spaces WHERE name = ?", [name]);
+    // Open access requests for this Space can never be granted now. A Space
+    // later created under the same name does not inherit them either (each
+    // request also pins the Space's created_at).
+    await closeOpenForSubject(tx, "space.access", name, "cancelled", null, "space_deleted");
   });
   if (isValidSpaceName(name)) fs.rmSync(spaceDir(name), { recursive: true, force: true });
 }

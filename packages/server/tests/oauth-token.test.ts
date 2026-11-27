@@ -188,4 +188,34 @@ describe("POST /token for a disabled user", () => {
     expect(res.statusCode).toBe(400);
     expect(JSON.parse(res.body)).toEqual({ error: "invalid_grant" });
   });
+
+  it("refuses the authorization_code grant for a pending user (code issued before it went pending)", async () => {
+    await db.run("INSERT INTO users (id, email) VALUES (?, ?)", ["u-pend", "pend@example.com"]);
+    const { c, code } = await codeFor("u-pend");
+    await db.run("UPDATE users SET status = 'pending' WHERE id = ?", ["u-pend"]);
+    const a = await app();
+    const res = await a.inject({
+      method: "POST", url: "/token",
+      ...form({ grant_type: "authorization_code", code, client_id: c.client_id, redirect_uri: "http://127.0.0.1/cb", code_verifier: "v" }),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body)).toEqual({ error: "invalid_grant" });
+  });
+
+  it("refuses the refresh_token grant for a pending user and mints nothing", async () => {
+    await db.run("INSERT INTO users (id, email) VALUES (?, ?)", ["u-pend2", "pend2@example.com"]);
+    const { c, code } = await codeFor("u-pend2");
+    const a = await app();
+    const first = JSON.parse((await a.inject({
+      method: "POST", url: "/token",
+      ...form({ grant_type: "authorization_code", code, client_id: c.client_id, redirect_uri: "http://127.0.0.1/cb", code_verifier: "v" }),
+    })).body);
+    await db.run("UPDATE users SET status = 'pending' WHERE id = ?", ["u-pend2"]);
+    const res = await a.inject({
+      method: "POST", url: "/token",
+      ...form({ grant_type: "refresh_token", refresh_token: first.refresh_token, client_id: c.client_id }),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body)).toEqual({ error: "invalid_grant" });
+  });
 });

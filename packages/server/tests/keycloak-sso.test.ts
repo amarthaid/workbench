@@ -145,6 +145,21 @@ describe("handleCallback", () => {
     await expect(handleCallback("code", state)).rejects.toThrow("Email not verified");
   });
 
+  it("refuses an ID token with no email_verified claim (absent is not verified)", async () => {
+    // An absent claim must not link by email into an account the person may not own.
+    await db.run("INSERT INTO users (id, email) VALUES (?, ?)", ["victim", "victim@example.com"]);
+    const { state, nonce } = await getStateAndNonce();
+
+    vi.mocked(jwtVerify).mockResolvedValue({
+      payload: { sub: "kc-absent", email: "victim@example.com", nonce },
+    } as any);
+    mockFetchRouting({ id_token: "id-123", access_token: "acc-456", expires_in: 3600 });
+
+    await expect(handleCallback("code", state)).rejects.toThrow("Email not verified");
+    const row = await db.get<{ keycloak_sub: string | null }>("SELECT keycloak_sub FROM users WHERE id = ?", ["victim"]);
+    expect(row?.keycloak_sub).toBeNull();
+  });
+
   it("consumes the pending_auth row: a second callback with the same state fails", async () => {
     const { state, nonce } = await getStateAndNonce();
 

@@ -3,7 +3,7 @@ import { config } from "../config";
 import { db } from "../db";
 import crypto from "crypto";
 import { createAuthState, verifyAuthState } from "./oauth";
-import { isUserDisabled } from "./user-status";
+import { createUserForSignup, settleSignInStatus } from "../approvals/signup";
 
 const GOOGLE_DISCOVERY = "https://accounts.google.com/.well-known/openid-configuration";
 
@@ -159,18 +159,15 @@ export async function handleCallback(
       // Link existing user
       await db.run("UPDATE users SET google_sub = ? WHERE id = ?", [googleUser.sub, user.id]);
     } else {
-      // Create new user
-      const id = crypto.randomUUID();
-      await db.run("INSERT INTO users (id, email, google_sub) VALUES (?, ?, ?)", [
-        id,
-        googleUser.email,
-        googleUser.sub,
-      ]);
-      user = { id, email: googleUser.email, google_sub: googleUser.sub };
+      // Create new user: active, or pending when signups need approval.
+      const created = await createUserForSignup({ email: googleUser.email, provider: "google", sub: googleUser.sub });
+      user = { id: created.id, email: created.email, google_sub: googleUser.sub };
     }
   }
 
-  // After account linking, so a disabled account cannot be re-entered by email.
-  if (await isUserDisabled(user.id)) throw new Error("Account disabled");
+  // After account linking, so a disabled or pending account cannot be re-entered
+  // by email. Throws AccountPendingError / Error("Account disabled"): no session
+  // and no authorization code is ever issued for such a user.
+  await settleSignInStatus(user);
   return { userId: user.id, email: user.email, loginNonce: authState.config };
 }

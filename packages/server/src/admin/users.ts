@@ -2,13 +2,17 @@ import { db } from "../db";
 import { auditLogger } from "../audit/logger";
 import { isAdminEmail } from "../auth/admin";
 import { clearApiKey } from "../auth/users";
-import { setUserDisabled } from "../auth/user-status";
+import { effectiveStatus, setUserStatus, type UserStatus } from "../auth/user-status";
+import { ACCOUNT_ACTIVATE } from "../approvals/kinds";
+import { closeOpenForSubject } from "../approvals/store";
 import type { AdminActor } from "../api/admin-scope";
 
 export interface AdminUserRow {
   id: string;
   email: string | null;
   created_at: number;
+  /** "pending" waits for an admin; "disabled" is the permanent no (an admin turned it off). */
+  status: UserStatus;
   disabled_at: number | null;
   has_api_key: boolean;
   connection_count: number;
@@ -22,15 +26,31 @@ export type UserActionResult =
 
 // Explicit columns, never SELECT *: api_key_hash, api_key_sha and api_key_enc
 // live on this table and must not reach a response.
-export async function listUsers(limit = 500): Promise<{ users: AdminUserRow[]; total: number }> {
+//
+// Pending users sort after everyone else, so a burst of sign-ups cannot push
+// the established users off the list (the approvals queue is where they are
+// worked). `status` narrows the list: "pending", "active" or "disabled".
+export async function listUsers(
+  limit = 500,
+  status?: UserStatus
+): Promise<{ users: AdminUserRow[]; total: number }> {
+  const filter =
+    status === "pending"
+      ? "WHERE u.status = 'pending'"
+      : status === "disabled"
+        ? "WHERE u.status <> 'pending' AND (u.status <> 'active' OR u.disabled_at IS NOT NULL)"
+        : status === "active"
+          ? "WHERE u.status = 'active' AND u.disabled_at IS NULL"
+          : "";
   const rows = await db.all<Record<string, unknown>>(
-    `SELECT u.id, u.email, u.created_at, u.disabled_at,
+    `SELECT u.id, u.email, u.created_at, u.disabled_at, u.status,
             CASE WHEN u.api_key_hash IS NOT NULL THEN 1 ELSE 0 END AS has_api_key,
             (SELECT COUNT(*) FROM connections c WHERE c.user_id = u.id) AS connection_count,
             (SELECT COUNT(*) FROM custom_apps a WHERE a.user_id = u.id) AS custom_app_count,
             (SELECT MAX(l.created_at) FROM audit_log l WHERE l.user_id = u.id) AS last_activity
        FROM users u
-      ORDER BY u.created_at DESC, u.id DESC
+      ${filter}
+      ORDER BY CASE WHEN u.status = 'pending' THEN 1 ELSE 0 END, u.created_at DESC, u.id DESC
       LIMIT ?`,
     [limit]
   );
@@ -41,6 +61,7 @@ export async function listUsers(limit = 500): Promise<{ users: AdminUserRow[]; t
       id: String(r.id),
       email: (r.email as string | null) ?? null,
       created_at: Number(r.created_at),
+      status: effectiveStatus({ status: (r.status as string | null) ?? null, disabled_at: orNull(r.disabled_at) }),
       disabled_at: orNull(r.disabled_at),
       has_api_key: Number(r.has_api_key) === 1,
       connection_count: Number(r.connection_count),
@@ -80,7 +101,11 @@ export async function disableUser(actor: AdminActor, id: string): Promise<UserAc
   if (target.id === actor.userId) return { ok: false, status: 400, error: "cannot_disable_self" };
   if (isAdminEmail(target.email)) return { ok: false, status: 400, error: "cannot_disable_admin" };
 
-  await setUserDisabled(target.id, true);
+  await db.transaction(async (tx) => {
+    await setUserStatus(target.id, "disabled", {}, tx);
+    // Disabling a pending user is the permanent no: its open request closes.
+    await closeOpenForSubject(tx, ACCOUNT_ACTIVATE, target.id, "cancelled", actor.userId, "disabled");
+  });
   // A refresh token the user already holds must not mint fresh access tokens.
   await db.run("DELETE FROM oauth_refresh_tokens WHERE user_id = ?", [target.id]);
   await audit(actor, "ADMIN_USER_DISABLE", "disable", target);
@@ -90,7 +115,12 @@ export async function disableUser(actor: AdminActor, id: string): Promise<UserAc
 export async function enableUser(actor: AdminActor, id: string): Promise<UserActionResult> {
   const target = await findUser(id);
   if (!target) return NOT_FOUND;
-  await setUserDisabled(target.id, false);
+  // Enabling a pending user is an approval: the open request closes as approved
+  // by this admin, in the same transaction as the status change.
+  await db.transaction(async (tx) => {
+    await setUserStatus(target.id, "active", {}, tx);
+    await closeOpenForSubject(tx, ACCOUNT_ACTIVATE, target.id, "approved", actor.userId, null);
+  });
   await audit(actor, "ADMIN_USER_ENABLE", "enable", target);
   return { ok: true };
 }

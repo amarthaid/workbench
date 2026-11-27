@@ -38,6 +38,13 @@ import {
   userSpaceStates,
 } from "../src/spaces/store";
 import { delegationFor, recordDelegationChange } from "../src/spaces/delegation";
+import { getShares } from "../src/spaces/store";
+import { decide } from "../src/approvals/engine";
+import { ACCOUNT_ACTIVATE, SPACE_ACCESS, _registerKindForTest, type Actor, type Kind } from "../src/approvals/kinds";
+import { cancelRequest, decideRequest, getRequest, insertRequest, pagePending } from "../src/approvals/store";
+import { createUserForSignup } from "../src/approvals/signup";
+import { config } from "../src/config";
+import { getUserStatus, setUserStatus } from "../src/auth/user-status";
 
 // Modules that use the process-wide `db` (the permissions store) run against
 // the backend under test by pointing this holder at it. Unset, the real `db`
@@ -582,6 +589,245 @@ for (const backend of backends) {
         await deleteSpace("s1");
         const left = await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM space_user_state", []);
         expect(Number(left!.n)).toBe(0);
+      });
+    });
+
+    // The maker-checker table: a partial unique index, a conditional UPDATE as
+    // the arbiter, BIGINT times (strings from node-postgres), and a decision
+    // whose effect shares one transaction with its status change.
+    describe("approval requests", () => {
+      beforeAll(() => {
+        target.current = db;
+      });
+      afterAll(() => {
+        target.current = null;
+      });
+      beforeEach(async () => {
+        for (const t of ["approval_requests", "space_shares", "spaces", "audit_log", "users"]) await db.run(`DELETE FROM ${t}`);
+        for (const [id, email] of [
+          ["owner", "owner@example.com"],
+          ["maker", "maker@example.com"],
+          ["checker", "checker@example.com"],
+        ]) {
+          await db.run("INSERT INTO users (id, email) VALUES (?, ?)", [id, email]);
+        }
+      });
+
+      const checker: Actor = { userId: "checker", email: "checker@example.com" };
+      const KIND = "test.pg";
+
+      /** A kind with a controllable effect, so the transaction behaviour is what is under test. */
+      function fakeKind(apply: Kind["apply"]): Kind {
+        return {
+          name: KIND,
+          clientCreatable: false,
+          withinLimits: async () => true,
+          canCreate: async () => ({ ok: false }),
+          inboxFor: async () => ({ rows: [], next: null }),
+          canDecide: async (a) => a.userId === "checker",
+          validate: async () => ({ status: "ok" }),
+          apply,
+          describe: () => "pg",
+          subjectLabel: async (r) => r.subject,
+        };
+      }
+
+      it("creates the table and users.status, and applies the schema again without error", async () => {
+        await applySchema(db);
+        const col = await db.get<{ status: string }>("SELECT status FROM users WHERE id = ?", ["owner"]);
+        expect(col?.status).toBe("active");
+        expect(await db.all("SELECT * FROM approval_requests")).toEqual([]);
+      });
+
+      it("backfills disabled from disabled_at on every schema run, and leaves pending alone", async () => {
+        await db.run("INSERT INTO users (id, email, disabled_at) VALUES (?, ?, ?)", ["old", "old@example.com", 5]);
+        await db.run("INSERT INTO users (id, email, status, disabled_at) VALUES (?, ?, 'pending', ?)", ["pend", "pend@example.com", 5]);
+        await applySchema(db);
+        const rows = await db.all<{ id: string; status: string }>("SELECT id, status FROM users WHERE id IN ('old', 'pend') ORDER BY id");
+        expect(rows).toEqual([{ id: "old", status: "disabled" }, { id: "pend", status: "pending" }]);
+      });
+
+      it("the partial unique index allows one open request per (kind, subject, requester), and a decided one frees the slot", async () => {
+        const first = await insertRequest(db, { kind: KIND, subject: "x", requesterId: "maker" });
+        expect(first).toBeTruthy();
+        expect(await insertRequest(db, { kind: KIND, subject: "x", requesterId: "maker" })).toBeNull();
+        // The index itself refuses a plain duplicate insert.
+        await expect(
+          db.run(
+            "INSERT INTO approval_requests (id, kind, subject, requester_id, status, created_at) VALUES ('dup', ?, 'x', 'maker', 'pending', 1)",
+            [KIND]
+          )
+        ).rejects.toThrow();
+        expect(await decideRequest(db, first!, "rejected", "checker", null)).toBe(true);
+        expect(await insertRequest(db, { kind: KIND, subject: "x", requesterId: "maker" })).toBeTruthy();
+        // Closed rows are not constrained: any number of them may pile up.
+        await db.run(
+          "INSERT INTO approval_requests (id, kind, subject, requester_id, status, created_at) VALUES ('c1', ?, 'y', 'maker', 'cancelled', 1), ('c2', ?, 'y', 'maker', 'cancelled', 1)",
+          [KIND, KIND]
+        );
+      });
+
+      it("decide is conditional: of two decisions on one request exactly one reports a change", async () => {
+        const id = (await insertRequest(db, { kind: KIND, subject: "x", requesterId: "maker" }))!;
+        expect(await decideRequest(db, id, "approved", "checker", "n")).toBe(true);
+        expect(await decideRequest(db, id, "rejected", "checker", null)).toBe(false);
+        expect(await cancelRequest(id, "maker")).toBe(false);
+        expect(await getRequest(id)).toMatchObject({ status: "approved", decidedBy: "checker", decisionNote: "n" });
+      });
+
+      it("reads BIGINT times back as numbers and pages with a cursor", async () => {
+        for (let i = 1; i <= 3; i++) {
+          await db.run(
+            "INSERT INTO approval_requests (id, kind, subject, requester_id, status, created_at) VALUES (?, ?, ?, ?, 'pending', ?)",
+            [`r${i}`, ACCOUNT_ACTIVATE, `u${i}`, `u${i}`, 1_700_000_000 + i]
+          );
+        }
+        const r1 = await getRequest("r1");
+        expect(typeof r1?.createdAt).toBe("number");
+        const p1 = await pagePending(ACCOUNT_ACTIVATE, 2);
+        expect(p1.rows.map((r) => r.id)).toEqual(["r3", "r2"]);
+        const p2 = await pagePending(ACCOUNT_ACTIVATE, 2, p1.next!);
+        expect(p2.rows.map((r) => r.id)).toEqual(["r1"]);
+        expect(p2.next).toBeNull();
+      });
+
+      it("two concurrent approves (Promise.all) run the effect once", async () => {
+        let applied = 0;
+        const undo = _registerKindForTest(
+          fakeKind(async () => {
+            applied++;
+            // Hold the transaction open so the second decision is genuinely concurrent.
+            await new Promise((r) => setTimeout(r, 80));
+            return { applied: true };
+          })
+        );
+        try {
+          const id = (await insertRequest(db, { kind: KIND, subject: "x", requesterId: "maker" }))!;
+          const results = await Promise.all([
+            decide(checker, id, "approve", { kinds: [KIND] }),
+            decide(checker, id, "approve", { kinds: [KIND] }),
+          ]);
+          expect(applied).toBe(1);
+          expect(results.filter((r) => r.ok && r.outcome === "approved")).toHaveLength(1);
+          expect(await getRequest(id)).toMatchObject({ status: "approved" });
+        } finally {
+          undo();
+        }
+      });
+
+      it("an approve racing a reject: one wins, and the effect runs only if approve won", async () => {
+        let applied = 0;
+        const undo = _registerKindForTest(
+          fakeKind(async () => {
+            applied++;
+            await new Promise((r) => setTimeout(r, 50));
+            return { applied: true };
+          })
+        );
+        try {
+          const id = (await insertRequest(db, { kind: KIND, subject: "x", requesterId: "maker" }))!;
+          await Promise.all([decide(checker, id, "approve", { kinds: [KIND] }), decide(checker, id, "reject", { kinds: [KIND] })]);
+          const status = (await getRequest(id))!.status;
+          expect(["approved", "rejected"]).toContain(status);
+          expect(applied).toBe(status === "approved" ? 1 : 0);
+        } finally {
+          undo();
+        }
+      });
+
+      it("rolls the status change AND the effect back when apply throws", async () => {
+        const undo = _registerKindForTest(
+          fakeKind(async (_r, tx) => {
+            await tx.run("INSERT INTO users (id, email) VALUES (?, ?)", ["effect-row", "effect@example.com"]);
+            throw new Error("boom");
+          })
+        );
+        try {
+          const id = (await insertRequest(db, { kind: KIND, subject: "x", requesterId: "maker" }))!;
+          await expect(decide(checker, id, "approve", { kinds: [KIND] })).rejects.toThrow("boom");
+          expect(await getRequest(id)).toMatchObject({ status: "pending", decidedBy: null });
+          expect(await db.get("SELECT id FROM users WHERE id = ?", ["effect-row"])).toBeUndefined();
+        } finally {
+          undo();
+        }
+      });
+
+      it("a real space.access approve adds the share through the transaction it was handed", async () => {
+        await upsertSpace({ name: "s1", ownerId: "owner", title: "s1", tools: [], visibility: "users" });
+        const space = (await getSpace("s1"))!;
+        const id = (await insertRequest(db, {
+          kind: SPACE_ACCESS,
+          subject: "s1",
+          requesterId: "maker",
+          payload: { space_created_at: space.createdAt },
+        }))!;
+        const r = await decide({ userId: "owner", email: "owner@example.com" }, id, "approve", { kinds: [SPACE_ACCESS] });
+        expect(r).toMatchObject({ ok: true, outcome: "approved" });
+        expect(await getShares("s1")).toEqual(["maker@example.com"]);
+        expect(await getRequest(id)).toMatchObject({ status: "approved", decidedBy: "owner" });
+      });
+
+      it("deleteSpace closes the Space's open requests in its own transaction", async () => {
+        await upsertSpace({ name: "s1", ownerId: "owner", title: "s1", tools: [], visibility: "users" });
+        const id = (await insertRequest(db, { kind: SPACE_ACCESS, subject: "s1", requesterId: "maker", payload: {} }))!;
+        await deleteSpace("s1");
+        expect(await getRequest(id)).toMatchObject({ status: "cancelled", decisionNote: "space_deleted" });
+      });
+
+      it("an account.activate approve activates a still-pending user, and refuses one disabled meanwhile", async () => {
+        const savedAdmins = config.ADMIN_EMAILS;
+        config.ADMIN_EMAILS = ["checker@example.com"];
+        try {
+          for (const [uid, disabledMeanwhile] of [["p1", false], ["p2", true]] as const) {
+            await db.run("INSERT INTO users (id, email, status, disabled_at) VALUES (?, ?, 'pending', 1)", [uid, `${uid}@example.com`]);
+            const rid = (await insertRequest(db, { kind: ACCOUNT_ACTIVATE, subject: uid, requesterId: uid }))!;
+            if (disabledMeanwhile) await db.run("UPDATE users SET status = 'disabled' WHERE id = ?", [uid]);
+            const r = await decide(checker, rid, "approve", { kinds: [ACCOUNT_ACTIVATE] });
+            expect(r).toMatchObject({ ok: true, outcome: disabledMeanwhile ? "auto_rejected" : "approved" });
+            expect(await getUserStatus(uid)).toBe(disabledMeanwhile ? "disabled" : "active");
+          }
+        } finally {
+          config.ADMIN_EMAILS = savedAdmins;
+        }
+      });
+
+      it("setUserStatus's from-guard is one statement on both backends", async () => {
+        await db.run("INSERT INTO users (id, email, status, disabled_at) VALUES (?, ?, 'pending', 1)", ["g", "g@example.com"]);
+        expect(await setUserStatus("g", "active", { from: "pending" })).toBe(true);
+        expect(await setUserStatus("g", "active", { from: "pending" })).toBe(false);
+        expect(await setUserStatus("g", "disabled", { nowSeconds: 77 })).toBe(true);
+        const row = await db.get<{ status: string; disabled_at: number | string }>("SELECT status, disabled_at FROM users WHERE id = 'g'");
+        expect(row?.status).toBe("disabled");
+        expect(Number(row?.disabled_at)).toBe(77);
+      });
+
+      it("creates a pending user and its request in one transaction", async () => {
+        const saved = { req: config.REQUIRE_SIGNUP_APPROVAL, admins: config.ADMIN_EMAILS };
+        config.REQUIRE_SIGNUP_APPROVAL = true;
+        config.ADMIN_EMAILS = ["checker@example.com"];
+        try {
+          const created = await createUserForSignup({ email: "new@example.com", provider: "google", sub: "g-new" });
+          expect(created.pending).toBe(true);
+          const row = await db.get<{ status: string; disabled_at: number | string | null }>("SELECT status, disabled_at FROM users WHERE id = ?", [created.id]);
+          expect(row?.status).toBe("pending");
+          expect(row?.disabled_at).not.toBeNull();
+          const reqs = await db.all<{ kind: string; status: string }>("SELECT kind, status FROM approval_requests WHERE subject = ?", [created.id]);
+          expect(reqs).toEqual([{ kind: ACCOUNT_ACTIVATE, status: "pending" }]);
+          // An admin's email is created active, with no request.
+          config.ADMIN_EMAILS = ["checker@example.com", "boss@example.com"];
+          const boss = await createUserForSignup({ email: "boss@example.com", provider: "keycloak", sub: "kc-1" });
+          expect(boss.pending).toBe(false);
+          expect((await db.get<{ status: string }>("SELECT status FROM users WHERE id = ?", [boss.id]))?.status).toBe("active");
+          expect(await db.get("SELECT id FROM approval_requests WHERE subject = ?", [boss.id])).toBeUndefined();
+          // A duplicate email is refused by the unique index and leaves no half-created pair.
+          config.ADMIN_EMAILS = ["checker@example.com"];
+          await expect(createUserForSignup({ email: "new@example.com", provider: "google", sub: "g-other" })).rejects.toThrow();
+          const dupes = await db.get<{ n: number | string }>("SELECT COUNT(*) AS n FROM approval_requests WHERE kind = ?", [ACCOUNT_ACTIVATE]);
+          expect(Number(dupes?.n)).toBe(1);
+        } finally {
+          config.REQUIRE_SIGNUP_APPROVAL = saved.req;
+          config.ADMIN_EMAILS = saved.admins;
+        }
       });
     });
   });
