@@ -450,14 +450,6 @@ export async function isSharedWith(name: string, email: string): Promise<boolean
 
 // ---- consent ---------------------------------------------------------------
 
-export async function getConsentHash(name: string, userId: string): Promise<string | null> {
-  const row = await db.get<{ tools_hash: string }>(
-    "SELECT tools_hash FROM space_consents WHERE space_name = ? AND user_id = ?",
-    [name, userId]
-  );
-  return row?.tools_hash ?? null;
-}
-
 /**
  * What `viewerId` approves. A viewer approves the tool list, whose connections
  * the calls run with (access mode) and whose Space it is (owner): a change to
@@ -471,11 +463,6 @@ export function consentHash(space: Space, viewerId: string): string {
       ? [toolsHash(space.tools), "owner-self"]
       : [toolsHash(space.tools), space.accessMode, space.ownerId];
   return crypto.createHash("sha256").update(JSON.stringify(parts)).digest("hex");
-}
-
-/** True when this user consented to exactly what consentHash covers for them now. */
-export async function hasConsent(space: Space, userId: string): Promise<boolean> {
-  return (await getConsentHash(space.name, userId)) === consentHash(space, userId);
 }
 
 export interface ConsentRow {

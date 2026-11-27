@@ -7,13 +7,13 @@ let tmp: string;
 vi.mock("../../src/spaces/dir", () => ({ spacesRoot: () => tmp }));
 
 import { db } from "../../src/db";
+import { checkConsent } from "../../src/spaces/approvals";
 import {
   deleteSpace,
-  getConsentHash,
+  getConsentRow,
   getShares,
   getSpace,
   grantConsent,
-  hasConsent,
   hasFiles,
   isValidSpaceName,
   kvGet,
@@ -56,6 +56,11 @@ async function enableIn(name: string) {
 async function meta(p: ReturnType<typeof updateSpaceMeta>) {
   const r = await p;
   return r && typeof r === "object" ? r : null;
+}
+
+/** The stored hash still matches what the user would approve now (default policy rows). */
+async function hasConsent(space: Parameters<typeof checkConsent>[0], userId: string): Promise<boolean> {
+  return (await checkConsent(space, userId, {})).consented;
 }
 
 describe("spaces/store", () => {
@@ -179,7 +184,7 @@ describe("spaces/store", () => {
     const changed = (await meta(updateSpaceMeta("s1", "u1", { tools: ["a_tool", "c_tool"] })))!.space;
     expect(await hasConsent(changed, "v1")).toBe(false);
     await revokeConsent("s1", "v1");
-    expect(await getConsentHash("s1", "v1")).toBeNull();
+    expect((await getConsentRow("s1", "v1"))?.hash ?? null).toBeNull();
   });
 
   describe("consent covers mode and owner", () => {
@@ -187,7 +192,7 @@ describe("spaces/store", () => {
       await upsertSpace({ name: "s1", ...base });
       const s = (await getSpace("s1"))!;
       await grantConsent(s, "v1");
-      expect(await getConsentHash("s1", "v1")).toBe(consentHash(s, "v1"));
+      expect((await getConsentRow("s1", "v1"))?.hash ?? null).toBe(consentHash(s, "v1"));
       expect(consentHash(s, "v1")).not.toBe(toolsHash(s.tools));
     });
 
@@ -479,7 +484,7 @@ describe("spaces/store", () => {
     await deleteSpace("s1");
     expect(await getSpace("s1")).toBeNull();
     expect(await getShares("s1")).toEqual([]);
-    expect(await getConsentHash("s1", "v1")).toBeNull();
+    expect((await getConsentRow("s1", "v1"))?.hash ?? null).toBeNull();
     expect(await kvKeys("s1", "v1")).toEqual([]);
     expect(fs.existsSync(path.join(tmp, "s1"))).toBe(false);
     // Another Space is untouched.

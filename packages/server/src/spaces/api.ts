@@ -7,7 +7,17 @@ import { getUserById } from "../auth/users";
 import { getToken } from "../auth/tokens";
 import { hasValidCookies } from "../auth/cookie";
 import { registry } from "../plugins/registry";
-import { isInternalTool } from "./approvals";
+import {
+  approvalEditable,
+  approvalFor,
+  autoSet,
+  checkConsent,
+  delegatedFor,
+  isInternalTool,
+  policyRows,
+  shownConsentHash,
+  type ApprovalRows,
+} from "./approvals";
 import { executeDelegated, executeSingle } from "../mcp/meta-tools";
 import { can } from "../permissions/store";
 import { canView, type Viewer } from "./access";
@@ -17,11 +27,9 @@ import {
   delegationSuspended,
   getShares,
   getSpace,
-  consentHash,
   distinctOpeners,
   favoriteCounts,
   grantConsent,
-  hasConsent,
   hasFiles,
   isValidKvKey,
   kvDelete,
@@ -109,6 +117,46 @@ async function isConnected(integration: string, userId: string): Promise<boolean
 }
 
 const isInternal = isInternalTool;
+
+/**
+ * The tool list the portal shows for a Space: effect, connection state, and for
+ * each usable non-read tool its approval mode (from `rows`, the one policy read
+ * of the request) and whether the viewer may change it.
+ */
+async function buildToolList(space: Space, viewerId: string, connectedAs: string, rows: ApprovalRows) {
+  const tools = [];
+  for (const name of space.tools) {
+    const tool = registry.getTool(name);
+    const integ = tool ? registry.getIntegration(tool.integration) : undefined;
+    if (!tool || !integ || isInternal(tool)) {
+      tools.push({
+        name,
+        integration: "",
+        integrationName: "",
+        effect: "destructive" as const,
+        connected: false,
+        description: "",
+        missing: true,
+        delegable: false,
+        approval: "ask" as const,
+        approvalEditable: false,
+      });
+      continue;
+    }
+    const approval = approvalFor(space, viewerId, name, rows);
+    tools.push({
+      name,
+      integration: tool.integration,
+      integrationName: integ.displayName ?? tool.integration,
+      effect: effectOf(tool),
+      connected: await isConnected(tool.integration, connectedAs),
+      description: tool.description ?? "",
+      delegable: tool.delegable !== false,
+      ...(approval ? { approval, approvalEditable: approvalEditable(space, viewerId, name) } : {}),
+    });
+  }
+  return tools;
+}
 
 /**
  * Display names of the integrations the Space's tools need that the viewer has
@@ -267,33 +315,11 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
         const ownerGate =
           !mine && delegation.mode === "owner" ? await ownerNotConnectedMessage(space, delegation.runAs) : null;
 
-        const tools = [];
-        for (const name of space.tools) {
-          const tool = registry.getTool(name);
-          const integ = tool ? registry.getIntegration(tool.integration) : undefined;
-          if (!tool || !integ || isInternal(tool)) {
-            tools.push({
-              name,
-              integration: "",
-              integrationName: "",
-              effect: "destructive" as const,
-              connected: false,
-              description: "",
-              missing: true,
-              delegable: false,
-            });
-            continue;
-          }
-          tools.push({
-            name,
-            integration: tool.integration,
-            integrationName: integ.displayName ?? tool.integration,
-            effect: effectOf(tool),
-            connected: await isConnected(tool.integration, connectedAs),
-            description: tool.description ?? "",
-            delegable: tool.delegable !== false,
-          });
-        }
+        // One policy read for the whole request: the tool list, the shown
+        // hash and the consent state all come from the same rows.
+        const rows = await policyRows(space, viewer.userId);
+        const tools = await buildToolList(space, viewer.userId, connectedAs, rows);
+        const consent = await checkConsent(space, viewer.userId, rows);
 
         return {
           name: space.name,
@@ -305,10 +331,11 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           users: mine ? await getShares(space.name) : [],
           updatedAt: space.updatedAt,
           tools,
-          consented: await hasConsent(space, viewer.userId),
+          consented: consent.consented,
+          ...(consent.reason ? { reconsent_reason: consent.reason } : {}),
           // What the viewer approves when they approve this screen; sent back
           // with the approval.
-          consent_hash: consentHash(space, viewer.userId),
+          consent_hash: shownConsentHash(space, viewer.userId, autoSet(space, viewer.userId, rows)),
           appUrl: `/s/${space.name}/app/${mintSig(space.name, viewer.userId)}/`,
           // The owner sees the stored mode; anyone else only whether it is in
           // effect. A viewer sees whether it is paused (tools changed) or off,
@@ -364,7 +391,7 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
         const viewer = viewerOf(request);
         const space = await openable(request.params.name, viewer);
         if (!space) return notFound(reply);
-        if (!(await hasConsent(space, viewer.userId))) return { recorded: false };
+        if (!(await checkConsent(space, viewer.userId, await policyRows(space, viewer.userId))).consented) return { recorded: false };
         await recordOpen(space.name, viewer.userId);
         return { recorded: true };
       });
@@ -554,7 +581,12 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
         const space = await openable(request.params.name, viewer);
         if (!space) return notFound(reply);
         const shown = (request.body as { consent_hash?: unknown } | undefined)?.consent_hash;
-        if (typeof shown !== "string" || shown !== consentHash(space, viewer.userId)) {
+        // One policy read: the set the shown hash is checked against is the
+        // set that is granted, so a change after this read is never recorded
+        // as approved.
+        const rows = await policyRows(space, viewer.userId);
+        const auto = autoSet(space, viewer.userId, rows);
+        if (typeof shown !== "string" || shown !== shownConsentHash(space, viewer.userId, auto)) {
           return fail(reply, 409, { code: "CONSENT_CHANGED", message: "This Space changed. Review it again." });
         }
         // A delegated Space runs with the owner's connections, so the viewer has
@@ -563,7 +595,7 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
         // connected everything the Space uses, or nobody else may approve it.
         // Ordinary Spaces (and the owner's own view) need the viewer's
         // connections instead.
-        const delegatedForViewer = space.accessMode === "owner" && space.ownerId !== viewer.userId;
+        const delegatedForViewer = delegatedFor(space, viewer.userId);
         if (delegatedForViewer) {
           const delegation = await delegationFor(space);
           const held = delegation.mode === "owner" ? await ownerNotConnectedMessage(space, delegation.runAs) : null;
@@ -576,7 +608,7 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
             message: `Connect ${unconnected.join(", ")} before approving this Space.`,
           });
         }
-        await grantConsent(space, viewer.userId);
+        await grantConsent(space, viewer.userId, delegatedForViewer ? auto : null);
         return { ok: true };
       });
 
@@ -596,8 +628,10 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
         const space = await openable(request.params.name, viewer);
         if (!space) return notFound(reply);
 
-        // 2. Consent to the current tool list.
-        if (!(await hasConsent(space, viewer.userId))) {
+        // 2. Consent to the current tool list (and, when delegated, the
+        // owner's auto set). The policy is read once; step 7 reuses it.
+        const rows = await policyRows(space, viewer.userId);
+        if (!(await checkConsent(space, viewer.userId, rows)).consented) {
           return fail(reply, 403, { code: "CONSENT_REQUIRED", message: "Approve this Space's tools first." });
         }
 
@@ -703,8 +737,8 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           });
         }
 
-        // 7. Destructive calls need the shell's own confirmation.
-        if (effectOf(tool) === "destructive" && body.confirmed !== true) {
+        // 7. A tool whose mode is "ask" needs the shell's own confirmation.
+        if (approvalFor(space, viewer.userId, toolName, rows) === "ask" && body.confirmed !== true) {
           return refuse(428, {
             code: "CONFIRMATION_REQUIRED",
             message: `${toolName} needs your confirmation.`,
@@ -795,7 +829,7 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
           notFound(reply);
           return null;
         }
-        if (!(await hasConsent(space, viewer.userId))) {
+        if (!(await checkConsent(space, viewer.userId, await policyRows(space, viewer.userId))).consented) {
           fail(reply, 403, { code: "CONSENT_REQUIRED", message: "Approve this Space's tools first." });
           return null;
         }
