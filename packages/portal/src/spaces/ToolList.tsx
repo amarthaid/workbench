@@ -90,12 +90,14 @@ export function SpaceToolList({
   return (
     <div className="space-tool-groups">
       {showBadges && <p className="space-muted">The owner decides which actions ask first.</p>}
-      {boxesWithControls > 1 && (
+      {editable.length > 0 && (
         <div className="space-allow-all">
-          <label className="space-allow-all-row">
-            <Switch aria-label="Allow all" {...allowAllProps(editable)} />
-            <span>Allow all</span>
-          </label>
+          {boxesWithControls > 1 && (
+            <label className="space-allow-all-row">
+              <Switch aria-label="Allow all" {...allowAllProps(editable)} />
+              <span>Allow all</span>
+            </label>
+          )}
           <p className="space-muted">Actions run without asking you, even after this Space's page changes.</p>
         </div>
       )}

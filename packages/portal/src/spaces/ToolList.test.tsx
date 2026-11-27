@@ -97,6 +97,18 @@ describe("editable mode", () => {
     expect(onChange).toHaveBeenCalledWith({ github_create_issue: "auto", github_merge_pr: "ask" });
   });
 
+  it("shows the hint with a single box's own Allow all, and no top-level switch", () => {
+    render(<SpaceToolList tools={[WRITE, DESTROY]} approvals={{}} onApprovalChange={vi.fn()} />);
+    expect(screen.getByRole("switch", { name: "Allow all for GitHub" })).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "Allow all" })).toBeNull();
+    expect(screen.getByText("Actions run without asking you, even after this Space's page changes.")).toBeInTheDocument();
+  });
+
+  it("shows the hint only once with several boxes", () => {
+    render(<SpaceToolList tools={[WRITE, SHEET_WRITE]} approvals={{}} onApprovalChange={vi.fn()} />);
+    expect(screen.getAllByText("Actions run without asking you, even after this Space's page changes.")).toHaveLength(1);
+  });
+
   it("top-level Allow all spans boxes, with its hint, only when there is more than one box", () => {
     const onChange = vi.fn();
     const { rerender } = render(<SpaceToolList tools={[WRITE, DESTROY]} approvals={{}} onApprovalChange={onChange} />);
@@ -130,6 +142,7 @@ describe("editable mode", () => {
   it("shows no Allow all when no tool can be changed", () => {
     render(<SpaceToolList tools={[READ, MISSING]} approvals={{}} onApprovalChange={vi.fn()} />);
     expect(screen.queryByRole("switch")).toBeNull();
+    expect(screen.queryByText(/Actions run without asking you/)).toBeNull();
   });
 });
 
