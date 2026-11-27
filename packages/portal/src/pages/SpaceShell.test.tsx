@@ -27,6 +27,13 @@ vi.mock("../spaces-api", async (importOriginal) => {
   };
 });
 
+vi.mock("../approvals-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../approvals-api")>()),
+  requestSpaceAccess: vi.fn(async () => undefined),
+}));
+import { requestSpaceAccess } from "../approvals-api";
+import { ASKED_COPY } from "../spaces/AskAccess";
+
 import {
   SpaceApiError,
   callSpaceTool,
@@ -125,11 +132,40 @@ describe("SpaceShell", () => {
     expect(screen.getByText("Loading Space...")).toBeInTheDocument();
   });
 
-  it("shows the not-found copy on a 404", async () => {
+  it("shows only the Space name on a 404, with no not-found wording", async () => {
     vi.mocked(fetchSpace).mockRejectedValue(new SpaceApiError(404, { code: "NOT_FOUND", message: "x" }));
     renderShell();
-    expect(await screen.findByText("This Space does not exist or was not shared with you.")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "pr-timeline" })).toBeInTheDocument();
+    expect(screen.queryByText(/not found|does not exist|not shared/i)).not.toBeInTheDocument();
     expect(screen.queryByTitle("PR timeline")).not.toBeInTheDocument();
+  });
+
+  describe("not found: ask the owner", () => {
+    beforeEach(() => {
+      localStorage.clear();
+      vi.mocked(fetchSpace).mockRejectedValue(new SpaceApiError(404, { code: "NOT_FOUND", message: "x" }));
+    });
+
+    it("offers a message box and sends the request for this Space name", async () => {
+      renderShell();
+      fireEvent.change(await screen.findByLabelText("Message for the owner (optional)"), { target: { value: "may I?" } });
+      fireEvent.click(screen.getByRole("button", { name: "Ask the owner for access" }));
+      await waitFor(() => expect(requestSpaceAccess).toHaveBeenCalledWith("pr-timeline", "may I?"));
+      expect(await screen.findByText(ASKED_COPY)).toBeInTheDocument();
+    });
+
+    it("shows the waiting copy on a later visit", async () => {
+      localStorage.setItem("wb_space_access_asked:pr-timeline", "1");
+      renderShell();
+      expect(await screen.findByText(ASKED_COPY)).toBeInTheDocument();
+    });
+
+    it("is not offered for a failure that is not a 404", async () => {
+      vi.mocked(fetchSpace).mockRejectedValue(new SpaceApiError(500, { code: "UPSTREAM_ERROR", message: "boom" }));
+      renderShell();
+      await screen.findByText("boom");
+      expect(screen.queryByRole("button", { name: "Ask the owner for access" })).not.toBeInTheDocument();
+    });
   });
 
   describe("consent screen", () => {

@@ -121,6 +121,15 @@ describe("GET /api/admin/overview/stats", () => {
     expect(body).toMatchObject({ active_users_7d: 2, total_users: 3, disabled_users: 1 });
   });
 
+  it("counts pending users apart from disabled ones", async () => {
+    await seedUser("u1", "a@example.com");
+    await seedUser("u2", "b@example.com", NOW);
+    await db.run("INSERT INTO users (id, email, status, disabled_at) VALUES (?, ?, 'pending', ?)", ["u3", "c@example.com", NOW]);
+    await db.run("INSERT INTO users (id, email, status, disabled_at) VALUES (?, ?, 'disabled', ?)", ["u4", "d@example.com", NOW]);
+    const body = JSON.parse((await get("/api/admin/overview/stats")).body);
+    expect(body).toMatchObject({ total_users: 4, disabled_users: 2, pending_users: 1 });
+  });
+
   it("counts connections that expired with no refresh token", async () => {
     await seedUser("u1", "a@example.com");
     await db.run(

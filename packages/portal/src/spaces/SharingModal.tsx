@@ -14,6 +14,7 @@ import {
   type SpaceVisibility,
 } from "../spaces-api";
 import { SpaceToolList } from "./ToolList";
+import { OpenRequests } from "./SpaceRequestList";
 
 const EMAIL = /^[^\s@]+@[^\s@]+$/;
 
@@ -56,6 +57,8 @@ interface SharingProps {
   space: Pick<SpaceDetail, "name">;
   onClose: () => void;
   onSaved: (sharing: SpaceSharing) => void;
+  /** An open access request was approved or rejected from this dialog. */
+  onRequestsDecided?: () => void;
 }
 
 /**
@@ -63,7 +66,7 @@ interface SharingProps {
  * the paused state are never the page's possibly stale copy: the owner must
  * confirm exactly the list the server holds.
  */
-export function SharingModal({ open, space, onClose, onSaved }: SharingProps) {
+export function SharingModal({ open, space, onClose, onSaved, onRequestsDecided }: SharingProps) {
   const [fresh, setFresh] = useState<SpaceDetail | null>(null);
   const [loadError, setLoadError] = useState(false);
 
@@ -98,7 +101,7 @@ export function SharingModal({ open, space, onClose, onSaved }: SharingProps) {
       </Modal>
     );
   }
-  return <SharingForm space={fresh} onClose={onClose} onSaved={onSaved} />;
+  return <SharingForm space={fresh} onClose={onClose} onSaved={onSaved} onRequestsDecided={onRequestsDecided} />;
 }
 
 type TabId = "access" | "people";
@@ -136,7 +139,7 @@ interface FormModel {
   confirmTools: () => void;
 }
 
-function SharingForm({ space, onClose, onSaved }: Omit<SharingProps, "open" | "space"> & { space: SpaceDetail }) {
+function SharingForm({ space, onClose, onSaved, onRequestsDecided }: Omit<SharingProps, "open" | "space"> & { space: SpaceDetail }) {
   const open = true;
   const visibility = space.visibility;
   const users = space.users ?? [];
@@ -357,6 +360,7 @@ function SharingForm({ space, onClose, onSaved }: Omit<SharingProps, "open" | "s
         </>
       }
     >
+      <OpenRequests spaceName={space.name} onDecided={onRequestsDecided} />
       {showTabs && <ShareTabs tabs={tabs} value={activeTab} onChange={setTab} />}
       {showTabs && (
         <div role="tabpanel" id="space-share-panel-access" aria-labelledby="space-share-tab-access" hidden={activeTab !== "access"}>

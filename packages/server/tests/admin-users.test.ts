@@ -73,7 +73,7 @@ async function auditActions() {
 }
 
 beforeEach(async () => {
-  for (const t of ["audit_log", "connections", "custom_apps", "oauth_refresh_tokens", "users"]) {
+  for (const t of ["audit_log", "connections", "custom_apps", "oauth_refresh_tokens", "approval_requests", "users"]) {
     await db.exec(`DELETE FROM ${t}`);
   }
   await seedUser({ id: "user-admin", email: "admin@example.com" });
@@ -120,13 +120,14 @@ describe("GET /api/admin/users", () => {
       id: "user-a",
       email: "a@example.com",
       created_at: NOW - 200,
+      status: "active",
       disabled_at: null,
       has_api_key: true,
       connection_count: 2,
       custom_app_count: 1,
       last_activity: NOW - 5,
     });
-    expect(byId["user-b"]).toMatchObject({ has_api_key: false, disabled_at: NOW - 50, last_activity: null });
+    expect(byId["user-b"]).toMatchObject({ has_api_key: false, status: "disabled", disabled_at: NOW - 50, last_activity: null });
     expect(res.body).not.toContain("hash-secret-1");
     expect(res.body).not.toContain("tok-abc");
   });
@@ -221,5 +222,59 @@ describe("POST /api/admin/users/:id/revoke-key", () => {
 
   it("404 for an unknown user", async () => {
     expect((await call("POST", "/api/admin/users/nope/revoke-key")).statusCode).toBe(404);
+  });
+});
+
+describe("pending users", () => {
+  async function seedPending(id: string, email: string, createdAt = NOW) {
+    await db.run(
+      "INSERT INTO users (id, email, status, disabled_at, created_at) VALUES (?, ?, 'pending', ?, ?)",
+      [id, email, createdAt, createdAt]
+    );
+    await db.run(
+      "INSERT INTO approval_requests (id, kind, subject, requester_id, status, created_at) VALUES (?, 'account.activate', ?, ?, 'pending', ?)",
+      [`req-${id}`, id, id, createdAt]
+    );
+  }
+  async function reqRow(id: string) {
+    return db.get<{ status: string; decided_by: string | null }>(
+      "SELECT status, decided_by FROM approval_requests WHERE id = ?",
+      [`req-${id}`]
+    );
+  }
+
+  it("lists a pending user with status pending, after everyone else, and keeps disabled_at", async () => {
+    await seedPending("user-new", "new@example.com", NOW + 100);
+    await seedUser({ id: "user-old", email: "old@example.com", createdAt: NOW - 100 });
+    const body = JSON.parse((await call("GET", "/api/admin/users")).body);
+    expect(body.users.map((u: { id: string }) => u.id)).toEqual(["user-admin", "user-old", "user-new"]);
+    expect(body.users[2]).toMatchObject({ status: "pending", disabled_at: NOW + 100 });
+    expect(body.users[1]).toMatchObject({ status: "active", disabled_at: null });
+    expect(body.total).toBe(3);
+  });
+
+  it("filters by ?status=", async () => {
+    await seedPending("user-new", "new@example.com");
+    await seedUser({ id: "user-off", email: "off@example.com", disabledAt: NOW });
+    const ids = async (status: string) =>
+      JSON.parse((await call("GET", `/api/admin/users?status=${status}`)).body).users.map((u: { id: string }) => u.id);
+    expect(await ids("pending")).toEqual(["user-new"]);
+    expect(await ids("disabled")).toEqual(["user-off"]);
+    expect(await ids("active")).toEqual(["user-admin"]);
+  });
+
+  it("enabling a pending user approves it: active, and the request closes as approved by that admin", async () => {
+    await seedPending("user-new", "new@example.com");
+    expect((await call("POST", "/api/admin/users/user-new/enable")).statusCode).toBe(200);
+    expect(await userRow("user-new")).toMatchObject({ disabled_at: null });
+    expect(await reqRow("user-new")).toEqual({ status: "approved", decided_by: "user-admin" });
+  });
+
+  it("disabling a pending user is allowed and cancels its request", async () => {
+    await seedPending("user-new", "new@example.com");
+    expect((await call("POST", "/api/admin/users/user-new/disable")).statusCode).toBe(200);
+    const row = await db.get<{ status: string }>("SELECT status FROM users WHERE id = ?", ["user-new"]);
+    expect(row?.status).toBe("disabled");
+    expect((await reqRow("user-new"))?.status).toBe("cancelled");
   });
 });

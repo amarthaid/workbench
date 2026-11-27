@@ -307,4 +307,66 @@ describe("UsersTab permissions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Permissions for dev@example.com" }));
     expect(await screen.findByText("Couldn't load permissions.")).toBeInTheDocument();
   });
+
+  describe("pending sign-ups", () => {
+    const pendingUser = (over: Record<string, unknown> = {}) =>
+      user({ id: "p1", email: "new@example.com", status: "pending", has_api_key: false, last_activity: null, ...over });
+
+    beforeEach(() => {
+      api.fetchAdminUsers.mockResolvedValue({
+        users: [user({ status: "active" }), pendingUser(), user({ id: "u3", email: "off@example.com", status: "disabled", disabled_at: NOW - 5 })],
+        total: 3,
+      });
+    });
+
+    it("hides pending users by default and shows how many wait on the filter chip", async () => {
+      renderWithClient(<UsersTab />);
+      expect(await screen.findByText("dev@example.com")).toBeInTheDocument();
+      expect(screen.queryByText("new@example.com")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Pending (1)" })).toBeInTheDocument();
+      expect(screen.getByText("off@example.com")).toBeInTheDocument();
+    });
+
+    it("shows pending users with a Pending badge and an Approve action, not Enable", async () => {
+      renderWithClient(<UsersTab />);
+      fireEvent.click(await screen.findByRole("button", { name: "Pending (1)" }));
+      const row = (await screen.findByText("new@example.com")).closest("tr")!;
+      expect(within(row).getByText("Pending")).toBeInTheDocument();
+      expect(within(row).queryByText("Enable")).not.toBeInTheDocument();
+      expect(screen.queryByText("dev@example.com")).not.toBeInTheDocument();
+      fireEvent.click(within(row).getByRole("button", { name: "Approve new@example.com" }));
+      await waitFor(() => expect(api.enableAdminUser).toHaveBeenCalledWith("p1"));
+    });
+
+    it("keeps Disable on a pending row as the permanent no", async () => {
+      renderWithClient(<UsersTab />);
+      fireEvent.click(await screen.findByRole("button", { name: "Pending (1)" }));
+      const row = (await screen.findByText("new@example.com")).closest("tr")!;
+      fireEvent.click(within(row).getByRole("button", { name: "Disable new@example.com" }));
+      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Disable" }));
+      await waitFor(() => expect(api.disableAdminUser).toHaveBeenCalledWith("p1"));
+    });
+
+    it("labels the action Enable for a disabled user", async () => {
+      renderWithClient(<UsersTab />);
+      const row = (await screen.findByText("off@example.com")).closest("tr")!;
+      expect(within(row).getByText("Disabled")).toBeInTheDocument();
+      expect(within(row).getByRole("button", { name: "Enable off@example.com" })).toHaveTextContent("Enable");
+    });
+
+    it("shows everyone under All", async () => {
+      renderWithClient(<UsersTab />);
+      fireEvent.click(await screen.findByRole("button", { name: "All" }));
+      expect(await screen.findByText("new@example.com")).toBeInTheDocument();
+      expect(screen.getByText("dev@example.com")).toBeInTheDocument();
+    });
+
+    it("treats a row without status as active or disabled by disabled_at", async () => {
+      api.fetchAdminUsers.mockResolvedValue({ users: [user(), user({ id: "u3", email: "off@example.com", disabled_at: NOW - 5 })], total: 2 });
+      renderWithClient(<UsersTab />);
+      expect(await screen.findByText("dev@example.com")).toBeInTheDocument();
+      expect(screen.getByText("off@example.com")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Pending (0)" })).toBeInTheDocument();
+    });
+  });
 });

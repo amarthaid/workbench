@@ -23,6 +23,7 @@ import { SpaceToolList } from "../spaces/ToolList";
 import { ConfirmActionModal } from "../spaces/ConfirmActionModal";
 import { SharingModal } from "../spaces/SharingModal";
 import { EditDetailsModal } from "../spaces/EditDetailsModal";
+import { AskAccess } from "../spaces/AskAccess";
 import { Button } from "../components/ui/Button";
 import { Modal } from "../components/ui/Modal";
 import { BrandLockup, BrandMark } from "../components/BrandMark";
@@ -30,11 +31,11 @@ import { LOCKUP } from "@a-workbench/brand";
 
 type Stopped = "paused" | "navigated" | null;
 
-function CenterCard({ children }: { children: React.ReactNode }) {
+function CenterCard({ children, left = false }: { children: React.ReactNode; left?: boolean }) {
   return (
     <div className="page-center page-center-stack">
       <BrandLockup />
-      <div className="space-card">{children}</div>
+      <div className={left ? "space-card space-card-left" : "space-card"}>{children}</div>
     </div>
   );
 }
@@ -428,15 +429,20 @@ export default function SpaceShell() {
   if (error || !data) {
     const notFound = error instanceof SpaceApiError && error.status === 404;
     return (
-      <CenterCard>
-        <h1 className="space-card-title">{notFound ? "Space not found" : "Could not load this Space"}</h1>
-        <p className="space-muted">
-          {notFound ? "This Space does not exist or was not shared with you." : (error as Error | null)?.message}
-        </p>
-        <div className="space-consent-actions">
-          {!notFound && <Button variant="outline" onClick={() => void refetch()}>Try again</Button>}
-          <Link to="/spaces" className="ui-button ui-button-primary ui-button-md">Go to Spaces</Link>
-        </div>
+      <CenterCard left={notFound}>
+        {/* A 404 is the same answer for a missing, private and not-shared Space, so it shows only the name from the link. */}
+        <h1 className="space-card-title">{notFound ? name : "Could not load this Space"}</h1>
+        {!notFound && <p className="space-muted">{(error as Error | null)?.message}</p>}
+        {notFound ? (
+          <AskAccess name={name}>
+            <Link to="/spaces" className="ui-button ui-button-outline ui-button-md">Go to Spaces</Link>
+          </AskAccess>
+        ) : (
+          <div className="space-consent-actions">
+            <Button variant="outline" onClick={() => void refetch()}>Try again</Button>
+            <Link to="/spaces" className="ui-button ui-button-primary ui-button-md">Go to Spaces</Link>
+          </div>
+        )}
       </CenterCard>
     );
   }

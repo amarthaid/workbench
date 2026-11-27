@@ -12,6 +12,13 @@ vi.mock("../spaces-api", async (importOriginal) => ({
   updateSpaceDetails: vi.fn(),
   fetchSpace: vi.fn(),
 }));
+vi.mock("../approvals-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../approvals-api")>()),
+  fetchApprovals: vi.fn(),
+  approveApproval: vi.fn(),
+  rejectApproval: vi.fn(),
+}));
+import { fetchApprovals, approveApproval } from "../approvals-api";
 import { fetchSpaces, setSpaceFavorite, updateSpaceDetails, fetchSpace } from "../spaces-api";
 
 const DAY = 86_400_000;
@@ -313,5 +320,64 @@ describe("editing from the gallery", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Sharing" }));
     expect(await screen.findByRole("dialog")).toHaveTextContent("Loading sharing settings");
     expect(fetchSpace).toHaveBeenCalledWith("a");
+  });
+
+  describe("access requests", () => {
+    const WARNING = "This Space runs with your connected apps. Approving lets this person use them.";
+    const inboxItem = (id: string, over: Record<string, unknown> = {}) => ({
+      id,
+      kind: "space.access" as const,
+      subject: "pr-timeline",
+      subject_label: "PR timeline",
+      requester_email: `${id}@example.com`,
+      message: `let me in ${id}`,
+      status: "pending" as const,
+      created_at: Math.floor(Date.now() / 1000) - 60,
+      delegated: false,
+      ...over,
+    });
+
+    it("shows a Requests chip summing the owner's open requests", async () => {
+      vi.mocked(fetchSpaces).mockResolvedValue([
+        space({ name: "a", title: "A", mine: true, pending_requests: 2 }),
+        space({ name: "b", title: "B", mine: true, pending_requests: 1 }),
+        space({ name: "c", title: "C", mine: false, pending_requests: 9 }),
+      ]);
+      renderPage();
+      expect(await screen.findByRole("button", { name: /^Requests \(3\)/ })).toBeInTheDocument();
+    });
+
+    it("has no chip when nobody is waiting", async () => {
+      vi.mocked(fetchSpaces).mockResolvedValue([space({ name: "a", title: "A", mine: true, pending_requests: 0 }), space({ name: "b", title: "B" })]);
+      renderPage();
+      await screen.findByRole("link", { name: "A" });
+      expect(screen.queryByRole("button", { name: /Requests/ })).not.toBeInTheDocument();
+    });
+
+    it("opens the list with requester, message, date and the delegated warning on the row that needs it", async () => {
+      vi.mocked(fetchSpaces).mockResolvedValue([space({ name: "pr-timeline", title: "PR timeline", mine: true, pending_requests: 2 })]);
+      vi.mocked(fetchApprovals).mockResolvedValue([inboxItem("r1", { delegated: true }), inboxItem("r2")]);
+      renderPage();
+      fireEvent.click(await screen.findByRole("button", { name: /^Requests \(2\)/ }));
+      const dialog = await screen.findByRole("dialog", {}, { timeout: 2000 });
+      expect(fetchApprovals).toHaveBeenCalledWith("inbox");
+      expect(await within(dialog).findByText("r1@example.com")).toBeInTheDocument();
+      expect(within(dialog).getByText("let me in r1")).toBeInTheDocument();
+      expect(within(dialog).getAllByText(WARNING)).toHaveLength(1);
+      expect(within(dialog).getByText("r1@example.com").closest("li")).toHaveTextContent(WARNING);
+      expect(within(dialog).getByText("r2@example.com").closest("li")).not.toHaveTextContent(WARNING);
+    });
+
+    it("approving refreshes the gallery count", async () => {
+      vi.mocked(fetchSpaces).mockResolvedValueOnce([space({ name: "pr-timeline", title: "PR timeline", mine: true, pending_requests: 1 })]);
+      vi.mocked(fetchApprovals).mockResolvedValue([inboxItem("r1")]);
+      vi.mocked(approveApproval).mockResolvedValue(undefined);
+      renderPage();
+      fireEvent.click(await screen.findByRole("button", { name: /^Requests \(1\)/ }));
+      vi.mocked(fetchSpaces).mockResolvedValue([space({ name: "pr-timeline", title: "PR timeline", mine: true, pending_requests: 0 })]);
+      fireEvent.click(await screen.findByRole("button", { name: "Approve r1@example.com" }));
+      await waitFor(() => expect(approveApproval).toHaveBeenCalledWith("r1"));
+      await waitFor(() => expect(screen.queryByRole("button", { name: /^Requests \(/ })).not.toBeInTheDocument());
+    });
   });
 });

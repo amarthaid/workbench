@@ -978,18 +978,32 @@ export function fetchAdminActivity(opts: ActivityFilterOpts & {
 }
 
 // ─── Admin users ─────────────────────────────────────────────────────────
+export type AdminUserStatus = "active" | "pending" | "disabled";
+
 export interface AdminUser {
   id: string;
   email: string | null;
   /** Unix seconds. */
   created_at: number;
-  /** Unix seconds when disabled, null when active. */
+  /** Unix seconds when disabled, null when active. Kept for the dual-write release; read `status` through `userStatus`. */
   disabled_at: number | null;
+  /** Absent from an older server: then `disabled_at` decides. */
+  status?: AdminUserStatus;
   has_api_key: boolean;
   connection_count: number;
   custom_app_count: number;
   /** Unix seconds, null when the user has no recorded activity. */
   last_activity: number | null;
+}
+
+/**
+ * The account state. `status` decides; an older server that sends none, and a
+ * row with `disabled_at` set, both read as disabled (fail closed, as the server does).
+ */
+export function userStatus(u: Pick<AdminUser, "status" | "disabled_at">): AdminUserStatus {
+  if (u.status === "pending") return "pending";
+  if (u.status === "disabled" || u.disabled_at !== null) return "disabled";
+  return "active";
 }
 
 export const fetchAdminUsers = () =>

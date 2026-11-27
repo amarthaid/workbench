@@ -57,6 +57,7 @@ import { invalidateIndex, ensureIndex } from "../custom-apps/index";
 import { evictSession } from "../custom-apps/client";
 import { markConnected, startReaper, redeemPending, getPending, createPending } from "../auth/connections";
 import { resumeAuthorize } from "../auth/oauth-server/resume";
+import { AccountPendingError } from "../approvals/signup";
 import { listAgents, revokeAgent } from "../auth/oauth-server/agents";
 import { ensureSession, defaultTab, navigate, captureLiveCookies } from "../auth/browser-session";
 import {
@@ -184,9 +185,19 @@ async function autoReconnectStatus(userId: string, name: string) {
 }
 
 function accountDisabledUrl(): string {
+  return loginErrorUrl("account_disabled");
+}
+
+function loginErrorUrl(code: "account_disabled" | "account_pending" | "account_declined"): string {
   const url = new URL("/login", config.PORTAL_URL);
-  url.searchParams.set("error", "account_disabled");
+  url.searchParams.set("error", code);
   return url.toString();
+}
+
+// A sign-in held for approval (or declined) goes to the login page with a fixed
+// code, like a disabled account. The decision note is never put in the URL.
+function pendingRedirectUrl(err: AccountPendingError): string {
+  return loginErrorUrl(err.declined ? "account_declined" : "account_pending");
 }
 
 export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
@@ -257,6 +268,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       // A person turned away because an admin disabled their account is in a
       // browser tab, not an API client: send them to the login page with a
       // reason instead of a bare JSON error.
+      if (err instanceof AccountPendingError) return reply.redirect(pendingRedirectUrl(err));
       if (message === "Account disabled") return reply.redirect(accountDisabledUrl());
       return reply.status(400).send({ error: message });
     }
@@ -301,6 +313,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       // A person turned away because an admin disabled their account is in a
       // browser tab, not an API client: send them to the login page with a
       // reason instead of a bare JSON error.
+      if (err instanceof AccountPendingError) return reply.redirect(pendingRedirectUrl(err));
       if (message === "Account disabled") return reply.redirect(accountDisabledUrl());
       return reply.status(400).send({ error: message });
     }

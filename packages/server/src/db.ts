@@ -24,6 +24,7 @@ const SQLITE_SCHEMA = `
     email TEXT UNIQUE,
     google_sub TEXT UNIQUE,
     is_admin BOOLEAN DEFAULT FALSE,
+    status TEXT NOT NULL DEFAULT 'active',
     created_at INTEGER DEFAULT (unixepoch())
   );
 
@@ -188,6 +189,26 @@ const SQLITE_SCHEMA = `
     granted_at INTEGER NOT NULL,
     PRIMARY KEY (user_id, capability, subject)
   );
+  -- Maker-checker: one request table for every "someone asks, someone else decides".
+  -- Times are epoch seconds (like users and user_permissions).
+  CREATE TABLE IF NOT EXISTS approval_requests (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    requester_id TEXT NOT NULL,
+    message TEXT NOT NULL DEFAULT '',
+    payload TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    decided_by TEXT,
+    decided_at INTEGER,
+    decision_note TEXT,
+    created_at INTEGER NOT NULL
+  );
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_approval_pending_unique
+    ON approval_requests(kind, subject, requester_id) WHERE status = 'pending';
+  CREATE INDEX IF NOT EXISTS idx_approval_subject ON approval_requests(kind, subject, status);
+  CREATE INDEX IF NOT EXISTS idx_approval_requester ON approval_requests(requester_id, status);
 `;
 
 const POSTGRES_SCHEMA = `
@@ -197,6 +218,7 @@ const POSTGRES_SCHEMA = `
     email TEXT UNIQUE,
     google_sub TEXT UNIQUE,
     is_admin BOOLEAN DEFAULT FALSE,
+    status TEXT NOT NULL DEFAULT 'active',
     created_at INTEGER DEFAULT EXTRACT(EPOCH FROM NOW())::INTEGER
   );
 
@@ -361,6 +383,27 @@ const POSTGRES_SCHEMA = `
     granted_at BIGINT NOT NULL,
     PRIMARY KEY (user_id, capability, subject)
   );
+
+  -- Maker-checker: one request table for every "someone asks, someone else decides".
+  -- Times are epoch seconds (like users and user_permissions).
+  CREATE TABLE IF NOT EXISTS approval_requests (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    requester_id TEXT NOT NULL,
+    message TEXT NOT NULL DEFAULT '',
+    payload TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    decided_by TEXT,
+    decided_at BIGINT,
+    decision_note TEXT,
+    created_at BIGINT NOT NULL
+  );
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_approval_pending_unique
+    ON approval_requests(kind, subject, requester_id) WHERE status = 'pending';
+  CREATE INDEX IF NOT EXISTS idx_approval_subject ON approval_requests(kind, subject, status);
+  CREATE INDEX IF NOT EXISTS idx_approval_requester ON approval_requests(requester_id, status);
 `;
 
 async function initSqliteSchema(db: DbAdapter): Promise<void> {
@@ -390,6 +433,7 @@ async function initSqliteSchema(db: DbAdapter): Promise<void> {
     "ALTER TABLE audit_log ADD COLUMN actor_email TEXT",
     "ALTER TABLE spaces ADD COLUMN access_mode TEXT NOT NULL DEFAULT 'viewer'",
     "ALTER TABLE spaces ADD COLUMN delegated_tools_hash TEXT",
+    "ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
   ]) {
     try {
       await db.exec(stmt);
@@ -398,6 +442,10 @@ async function initSqliteSchema(db: DbAdapter): Promise<void> {
       if (!msg.includes("duplicate column name")) throw e;
     }
   }
+  // Every boot, harmless: lifecycle moved to users.status, and an older worker
+  // that disables a user still writes only disabled_at. A pending user already
+  // has status 'pending' and is untouched. See the maker-checker design spec.
+  await db.exec("UPDATE users SET status = 'disabled' WHERE disabled_at IS NOT NULL AND status = 'active'");
   try {
     await db.exec(
       "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_keycloak_sub ON users(keycloak_sub) WHERE keycloak_sub IS NOT NULL"
@@ -445,9 +493,11 @@ async function initPostgresSchema(db: DbAdapter): Promise<void> {
     ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS actor_email TEXT;
     ALTER TABLE spaces ADD COLUMN IF NOT EXISTS access_mode TEXT NOT NULL DEFAULT 'viewer';
     ALTER TABLE spaces ADD COLUMN IF NOT EXISTS delegated_tools_hash TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_keycloak_sub ON users(keycloak_sub) WHERE keycloak_sub IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_users_api_key_sha ON users(api_key_sha) WHERE api_key_sha IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_audit_actor_nn ON audit_log(actor_user_id, created_at) WHERE actor_user_id IS NOT NULL;
+    UPDATE users SET status = 'disabled' WHERE disabled_at IS NOT NULL AND status = 'active';
   `);
 }
 

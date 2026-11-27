@@ -10,6 +10,7 @@ import { registerRobots } from "./robots";
 import { registerJotRoutes } from "./jots/routes";
 import { registerSpaceRoutes } from "./spaces/routes";
 import { registerSpaceApiRoutes } from "./spaces/api";
+import { registerApprovalRoutes } from "./approvals/routes";
 import { startSpaceUploadReaper } from "./spaces/pending";
 import { registerCurlProxy } from "./api/curl-proxy";
 import { registerRestRoutes } from "./api/rest-routes";
@@ -109,6 +110,7 @@ async function main() {
   // /s/:name/app/:sig/*; /s/:name itself falls through to the portal SPA.
   await registerSpaceRoutes(app);
   await registerSpaceApiRoutes(app);
+  await registerApprovalRoutes(app);
   startSpaceUploadReaper();
   startVaultReaper();
   startRecentReaper();

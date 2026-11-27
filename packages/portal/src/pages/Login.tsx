@@ -7,15 +7,22 @@ import { Button } from "../components/ui/Button";
 import { BrandLockup } from "../components/BrandMark";
 import { useSwarm } from "../hooks/useSwarm";
 
+// Fixed copy for the reasons the server sends a person back here. Looked up by
+// code, so nothing from the URL is ever shown.
+const LOGIN_ERRORS: Record<string, string> = {
+  account_disabled: "Your account has been disabled by an administrator.",
+  account_pending: "Your account is waiting for an admin to approve it. You can sign in once it is approved.",
+  account_declined: "Your account request was declined. Try again later or contact an admin.",
+};
+
 export default function Login() {
   const { login, token } = useAuth();
-  // The server sends a person whose account an admin disabled back here with a
+  // The server sends a person whose account is disabled, pending or declined back here with a
   // reason, since they arrive from an SSO redirect and not from an API client.
-  const [error, setError] = useState(() =>
-    new URLSearchParams(window.location.search).get("error") === "account_disabled"
-      ? "Your account has been disabled by an administrator."
-      : ""
-  );
+  const [error, setError] = useState(() => {
+    const code = new URLSearchParams(window.location.search).get("error") ?? "";
+    return Object.prototype.hasOwnProperty.call(LOGIN_ERRORS, code) ? LOGIN_ERRORS[code] : "";
+  });
   const [providers, setProviders] = useState<string[]>([]);
 
   // This only fires for a human who already holds a session and lands on

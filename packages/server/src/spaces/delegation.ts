@@ -1,6 +1,7 @@
 import { auditLogger } from "../audit/logger";
 import { can } from "../permissions/store";
 import { db } from "../db";
+import { isBlocked } from "../auth/user-status";
 import { delegationSuspended, type Space, type Visibility } from "./store";
 
 // Delegated access: whether a Space's tool calls may run with its owner's
@@ -46,10 +47,12 @@ export async function delegationFor(
   if (space.visibility === "private") return off;
   // Read the row directly: a missing owner is off (isUserDisabled treats a
   // missing row as not disabled, which is right for sign-in, not here).
-  const owner = await db.get<{ disabled_at: number | string | null }>("SELECT disabled_at FROM users WHERE id = ?", [
-    space.ownerId,
-  ]);
-  if (!owner || (owner.disabled_at !== null && owner.disabled_at !== undefined)) return off;
+  const owner = await db.get<{ status: string | null; disabled_at: number | string | null }>(
+    "SELECT status, disabled_at FROM users WHERE id = ?",
+    [space.ownerId]
+  );
+  // Blocked = status <> 'active' OR disabled_at IS NOT NULL (see auth/user-status.ts).
+  if (!owner || isBlocked(owner)) return off;
   // A caller that already read the owner's permission passes it in.
   const granted = known.ownerCanDelegate ?? (await can(space.ownerId, "spaces.delegate_access"));
   if (!granted) return off;

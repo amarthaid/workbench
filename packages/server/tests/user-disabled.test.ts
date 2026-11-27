@@ -5,7 +5,7 @@ import { signSession, verifySession } from "../src/auth/session";
 import { signAccessToken, verifyAccessToken } from "../src/auth/oauth-server/tokens";
 import { signCurlToken, verifyCurlToken } from "../src/auth/curl-session";
 import { resolveMcpUser } from "../src/auth/oauth-server/resolve";
-import { setUserDisabled } from "../src/auth/user-status";
+import { setUserDisabled, setUserStatus } from "../src/auth/user-status";
 
 beforeEach(async () => {
   await db.exec("DELETE FROM users");
@@ -76,5 +76,28 @@ describe("a disabled user is refused by every credential verifier", () => {
     await setUserDisabled("u-a", true);
     expect(await verifyApiKey(keyA)).toBeNull();
     expect(await verifyApiKey(keyB)).toBe("u-b");
+  });
+});
+
+describe("a pending user is refused by every credential verifier", () => {
+  it("API key, session, OAuth token, curl token and /mcp resolution, and restored on approval", async () => {
+    const key = await seed("u-pend");
+    const session = await signSession({ userId: "u-pend", email: "dev@example.com" });
+    const oauth = await signAccessToken({ userId: "u-pend", scope: "mcp", clientId: "c1" });
+    const curl = await signCurlToken("u-pend", ["acme"]);
+    // Credentials minted while the account was active, then it goes pending.
+    await setUserStatus("u-pend", "pending");
+
+    expect(await verifyApiKey(key)).toBeNull();
+    await expect(verifySession(session)).rejects.toThrow("User disabled");
+    await expect(verifyAccessToken(oauth)).rejects.toThrow("User disabled");
+    await expect(verifyCurlToken(curl)).rejects.toThrow("User disabled");
+    expect(await resolveMcpUser({ "x-workbench-api-key": key })).toBeNull();
+    expect(await resolveMcpUser({ authorization: `Bearer ${oauth}` })).toBeNull();
+    expect(await resolveMcpUser({ authorization: `Bearer ${session}` })).toBeNull();
+
+    await setUserStatus("u-pend", "active", { from: "pending" });
+    expect(await verifyApiKey(key)).toBe("u-pend");
+    expect((await verifySession(session)).userId).toBe("u-pend");
   });
 });

@@ -195,7 +195,11 @@ export interface AuditEvent {
     | "CURL_REQUEST"
     | "ADMIN_AUDIT_PAYLOAD_VIEW"
     | "SPACE_DELEGATION_ON"
-    | "SPACE_DELEGATION_OFF";
+    | "SPACE_DELEGATION_OFF"
+    | "APPROVAL_REQUEST"
+    | "APPROVAL_APPROVE"
+    | "APPROVAL_REJECT"
+    | "APPROVAL_CANCEL";
   success: boolean;
   error?: string;
   /** The user's email when the event was written (null if unknown). */
