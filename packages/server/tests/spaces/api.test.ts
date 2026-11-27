@@ -1599,6 +1599,17 @@ describe("tool approvals in the portal API", () => {
       expect(by[DESTRUCTIVE]).toMatchObject({ approval: "ask", approvalEditable: false });
     });
 
+    it("a delegated viewer gets no mode for a tool that cannot be delegated, the owner still does", async () => {
+      await delegate();
+      const viewer = Object.fromEntries((await detail("u2")).tools.map((t: any) => [t.name, t]));
+      expect(viewer.acme_set_secret).toMatchObject({ delegable: false });
+      expect(viewer.acme_set_secret).not.toHaveProperty("approval");
+      expect(viewer.acme_set_secret).not.toHaveProperty("approvalEditable");
+      expect(viewer[WRITE]).toMatchObject({ approval: "auto" });
+      const owner = Object.fromEntries((await detail("u1")).tools.map((t: any) => [t.name, t]));
+      expect(owner.acme_set_secret).toMatchObject({ approval: "auto", approvalEditable: true });
+    });
+
     it("consent_hash is the plain consentHash for the owner and an ordinary viewer", async () => {
       const space = (await getSpace("s1"))!;
       await setRow("u1", WRITE, "ask");

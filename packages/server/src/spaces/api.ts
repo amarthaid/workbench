@@ -147,7 +147,9 @@ async function buildToolList(space: Space, viewerId: string, connectedAs: string
       });
       continue;
     }
-    const approval = approvalFor(space, viewerId, name, rows);
+    // A tool that is not delegable never runs for a delegated viewer, so a mode would only mislead.
+    const neverRuns = delegatedFor(space, viewerId) && tool.delegable === false;
+    const approval = neverRuns ? null : approvalFor(space, viewerId, name, rows);
     tools.push({
       name,
       integration: tool.integration,

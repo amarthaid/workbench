@@ -157,6 +157,15 @@ describe("read-only mode", () => {
     expect(screen.queryByRole("switch")).toBeNull();
   });
 
+  it("shows no approval badge on a tool the server gave no mode (never runs for this viewer)", () => {
+    const NEVER = tool({ name: "github_set_secret", effect: "write", delegable: false });
+    render(<SpaceToolList tools={[NEVER, { ...WRITE, approvalEditable: false }]} hideConnection />);
+    const row = screen.getByText("github_set_secret").closest(".space-tool-row") as HTMLElement;
+    expect(within(row).queryByText("Runs without asking")).toBeNull();
+    expect(within(row).queryByText("Asks first")).toBeNull();
+    expect(within(row).getByText("Writes")).toBeInTheDocument();
+  });
+
   it("omits the viewer wording in the owner's lending review", () => {
     const ro = (t: SpaceTool): SpaceTool => ({ ...t, approvalEditable: false });
     render(<SpaceToolList tools={[READ, ro(WRITE), ro(DESTROY)]} delegation />);
