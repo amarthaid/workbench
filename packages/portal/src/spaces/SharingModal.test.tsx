@@ -8,6 +8,14 @@ vi.mock("../spaces-api", async (importOriginal) => {
   return { ...real, updateSpaceSharing: vi.fn(), fetchSpace: vi.fn() };
 });
 
+vi.mock("../approvals-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../approvals-api")>()),
+  fetchApprovals: vi.fn(async () => []),
+  approveApproval: vi.fn(async () => undefined),
+  rejectApproval: vi.fn(async () => undefined),
+}));
+import { approveApproval, fetchApprovals } from "../approvals-api";
+
 import { SpaceApiError, fetchSpace, updateSpaceSharing } from "../spaces-api";
 
 const TOOLS: SpaceDetail["tools"] = [
@@ -477,5 +485,48 @@ describe("SharingModal: Delegate my access", () => {
       expect(within(confirm).getByRole("button", { name: "Back" })).toBeInTheDocument();
       expect(within(confirm).getByRole("button", { name: "Delegate access" })).toBeInTheDocument();
     });
+  });
+});
+
+describe("SharingModal: open requests", () => {
+  const WARNING = "This Space runs with your connected apps. Approving lets this person use them.";
+  const request = (id: string, over: Record<string, unknown> = {}) => ({
+    id,
+    kind: "space.access" as const,
+    subject: "sprint-board",
+    subject_label: "Sprint Board",
+    requester_email: `${id}@example.com`,
+    message: `please ${id}`,
+    status: "pending" as const,
+    created_at: Math.floor(Date.now() / 1000) - 30,
+    delegated: false,
+    ...over,
+  });
+
+  it("lists this Space's open requests with Approve and Reject", async () => {
+    vi.mocked(fetchApprovals).mockResolvedValue([request("r1"), request("r2", { subject: "elsewhere" })]);
+    await open();
+    expect(await screen.findByText("r1@example.com")).toBeInTheDocument();
+    expect(screen.getByText("please r1")).toBeInTheDocument();
+    expect(screen.queryByText("r2@example.com")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reject r1@example.com" })).toBeInTheDocument();
+  });
+
+  it("warns on a delegated Space and reports an approval", async () => {
+    vi.mocked(fetchApprovals).mockResolvedValue([request("r1", { delegated: true })]);
+    const decided = vi.fn();
+    vi.mocked(fetchSpace).mockResolvedValue(space());
+    render(<SharingModal open space={space()} onClose={vi.fn()} onSaved={vi.fn()} onRequestsDecided={decided} />);
+    expect(await screen.findByText(WARNING)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Approve r1@example.com" }));
+    await waitFor(() => expect(approveApproval).toHaveBeenCalledWith("r1"));
+    await waitFor(() => expect(decided).toHaveBeenCalled());
+  });
+
+  it("shows no requests section when nobody is waiting", async () => {
+    vi.mocked(fetchApprovals).mockResolvedValue([]);
+    await open();
+    await waitFor(() => expect(fetchApprovals).toHaveBeenCalled());
+    expect(screen.queryByText(/Requests to open this Space/)).not.toBeInTheDocument();
   });
 });

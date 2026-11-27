@@ -81,4 +81,18 @@ describe("UserEmailCombobox", () => {
     fireEvent.focus(screen.getByRole("combobox"));
     await waitFor(() => expect(screen.getByText(/first 500 of 812/)).toBeInTheDocument());
   });
+
+  it("marks pending users with a Pending badge", async () => {
+    api.fetchAdminUsers.mockResolvedValue({ users: [user("new@example.com", { status: "pending", last_activity: null })], total: 1 });
+    renderWithClient(<UserEmailCombobox value="" onChange={() => {}} />);
+    fireEvent.focus(screen.getByRole("combobox"));
+    expect(await screen.findByRole("option")).toHaveTextContent("Pending");
+  });
+
+  it("marks users the server calls disabled even without disabled_at", async () => {
+    api.fetchAdminUsers.mockResolvedValue({ users: [user("off@example.com", { status: "disabled" })], total: 1 });
+    renderWithClient(<UserEmailCombobox value="" onChange={() => {}} />);
+    fireEvent.focus(screen.getByRole("combobox"));
+    expect(await screen.findByRole("option")).toHaveTextContent("Disabled");
+  });
 });

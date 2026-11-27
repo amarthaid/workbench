@@ -9,6 +9,7 @@ import {
   fetchAdminInstance,
   fetchAdminUsers,
   revokeAdminUserKey,
+  userStatus,
 } from "./api";
 
 const fetchMock = vi.fn();
@@ -135,5 +136,19 @@ describe("admin fetchers", () => {
       fetchMock.mockResolvedValue({ ok: false, status: 404, json: async () => ({ error: "user_not_found" }) });
       await expect(clearUserPermission("gone", "spaces.delegate_access")).rejects.toThrow("That user no longer exists.");
     });
+  });
+});
+
+describe("userStatus", () => {
+  it("reads status when the server sends it", () => {
+    expect(userStatus({ status: "active", disabled_at: null })).toBe("active");
+    expect(userStatus({ status: "pending", disabled_at: null })).toBe("pending");
+    expect(userStatus({ status: "disabled", disabled_at: 5 })).toBe("disabled");
+  });
+
+  it("falls back to disabled_at without a status, and fails closed on a stale disabled_at", () => {
+    expect(userStatus({ disabled_at: null })).toBe("active");
+    expect(userStatus({ disabled_at: 5 })).toBe("disabled");
+    expect(userStatus({ status: "active", disabled_at: 5 })).toBe("disabled");
   });
 });

@@ -9,6 +9,7 @@ import {
   revokeAdminUserKey,
   setUserPermission,
   type AdminPermission,
+  userStatus,
   type AdminUser,
 } from "../../api";
 import { useAuth } from "../../context/AuthContext";
@@ -24,6 +25,8 @@ import { Segmented } from "../ui/Segmented";
 import { ADMIN_STALE_MS, CardBody } from "./CardBody";
 
 type Action = { kind: "disable" | "enable" | "revoke"; id: string };
+type UserFilter = "current" | "pending" | "all";
+
 type Confirm = { kind: "disable" | "revoke"; user: AdminUser };
 
 // The capability whose reset strands Spaces that use it. Resetting it while
@@ -159,6 +162,9 @@ export default function UsersTab() {
 
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
+  // Pending sign-ups are decided on the Approvals tab, so the main list hides
+  // them until asked.
+  const [filter, setFilter] = useState<UserFilter>("current");
 
   const label = (u: AdminUser) => u.email ?? u.id;
   const all = data?.users ?? [];
@@ -166,7 +172,12 @@ export default function UsersTab() {
   // an instance with a few hundred users. The server caps the list, so the card
   // says so when it was cut off rather than pretending to search everyone.
   const q = query.trim().toLowerCase();
-  const users = q ? all.filter((u) => label(u).toLowerCase().includes(q)) : all;
+  const pendingCount = all.filter((u) => userStatus(u) === "pending").length;
+  const inFilter = all.filter((u) => {
+    const pending = userStatus(u) === "pending";
+    return filter === "all" || (filter === "pending" ? pending : !pending);
+  });
+  const users = q ? inFilter.filter((u) => label(u).toLowerCase().includes(q)) : inFilter;
   const truncated = data !== undefined && data.total > all.length;
 
   return (
@@ -185,14 +196,32 @@ export default function UsersTab() {
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                 />
+                <Segmented
+                  label="Show users"
+                  value={filter}
+                  options={[
+                    { value: "current", label: "Active and disabled" },
+                    { value: "pending", label: `Pending (${pendingCount})` },
+                    { value: "all", label: "All" },
+                  ]}
+                  onChange={setFilter}
+                />
               </div>
-              {q && <span className="ui-stat-note">Showing {users.length} of {all.length} users.</span>}
+              {q && <span className="ui-stat-note">Showing {users.length} of {inFilter.length} users.</span>}
             </div>
           )}
           {all.length === 0 ? (
             <EmptyState message="No users yet." />
           ) : users.length === 0 ? (
-            <EmptyState message={`No users match "${query.trim()}".`} />
+            <EmptyState
+              message={
+                q
+                  ? `No users match "${query.trim()}".`
+                  : filter === "pending"
+                    ? "No sign-ups are waiting for approval."
+                    : "No users in this view."
+              }
+            />
           ) : (
             <DataTable
               caption="All users"
@@ -210,7 +239,9 @@ export default function UsersTab() {
               }
             >
               {users.map((u) => {
-                const disabled = u.disabled_at !== null;
+                const status = userStatus(u);
+                const pending = status === "pending";
+                const disabled = status === "disabled";
                 const open = expanded === u.id;
                 return (
                   <Fragment key={u.id}>
@@ -222,7 +253,9 @@ export default function UsersTab() {
                     <td className="ui-num">{u.custom_app_count}</td>
                     <td>{u.has_api_key ? "Yes" : "—"}</td>
                     <td>
-                      <Badge variant={disabled ? "red" : "green"}>{disabled ? "Disabled" : "Active"}</Badge>
+                      <Badge variant={pending ? "orange" : disabled ? "red" : "green"}>
+                        {pending ? "Pending" : disabled ? "Disabled" : "Active"}
+                      </Badge>
                     </td>
                     <td>
                       <div className="wb-toolbar-form">
@@ -246,27 +279,26 @@ export default function UsersTab() {
                             Revoke key
                           </Button>
                         )}
-                        {disabled ? (
+                        {(pending || disabled) && (
                           <Button
                             variant="outline"
                             size="sm"
-                            aria-label={`Enable ${label(u)}`}
+                            aria-label={`${pending ? "Approve" : "Enable"} ${label(u)}`}
                             disabled={act.isPending}
                             onClick={() => act.mutate({ kind: "enable", id: u.id })}
                           >
-                            Enable
+                            {pending ? "Approve" : "Enable"}
                           </Button>
-                        ) : (
-                          u.id !== me?.id && (
-                            <Button
-                              variant="danger"
-                              size="sm"
-                              aria-label={`Disable ${label(u)}`}
-                              onClick={() => setConfirm({ kind: "disable", user: u })}
-                            >
-                              Disable
-                            </Button>
-                          )
+                        )}
+                        {!disabled && u.id !== me?.id && (
+                          <Button
+                            variant="danger"
+                            size="sm"
+                            aria-label={`Disable ${label(u)}`}
+                            onClick={() => setConfirm({ kind: "disable", user: u })}
+                          >
+                            Disable
+                          </Button>
                         )}
                       </div>
                     </td>

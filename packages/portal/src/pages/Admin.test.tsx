@@ -17,6 +17,8 @@ vi.mock("../components/admin/ProfilesCard", () => ({
 }));
 vi.mock("../components/admin/VaultTab", () => ({ default: () => <p>vault-body</p> }));
 vi.mock("../components/admin/FilesTab", () => ({ default: () => <p>files-body</p> }));
+const approvals = vi.hoisted(() => ({ fetchAdminApprovals: vi.fn() }));
+vi.mock("../approvals-api", async (orig) => ({ ...(await orig<typeof import("../approvals-api")>()), ...approvals }));
 vi.mock("../components/admin/UsersTab", () => ({ default: () => <p>users-body</p> }));
 vi.mock("../components/admin/ConfigTab", () => ({ default: () => <p>config-body</p> }));
 
@@ -41,6 +43,8 @@ function renderAt(path: string) {
 
 beforeEach(() => {
   bodies.profilesMounted.mockReset();
+  approvals.fetchAdminApprovals.mockReset();
+  approvals.fetchAdminApprovals.mockResolvedValue({ items: [], next_cursor: null, pending_total: 0 });
 });
 
 describe("Admin page", () => {
@@ -55,7 +59,7 @@ describe("Admin page", () => {
     renderAt("/admin");
     const names = screen.getAllByRole("tab").map((t) => t.textContent);
     expect(names).toEqual([
-      "Overview", "Activity", "Connections", "Custom apps", "Browser profiles", "Vault", "Files", "Users", "Config",
+      "Overview", "Activity", "Connections", "Custom apps", "Browser profiles", "Vault", "Files", "Approvals", "Users", "Config",
     ]);
   });
 
@@ -86,5 +90,16 @@ describe("Admin page", () => {
     renderAt("/admin/nope");
     expect(screen.getByTestId("where")).toHaveTextContent(/^\/admin$/);
     expect(screen.getByText("overview-body")).toBeInTheDocument();
+  });
+
+  it("puts the number of waiting account requests on the Approvals tab", async () => {
+    approvals.fetchAdminApprovals.mockResolvedValue({ items: [], next_cursor: null, pending_total: 4 });
+    renderAt("/admin");
+    expect(await screen.findByRole("tab", { name: /^Approvals\s*4$/ })).toBeInTheDocument();
+  });
+
+  it("shows no number when nothing waits, and opens the Approvals section by URL", async () => {
+    renderAt("/admin/approvals");
+    expect(await screen.findByRole("tab", { name: "Approvals" })).toHaveAttribute("aria-selected", "true");
   });
 });

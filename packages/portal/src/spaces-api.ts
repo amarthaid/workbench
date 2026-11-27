@@ -33,6 +33,8 @@ export interface SpaceSummary {
   delegation_suspended?: boolean;
   /** Owner only: the stored mode is on but the owner lacks the permission. */
   delegation_blocked?: "no_permission";
+  /** Owner only: open requests from people who asked for access. */
+  pending_requests?: number;
 }
 
 export interface SpaceTool {

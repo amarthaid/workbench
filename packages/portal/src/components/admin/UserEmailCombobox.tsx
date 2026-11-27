@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchAdminUsers } from "../../api";
+import { fetchAdminUsers, userStatus } from "../../api";
 import { relativeTime } from "../../format";
 import { Badge } from "../ui/Badge";
 import { Combobox, type ComboOption } from "../Combobox";
@@ -43,7 +43,12 @@ export function UserEmailCombobox({ value, onChange, id }: UserEmailComboboxProp
     return rows.map((u) => ({
       value: u.email,
       label: u.email,
-      badge: u.disabled_at ? <Badge variant="neutral">Disabled</Badge> : undefined,
+      badge:
+        userStatus(u) === "pending" ? (
+          <Badge variant="orange">Pending</Badge>
+        ) : userStatus(u) === "disabled" ? (
+          <Badge variant="neutral">Disabled</Badge>
+        ) : undefined,
       meta: u.last_activity ? `last active ${relativeTime(u.last_activity)}` : "no activity",
     }));
   }, [data, q]);

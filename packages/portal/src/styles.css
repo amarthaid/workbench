@@ -1521,6 +1521,7 @@ body {
 .space-consent-explain { font-size: 13px; color: var(--text-2); }
 .space-consent-actions { display: flex; justify-content: flex-end; gap: var(--s-8); flex-wrap: wrap; }
 .space-card .space-consent-actions { justify-content: center; }
+.space-card-left .space-consent-actions { justify-content: flex-end; }
 
 .space-tool-groups { display: grid; gap: var(--s-8); }
 .space-tool-groups .ui-box + .ui-box { margin-top: 0; }
@@ -1757,3 +1758,51 @@ body {
 .space-confirm-arg dd { color: var(--text); word-break: break-word; min-width: 0; }
 .space-confirm-raw summary { cursor: pointer; font-size: 13px; color: var(--text-2); }
 .space-confirm-raw pre { margin-top: var(--s-8); max-height: 240px; overflow: auto; }
+
+/* ── Approvals (maker-checker) ───────────────────────────────────────────
+   One request row, shared by Admin > Approvals, the gallery's Requests list
+   and the sharing dialog. Message text is user input: it wraps and keeps its
+   line breaks, and is never markup. */
+.wb-approval-list { list-style: none; margin: 0; padding: 0; display: grid; }
+.wb-approval {
+  display: grid;
+  gap: var(--s-8);
+  padding: var(--s-12);
+  border-top: 1px solid var(--border);
+}
+.wb-approval:first-child { border-top: 0; }
+.wb-approval-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s-12); flex-wrap: wrap; }
+.wb-approval-who { font-size: 14px; color: var(--text); overflow-wrap: anywhere; }
+.wb-approval-date { font-size: 12px; color: var(--text-3); }
+.wb-approval-what { font-size: 13px; color: var(--text-2); }
+.wb-approval-message { font-size: 13px; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+.wb-approval-empty { color: var(--text-4); }
+.wb-approval-warn {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-2);
+  padding: var(--s-8) var(--s-12);
+  border: 1px solid var(--warn-line);
+  border-radius: var(--radius);
+  background: var(--warn-soft);
+}
+.wb-approval-actions { display: flex; justify-content: flex-end; gap: var(--s-8); flex-wrap: wrap; }
+.wb-approval-note { display: grid; gap: var(--s-8); }
+.wb-approval-intro { margin: 0; padding: var(--s-12); font-size: 13px; color: var(--text-3); }
+.wb-approval-banner {
+  margin: 0 var(--s-12);
+  padding: var(--s-8) var(--s-12);
+  font-size: 13px;
+  color: var(--warn);
+  border: 1px solid var(--warn-line);
+  border-radius: var(--radius);
+  background: var(--warn-soft);
+}
+.wb-approval-more { display: flex; justify-content: center; padding: var(--s-12); border-top: 1px solid var(--border); }
+.wb-approval-section { display: grid; gap: var(--s-8); margin-bottom: var(--s-16); }
+.wb-approval-section-title { font-size: 13px; font-weight: 600; color: var(--text-2); margin: 0; }
+.wb-approval-section .wb-approval-list { border: 1px solid var(--border-strong); border-radius: var(--radius); }
+.space-card-left { text-align: left; }
+.space-card-left .space-card-title { text-align: left; }
+.space-ask { display: grid; gap: var(--s-8); text-align: left; width: 100%; }
+.space-ask .space-consent-actions { justify-content: flex-end; margin-top: var(--s-4); }

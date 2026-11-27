@@ -9,6 +9,8 @@ import { Segmented } from "../components/ui/Segmented";
 import { SpaceTile } from "../spaces/SpaceTile";
 import { EditDetailsModal } from "../spaces/EditDetailsModal";
 import { SharingModal } from "../spaces/SharingModal";
+import { RequestsModal } from "../spaces/RequestsModal";
+import { Button } from "../components/ui/Button";
 import { LARGE_FAVORITES, arrangeSpaces, isNewForMe, type SpaceFilter } from "../spaces/arrange";
 
 export const EXAMPLE_PROMPT = "Build me a Space that shows my open GitHub and Bitbucket PRs in one timeline";
@@ -39,6 +41,9 @@ export default function Spaces() {
   const [filter, setFilter] = useState<SpaceFilter>("all");
   const [editing, setEditing] = useState<SpaceSummary | null>(null);
   const [sharing, setSharing] = useState<SpaceSummary | null>(null);
+  const [requestsOpen, setRequestsOpen] = useState(false);
+  // Only an owner's rows carry a count. The chip hides at zero.
+  const pendingRequests = spaces.reduce((n, s) => n + (s.mine ? Number(s.pending_requests) || 0 : 0), 0);
 
   const patchRow = (name: string, patch: Partial<SpaceSummary>) =>
     qc.setQueryData<SpaceSummary[]>(["spaces"], (rows) => rows?.map((r) => (r.name === name ? { ...r, ...patch } : r)));
@@ -92,6 +97,17 @@ export default function Spaces() {
                 onChange={(e) => setQuery(e.target.value)}
               />
               <Segmented label="Show" value={filter} options={FILTERS} onChange={setFilter} />
+              {pendingRequests > 0 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-haspopup="dialog"
+                  aria-label={`Requests (${pendingRequests}): people asking to open your Spaces`}
+                  onClick={() => setRequestsOpen(true)}
+                >
+                  Requests ({pendingRequests})
+                </Button>
+              )}
             </div>
           ) : undefined
         }
@@ -148,6 +164,7 @@ export default function Spaces() {
         </div>
       )}
 
+      <RequestsModal open={requestsOpen} onClose={() => setRequestsOpen(false)} />
       {editing && (
         <EditDetailsModal
           open
@@ -164,6 +181,7 @@ export default function Spaces() {
           open
           space={sharing}
           onClose={() => setSharing(null)}
+          onRequestsDecided={() => void qc.invalidateQueries({ queryKey: ["spaces"] })}
           onSaved={(saved) => {
             patchRow(sharing.name, { visibility: saved.visibility });
             void qc.invalidateQueries({ queryKey: ["spaces"] });

@@ -34,6 +34,37 @@ describe("Login", () => {
     }
   });
 
+  it("tells a person whose account awaits approval to wait", async () => {
+    window.history.pushState({}, "", "/login?error=account_pending");
+    try {
+      render(<Login />);
+      expect(await screen.findByText(/waiting for an admin to approve it/i)).toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, "", "/");
+    }
+  });
+
+  it("tells a person whose request was declined to try later or contact an admin", async () => {
+    window.history.pushState({}, "", "/login?error=account_declined");
+    try {
+      render(<Login />);
+      expect(await screen.findByText(/request was declined\. Try again later or contact an admin/i)).toBeInTheDocument();
+    } finally {
+      window.history.pushState({}, "", "/");
+    }
+  });
+
+  it("shows only fixed copy, never text from the URL or an inherited property", async () => {
+    for (const code of ["constructor", "toString", "%3Cb%3Ehi%3C%2Fb%3E"]) {
+      window.history.pushState({}, "", `/login?error=${code}`);
+      const { container, unmount } = render(<Login />);
+      await screen.findByRole("button", { name: /Continue with Google/ });
+      expect(container.querySelector(".ui-form-error")).toBeNull();
+      unmount();
+    }
+    window.history.pushState({}, "", "/");
+  });
+
   it("shows no error on a plain visit", async () => {
     window.history.pushState({}, "", "/login");
     render(<Login />);
