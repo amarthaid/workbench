@@ -74,16 +74,28 @@ same way, so a Space is never briefly more permissive than what was approved.
 Later reclassifications are then compared against names, not a moving
 definition of "write".
 
-## Always allow widens what a page swap can do
+## Always allow widens what a page swap can do, so elevated people approve again
 
 A redeploy that changes only the page files leaves the tool list, and so the
-consent hash, unchanged: nobody approves again. Before this change the
-destructive confirmation was the one guard that survived a page swap. A
-viewer who sets a destructive tool to Always allow lets new page code, written
-by the owner's agent, call it in a loop with the viewer's own access, bounded
-only by the rate limit (60 a minute per viewer and Space, and 300 for the
-owner's bucket when delegated) and the audit log. That is the accepted cost,
-and the consent screen copy for Allow all says so. Rows are keyed by tool
+consent hash, unchanged. Before this change the destructive confirmation was
+the one guard that survived a page swap. A viewer who sets a destructive tool
+to Always allow would let new page code, written by the owner's agent, call it
+in a loop with the viewer's own access, bounded only by the rate limit (60 a
+minute per viewer and Space, and 300 for the owner's bucket when delegated)
+and the audit log.
+
+That swap is now closed for the people it matters to. A person is elevated
+when their effective auto set holds a tool whose default mode is not auto (a
+destructive or unclassified tool set to Always allow, or Allow all over a Space
+with one; for a delegated viewer, the owner's rows). The consent records the
+Space's `updated_at` (`space_consents.space_updated_at`, NULL on old rows), and
+an elevated person whose recorded value differs from the Space's is asked
+again, reason `page`. `updated_at` moves on a page upload and a tool list
+change, not on a metadata edit. Everyone else is unaffected, so ordinary
+redeploys do not re-prompt people who only allow writes. A person who changes
+their own modes in View tools while consented is not re-prompted by it: the
+PUT refreshes their recorded version, judged on the rows read before the write
+so a person who was already asked again does not get a free approval. Rows are keyed by tool
 name and survive a tool leaving and returning, so an agent that re-adds a
 tool the owner once set to auto brings it back as auto; the tool-list change
 already makes everyone approve again and both screens show the mode.

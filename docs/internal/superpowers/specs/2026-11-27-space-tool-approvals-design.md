@@ -31,6 +31,11 @@ set to "Always allow" or "Ask first".
 - When the owner of a delegated Space **loosens** a tool (Ask first to Always
   allow), each viewer approves the Space again. **Tightening** applies at once
   with no re-approval.
+- A person is **elevated** when something that would otherwise ask first
+  runs without asking for them (a destructive or unclassified tool set to
+  Always allow, including through Allow all). An elevated person approves
+  again whenever the Space itself changes, a page upload included. Everyone
+  else is not re-asked by an ordinary redeploy.
 - Approval modes are set **only in the portal**, by a person. No MCP tool,
   agent, API key or Space page can read-write them as a side effect or set
   them directly.
@@ -62,13 +67,16 @@ set to "Always allow" or "Ask first".
   Space) plus the audit log. The 5-confirmations-in-10s pause only counts
   modals, so it does not apply to auto calls.
 - A redeploy that changes only the page files does not change the tool
-  list, so nobody re-consents. Today the destructive modal is the one guard
-  that survives a page swap. Once a viewer sets a destructive tool to Always
-  allow, new page code (written by the owner's agent) can call it in a loop
-  with the viewer's own access, up to the viewer's rate limit. This is the
-  accepted cost of Always allow; the consent-screen copy for Allow all says
-  so ("Actions run without asking you, even after this Space's page
-  changes").
+  list, so the consent hash does not move. Once a viewer sets a destructive
+  tool to Always allow, new page code (written by the owner's agent) could
+  call it in a loop with the viewer's own access, up to the viewer's rate
+  limit. That swap is closed for elevated people: their consent also records
+  the Space's `updated_at` (which a page upload moves), and a different value
+  asks again, with reason `page`. People who are not elevated keep the
+  ordinary behavior: a write tool already runs without asking by default, and
+  the modal still guards every destructive call for them. The consent-screen
+  copy for Allow all says so ("Actions run without asking you. If this Space
+  changes later, you approve it again.").
 - An agent must not be able to grant itself silent calls. Agents write Spaces
   (`deploy_space`, `update_space`) and the Space page is agent-written code,
   so neither path may touch approval modes (see Portal only).
@@ -97,17 +105,21 @@ CREATE TABLE IF NOT EXISTS space_tool_approvals (
   list and added back.
 - Deleting a Space deletes its rows in the same transaction as its consents.
 
-`space_consents` gets one column (guarded `ALTER` on SQLite, `ADD COLUMN IF
+`space_consents` gets two columns (guarded `ALTER` on SQLite, `ADD COLUMN IF
 NOT EXISTS` on PostgreSQL):
 
 ```sql
 ALTER TABLE space_consents ADD COLUMN auto_tools TEXT;  -- JSON array of tool names, or NULL
+ALTER TABLE space_consents ADD COLUMN space_updated_at BIGINT;  -- INTEGER on SQLite; NULL for existing rows
 ```
 
 `auto_tools` is written only for a delegated viewer: the set of non-read
 tools that ran without asking on the screen they approved. It is NULL for
 the owner and for viewers of ordinary Spaces (they change their own modes,
 and a switch of stored mode already changes the consent hash).
+
+`space_updated_at` is the Space's `updated_at` as read by the consent POST. It
+only matters for an elevated person (see Consent).
 
 **Backfill.** Existing delegated consents approved today's defaults. After
 `loadPlugins()` at startup (the registry is needed for effects), one
@@ -169,7 +181,7 @@ a tool with no row follows its new default.
 `consentHash` (stored, and checked on every call) is unchanged: tools, mode
 and owner for a viewer; tools for the owner.
 
-Two additions:
+Three additions:
 
 1. **What the screen showed (delegated viewers only).** For a delegated
    viewer, the `consent_hash` the detail GET returns, and the consent POST
@@ -210,6 +222,22 @@ Two additions:
 
    For an ordinary Space and for the owner the subset check is skipped and
    `auto_tools` stays NULL.
+3. **Elevated people re-approve when the Space changes.** `space_consents`
+   gets a nullable `space_updated_at` (INTEGER on SQLite, BIGINT on
+   PostgreSQL; NULL on every existing row). The consent POST stores the
+   `updated_at` of the Space it read. `isElevated(space, viewer, rows)` is
+   true when the viewer's auto set (for a delegated viewer: the owner's rows,
+   without non-delegable tools) holds a tool whose default mode is not
+   `auto`. After the checks above pass, an elevated viewer whose stored
+   `space_updated_at` differs from the Space's `updated_at` (NULL counts as
+   different) is not consented, reason `page`. The order of reasons is
+   `tools`, then `approvals`, then `page`. `updated_at` moves on a page
+   upload and on a tool list change, not on a metadata edit, so a rename does
+   not ask again. A person who is consented and then changes their own modes
+   in View tools is not asked again for that change: the PUT, when the person
+   was consented on the rows read before the write, refreshes their
+   `space_updated_at` to the Space version it read. A person who was not
+   consented gets no refresh. Delegated viewers never PUT.
 
 ## API
 
@@ -291,8 +319,14 @@ today. Nothing else in the call route changes.
   shown hash computed for the new choices.
 
 **Consent screen copy for Allow all** (ordinary Spaces): a hint under the
-top switch, "Actions run without asking you, even after this Space's page
-changes."
+top switch, "Actions run without asking you. If this Space changes later, you
+approve it again."
+
+**Header layout** (consent screen and View tools): in each integration box the
+connection state (Connected, or Not connected with the Connect button) sits
+beside the app name on the left, and the box's Allow all switch is the
+action on the right. The top Allow all row has its label on the left and the
+switch on the right edge, with the hint under it.
 
 **Consent screen, delegated viewer**
 
@@ -325,8 +359,10 @@ Deletes or changes), and the approval control or badge sits beside it.
 **Re-consent copy**: `SpaceShell` currently explains re-consent as "this
 Space's tools changed". When a delegated viewer is asked again because the
 owner loosened a tool (tool list unchanged), the screen says "The owner
-changed which actions run without asking." The detail GET tells the two
-apart with `reconsent_reason: "tools" | "approvals"` when the viewer had a
+changed which actions run without asking." When an elevated person is asked
+again because the Space itself changed, it says "This Space was updated since
+you approved it. Review it again." The detail GET tells the two
+apart with `reconsent_reason: "tools" | "approvals" | "page"` when the viewer had a
 consent row that no longer satisfies `hasConsent`.
 
 ## Bridge
@@ -364,6 +400,11 @@ consent row that no longer satisfies `hasConsent`.
   tools read as `ask`, so a detail GET and consent POST on different workers
   can disagree and give `CONSENT_CHANGED`. The shell already refetches and
   shows the new screen.
+- A page-only redeploy asks elevated people again and nobody else. Someone
+  who sets a destructive tool to Always allow after the redeploy was not asked
+  again by their own change (the PUT refreshes their recorded version while
+  they are consented). A consent row from before `space_updated_at` existed
+  is NULL: harmless for a non-elevated person, a re-ask for an elevated one.
 - The owner can set a destructive tool to Always allow for viewers of a
   delegated Space. That is the owner's call; the re-approval shows it to each
   viewer as "Runs without asking".
@@ -385,7 +426,14 @@ Server (SQLite and PostgreSQL lanes):
 - Grant stores the set that was checked (a loosening committed after the
   hash check is not recorded as approved).
 - `reconsent_reason` is `approvals` after a loosening and `tools` after a
-  tool list change.
+  tool list change, and `page` for an elevated person after a page upload.
+- Elevated: Always allow on a write tool only is not; Allow all over a
+  destructive tool is; the owner and an ordinary viewer through their own
+  rows; a delegated viewer when the owner set a destructive tool to auto.
+  Re-asked after `touchSpace` only when elevated; a metadata edit does not
+  ask; legacy NULL stays consented when not elevated and asks when elevated;
+  the consent POST stores the `updated_at` it read; the PUT refresh keeps a
+  consented person consented and does nothing for one who is not.
 - Call route: 428 for a write set to Ask first; a destructive set to Always
   allow runs without `confirmed`; delegated 428 is audited.
 - `CONSENT_CHANGED` when the owner changes a mode between GET and POST.
@@ -416,4 +464,7 @@ modal summary.
 - Additive schema, applied at startup by `initDb()` like the earlier Space
   tables. No manual step.
 - No behavior change on upgrade: every tool keeps today's mode until someone
-  changes it, and no existing consent is invalidated.
+  changes it, and no existing consent is invalidated. A consent row from before
+  `space_updated_at` has NULL there, which only an elevated person (someone
+  who has set a destructive tool to Always allow, so not before this feature)
+  would notice.
