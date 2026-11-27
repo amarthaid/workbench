@@ -1468,9 +1468,10 @@ body {
   background: none;
   font: inherit;
   cursor: pointer;
-  border-radius: var(--radius-full);
 }
-.space-tile-badge-button:hover .ui-badge { box-shadow: 0 0 0 1px currentColor; }
+/* A line, not a shadow or a capsule: the stylesheet guard keeps both to the
+   modal and the toggle. */
+.space-tile-badge-button:hover .ui-badge { outline: 1px solid currentColor; outline-offset: 1px; }
 .space-tile-badge-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .space-details-form { display: grid; gap: var(--s-12); }
