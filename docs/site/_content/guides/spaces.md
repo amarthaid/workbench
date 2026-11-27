@@ -11,8 +11,32 @@ A Space is a static site with one extra: a small SDK that lets the page call wor
 - Get data with `await workbench.call(integration, tool, args)`. The page has no network access: `fetch`, XHR and WebSockets are blocked by `connect-src 'none'`.
 - Bundle or inline every asset. Scripts, styles, images and fonts load only from the Space itself (relative URLs like `./app.js` work) or inline; CDNs and web fonts are blocked.
 - Declare every tool the page calls in `deploy_space`'s `tools`. Anything else is refused with `TOOL_NOT_DECLARED`.
-- Expect the viewer to approve the tool list once, and to confirm every `destructive` call. A denied call rejects with `DENIED`.
+- Expect the viewer to approve the tool list once, and to confirm every call whose tool is set to **Ask first**: `destructive` tools by default, any `write` tool if the viewer chooses. A denied call rejects with `DENIED`. See [Always allow and Ask first](#always-allow-and-ask-first).
 - Calls use the viewer's connections, unless you turn on [delegated access](../integrations/spaces.md#delegated-access) in the portal: then they use yours. Render `DELEGATION_OFF` and `TOOL_NOT_DELEGABLE` errors in the page like any other.
+
+## Always allow and Ask first
+
+Every tool that changes something has one of two settings: **Always allow** (it runs without asking) or **Ask first** (the portal asks the viewer to confirm each call). Read tools never ask and have no setting. The defaults are the tool's effect: `write` tools are Always allow, `destructive` and unlabelled tools are Ask first. Your page cannot change this: there is no SDK call for it, and neither `deploy_space` nor `update_space` touches it. Only a person, in the portal, sets it.
+
+What a viewer sees and can do:
+
+- **On the consent screen**, each Writes or Deletes row has an **Always allow | Ask first** control. Each integration box and the top of the list have an **Allow all** switch. Switching a box on sets every tool in it to Always allow; switching it off puts each tool back to its default, not to Ask first everywhere. The choices apply when the viewer approves.
+- **Later, in View tools**, the same controls save at once and apply to the next call.
+- **Allow all means no more prompts.** The screen says "Actions run without asking you, even after this Space's page changes." If you redeploy only the page files, the tool list is the same, so nobody approves again, and the new page code can call an Always allow tool with the viewer's access. Declare only what the page needs, and keep destructive tools out unless it truly needs them.
+- Settings are kept per tool name. If you remove a tool and add it back later, it returns with whatever each viewer had chosen.
+
+A write set to Ask first behaves exactly like a destructive call: the shell shows a confirmation, and a call without one is refused with 428 `CONFIRMATION_REQUIRED`. Writes that Ask first count toward the pause after five confirmations in ten seconds, so a page that writes in bursts will pause for a viewer who chose Ask first.
+
+### Delegated Spaces follow the owner
+
+When the owner turns on [delegated access](../integrations/spaces.md#delegated-access), the viewers do not choose. The owner's own settings are the policy for every viewer: the viewer's consent screen shows a read-only badge on each row, **Runs without asking** or **Asks first**, with the line "The owner decides which actions ask first." The owner sees a note in View tools that viewers follow these settings.
+
+Changing a setting has two different effects:
+
+- **Tightening** (Always allow to Ask first) applies at once. Nobody approves again.
+- **Loosening** (Ask first to Always allow) asks each viewer to approve again, because they agreed to a shorter list of silent actions. The consent screen says "The owner changed which actions run without asking." Until they approve, their calls answer `CONSENT_REQUIRED`.
+
+The Sharing dialog shows how many actions run without asking for viewers.
 
 ## The SDK
 
