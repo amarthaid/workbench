@@ -442,3 +442,51 @@ describe("spaces plugin: delegated access", () => {
     expect(d).toContain("TOOL_NOT_DELEGABLE");
   });
 });
+
+describe("spaces plugin: approvals are portal-only", () => {
+  const seedRows = async () => {
+    for (const [user, tool, mode] of [
+      ["u1", "acme_update_item", "ask"],
+      ["u1", "acme_delete_item", "auto"],
+      ["u2", "acme_update_item", "ask"],
+    ]) {
+      await db.run(
+        "INSERT INTO space_tool_approvals (space_name, user_id, tool, mode, updated_at) VALUES ('s1', ?, ?, ?, 1)",
+        [user, tool, mode]
+      );
+    }
+  };
+  const rows = () =>
+    db.all<{ user_id: string; tool: string; mode: string }>(
+      "SELECT user_id, tool, mode FROM space_tool_approvals WHERE space_name = 's1' ORDER BY user_id, tool"
+    );
+
+  it("neither tool has an approval-related input", () => {
+    for (const name of ["deploy_space", "update_space"]) {
+      const schema = spacesPlugin.tools.find((t) => t.name === name)!.inputSchema as unknown as { shape: Record<string, unknown> };
+      const keys = Object.keys(schema.shape);
+      expect(keys.length).toBeGreaterThan(0);
+      expect(keys.filter((k) => /approv|confirm|ask|auto/i.test(k))).toEqual([]);
+    }
+  });
+
+  it("update_space and deploy_space never write, reset or delete approval rows", async () => {
+    await deploy("u1", { ...ok, tools: ["acme_update_item", "acme_delete_item"], visibility: "org" });
+    await seedRows();
+    const before = await rows();
+    expect(before).toHaveLength(3);
+
+    expect(await update("u1", { name: "s1", title: "Renamed", description: "d2" })).not.toHaveProperty("error");
+    expect(await rows()).toEqual(before);
+    expect(await update("u1", { name: "s1", files: true, delete: ["old.js"] })).not.toHaveProperty("error");
+    expect(await rows()).toEqual(before);
+    expect(await update("u1", { name: "s1", tools: ["acme_list_items"] })).not.toHaveProperty("error");
+    expect(await rows()).toEqual(before);
+    expect(await update("u1", { name: "s1", visibility: "private" })).not.toHaveProperty("error");
+    expect(await rows()).toEqual(before);
+    expect(await deploy("u1", { ...ok, tools: ["acme_update_item"], visibility: "org" })).not.toHaveProperty("error");
+    expect(await rows()).toEqual(before);
+    expect(await deploy("u1", { ...ok, tools: ["acme_update_item", "acme_delete_item"], visibility: "users", users: ["QA@example.com"] })).not.toHaveProperty("error");
+    expect(await rows()).toEqual(before);
+  });
+});

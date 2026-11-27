@@ -1870,6 +1870,18 @@ describe("tool approvals in the portal API", () => {
       expect(await rowsOf("u1")).toEqual([{ tool: WRITE, mode: "ask" }]);
     });
 
+    it("is portal-only: an API key or junk bearer is 401 and nothing is written", async () => {
+      const { apiKey } = await setApiKey("u2");
+      const payload = { tools: { [WRITE]: "ask" } };
+      const url = "/api/spaces/s1/tool-approvals";
+      expect((await app.inject({ method: "PUT", url, payload })).statusCode).toBe(401);
+      expect((await app.inject({ method: "PUT", url, payload, headers: { authorization: `Bearer ${apiKey}` } })).statusCode).toBe(401);
+      expect((await app.inject({ method: "PUT", url, payload, headers: { "x-workbench-api-key": apiKey } })).statusCode).toBe(401);
+      expect((await app.inject({ method: "PUT", url, payload, headers: { authorization: "Bearer junk" } })).statusCode).toBe(401);
+      expect(await rowsOf("u2")).toEqual([]);
+      expect((await put("u2", payload)).statusCode).toBe(200);
+    });
+
     it("an owner's change reaches a delegated viewer's policy and asks again only when it loosens", async () => {
       await delegate();
       expect((await consent("u2")).statusCode).toBe(200);
