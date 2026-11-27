@@ -104,6 +104,7 @@ Several code paths take a URL that ultimately comes from a user or an agent.
 |---|---|
 | Self-hosted instance URLs for OAuth plugins | `https` only; userinfo rejected; private and loopback literals rejected; path and query dropped, only the origin is kept. On top of that, the origin must be the manifest's cloud default or an entry in `<PLUGIN>_ALLOWED_INSTANCES` |
 | `browser_navigate` | Protocol allowlist at the schema layer: only `http:` and `https:`. Added after `file:///proc/self/environ` was found to be readable through the browser tools |
+| Custom MCP apps | `http(s)` only; userinfo rejected; every discovered endpoint is re-checked; private literals **and hostnames that resolve privately** are refused, redirects are not followed. `CUSTOM_APP_ALLOWED_HOSTS` (comma-separated exact hostnames, operator-set) exempts named internal servers; nothing else private is reachable |
 | Tools that fetch a user-supplied URL (e.g. Drive upload-from-URL) | Host validation rejecting RFC-1918 and internal addresses |
 | Cookie-auth `ctx.http` | The target host must match the manifest's `targetDomain` or `cookieDomains`; only cookies whose own domain matches the host are sent; redirects are `manual`, so cookies are never replayed across a redirect hop |
 | API-key `ctx.http` | If the manifest sets `allowedHosts`, the target host must equal or be a subdomain of an entry, checked **before** the credential is attached |

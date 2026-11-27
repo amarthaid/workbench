@@ -183,6 +183,19 @@ export const configSchema = z.object({
   // Set to the k8s ClusterIP service URL, e.g. http://a-workbench/mcp.
   // Leave unset for single-replica or local-dev deployments.
   INTERNAL_MCP_URL: z.string().url().optional(),
+  // Comma-separated hostnames custom MCP apps may use even though they are
+  // private (RFC1918, or a name that resolves privately), e.g. an internal
+  // n8n. Exact hostnames only, no wildcards, no IPs. Everything else private
+  // stays blocked. Operator-set: a user cannot widen it.
+  CUSTOM_APP_ALLOWED_HOSTS: z
+    .string()
+    .optional()
+    .transform((v): string[] =>
+      (v ?? "")
+        .split(",")
+        .map((x) => x.trim().toLowerCase())
+        .filter(Boolean)
+    ),
   // Which proxies in front of the server to trust for X-Forwarded-For, so
   // request.ip (and so the audit log's source_ip and the request log's remoteAddress)
   // is the client and not the load balancer. Unset = trust none (the direct

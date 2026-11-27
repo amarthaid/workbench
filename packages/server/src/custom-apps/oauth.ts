@@ -41,6 +41,13 @@ export async function discoverMetadata(baseUrl: string): Promise<CustomAppMetada
   const normalized = normalizeBaseUrl(baseUrl);
   if (!normalized) throw new Error(`Invalid or blocked app URL: ${baseUrl}`);
   const origin = new URL(normalized).origin;
+  // Why each discovery fetch failed. Without this a blocked or unreachable host
+  // surfaces only as "did not advertise an authorization server".
+  const failures: string[] = [];
+  const note = (e: unknown) => {
+    const m = e instanceof Error ? e.message : String(e);
+    if (!failures.includes(m)) failures.push(m);
+  };
 
   // 1. Protected-resource metadata (PRM). Prefer the URL the server advertises
   // in a 401 WWW-Authenticate challenge (resource_metadata=...) — it may be
@@ -57,10 +64,13 @@ export async function discoverMetadata(baseUrl: string): Promise<CustomAppMetada
       const sm = www.match(/(?:^|[,\s])scope="([^"]+)"/);
       if (sm) challengeScope = sm[1];
     }
-  } catch {
-    /* probe is best-effort */
+  } catch (e) {
+    note(e); // probe is best-effort
   }
-  const resourceMeta = await fetchJson(prmUrl).catch(() => ({} as Record<string, unknown>));
+  const resourceMeta = await fetchJson(prmUrl).catch((e) => {
+    note(e);
+    return {} as Record<string, unknown>;
+  });
   // This instance's own /mcp, under whatever hostname was typed: its tools are
   // the meta-tools, so execute_tools would call itself through the app. The
   // metadata names what the server is; the URL only names how it was reached.
@@ -83,12 +93,13 @@ export async function discoverMetadata(baseUrl: string): Promise<CustomAppMetada
       // OIDC-only IdPs expose openid-configuration instead — fall back.
       try {
         asMeta = await fetchJson(wellKnownUrl(as, "/.well-known/oauth-authorization-server"));
-      } catch {
+      } catch (e) {
+        note(e);
         asMeta = await fetchJson(wellKnownUrl(as, "/.well-known/openid-configuration"));
       }
       if (asMeta.authorization_endpoint || asMeta.token_endpoint) break;
-    } catch {
-      /* try the next authorization server */
+    } catch (e) {
+      note(e); // try the next authorization server
     }
   }
 
@@ -113,7 +124,8 @@ export async function discoverMetadata(baseUrl: string): Promise<CustomAppMetada
 
   if (!metadata.authorizationEndpoint || !metadata.tokenEndpoint) {
     throw new Error(
-      `CustomApp at ${baseUrl} did not advertise an OAuth authorization server (/.well-known/oauth-authorization-server)`
+      `CustomApp at ${baseUrl} did not advertise an OAuth authorization server (/.well-known/oauth-authorization-server)` +
+        (failures.length ? `. Discovery errors: ${failures.join("; ")}` : "")
     );
   }
   // The AS metadata is attacker-influenced: every endpoint the server will

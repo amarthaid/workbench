@@ -1,6 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { db } from "../src/db";
-import { normalizeBaseUrl, isBlockedHost } from "../src/custom-apps/ssrf";
+import { lookup } from "node:dns/promises";
+import { config } from "../src/config";
+import { normalizeBaseUrl, isBlockedHost, isAllowedPrivateHost } from "../src/custom-apps/ssrf";
 import { namespacedName } from "../src/custom-apps/index";
 import {
   createCustomApp,
@@ -14,6 +16,8 @@ import {
   setCustomAppHeaders,
   isCustomAppConnected,
 } from "../src/custom-apps/store";
+
+vi.mock("node:dns/promises", () => ({ lookup: vi.fn() }));
 
 describe("app naming", () => {
   it("namespaces a remote tool under the app name", () => {
@@ -218,5 +222,41 @@ describe("isCustomAppConnected with unreadable headers", () => {
     await db.run("UPDATE custom_apps SET headers_enc = ? WHERE id = ?", [Buffer.from("garbage"), c.id]);
     const again = (await getCustomApp("u1", c.id))!;
     expect(await isCustomAppConnected("u1", again)).toBe(false);
+  });
+});
+
+describe("CUSTOM_APP_ALLOWED_HOSTS", () => {
+  const prev = config.CUSTOM_APP_ALLOWED_HOSTS;
+  afterEach(() => {
+    config.CUSTOM_APP_ALLOWED_HOSTS = prev;
+  });
+
+  it("blocks private hostnames by default", () => {
+    expect(isBlockedHost("10.0.60.2")).toBe(true);
+    expect(normalizeBaseUrl("https://10.0.60.2/mcp")).toBeNull();
+  });
+
+  it("lets a listed host through, exact and case-insensitive", () => {
+    config.CUSTOM_APP_ALLOWED_HOSTS = ["n8n.example.internal", "10.0.60.2"];
+    expect(isAllowedPrivateHost("N8N.example.internal")).toBe(true);
+    expect(isBlockedHost("10.0.60.2")).toBe(false);
+    expect(normalizeBaseUrl("https://n8n.example.internal/mcp")).toBe("https://n8n.example.internal/mcp");
+  });
+
+  it("does not match subdomains or other private hosts", () => {
+    config.CUSTOM_APP_ALLOWED_HOSTS = ["n8n.example.internal"];
+    expect(isAllowedPrivateHost("evil.n8n.example.internal")).toBe(false);
+    expect(isBlockedHost("10.0.0.5")).toBe(true);
+    expect(isBlockedHost("169.254.169.254")).toBe(true);
+  });
+});
+
+describe("discoverMetadata failure reason", () => {
+  it("names a private-IP refusal instead of the generic message alone", async () => {
+    const { discoverMetadata } = await import("../src/custom-apps/oauth");
+    vi.mocked(lookup).mockResolvedValue([{ address: "10.0.60.2", family: 4 }] as never);
+    await expect(discoverMetadata("https://mcp.example.com/mcp")).rejects.toThrow(
+      /did not advertise.*Discovery errors:.*resolves to a private IP/s
+    );
   });
 });

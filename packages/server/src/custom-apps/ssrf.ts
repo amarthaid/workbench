@@ -1,5 +1,12 @@
 import { lookup } from "node:dns/promises";
 import { isPrivateHost } from "../auth/plugin-oauth";
+import { config } from "../config";
+
+/** Operator allowlist (CUSTOM_APP_ALLOWED_HOSTS): exact, case-insensitive hostnames. */
+export function isAllowedPrivateHost(hostname: string): boolean {
+  const h = hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  return (config.CUSTOM_APP_ALLOWED_HOSTS ?? []).includes(h);
+}
 
 /**
  * CustomApp base URLs AND every endpoint the remote metadata advertises are
@@ -14,6 +21,7 @@ import { isPrivateHost } from "../auth/plugin-oauth";
  */
 export function isBlockedHost(hostname: string): boolean {
   const h = hostname.toLowerCase();
+  if (isAllowedPrivateHost(h)) return false;
   const loopback =
     h === "localhost" ||
     h.endsWith(".localhost") ||
@@ -91,7 +99,7 @@ export async function safeFetch(url: string | URL, init?: RequestInit): Promise<
   } catch {
     resolved = null; // DNS failure — let the fetch below surface the real error
   }
-  if (resolved && resolved.some((a) => isBlockedIp(a.address))) {
+  if (!isAllowedPrivateHost(hostname) && resolved && resolved.some((a) => isBlockedIp(a.address))) {
     throw new Error(`Refusing to fetch ${hostname}: resolves to a private IP`);
   }
 
