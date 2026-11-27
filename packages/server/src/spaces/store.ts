@@ -450,14 +450,6 @@ export async function isSharedWith(name: string, email: string): Promise<boolean
 
 // ---- consent ---------------------------------------------------------------
 
-export async function getConsentHash(name: string, userId: string): Promise<string | null> {
-  const row = await db.get<{ tools_hash: string }>(
-    "SELECT tools_hash FROM space_consents WHERE space_name = ? AND user_id = ?",
-    [name, userId]
-  );
-  return row?.tools_hash ?? null;
-}
-
 /**
  * What `viewerId` approves. A viewer approves the tool list, whose connections
  * the calls run with (access mode) and whose Space it is (owner): a change to
@@ -473,18 +465,49 @@ export function consentHash(space: Space, viewerId: string): string {
   return crypto.createHash("sha256").update(JSON.stringify(parts)).digest("hex");
 }
 
-/** True when this user consented to exactly what consentHash covers for them now. */
-export async function hasConsent(space: Space, userId: string): Promise<boolean> {
-  return (await getConsentHash(space.name, userId)) === consentHash(space, userId);
+export interface ConsentRow {
+  hash: string;
+  /** Tools that ran without asking on the screen a delegated viewer approved; null when never recorded. */
+  autoTools: string[] | null;
+  /** The Space's updated_at when the viewer approved; null for a consent given before it was recorded. */
+  spaceUpdatedAt: number | null;
+}
+
+export async function getConsentRow(name: string, userId: string): Promise<ConsentRow | null> {
+  const row = await db.get<{ tools_hash: string; auto_tools: string | null; space_updated_at: number | string | null }>(
+    "SELECT tools_hash, auto_tools, space_updated_at FROM space_consents WHERE space_name = ? AND user_id = ?",
+    [name, userId]
+  );
+  if (!row) return null;
+  let autoTools: string[] | null = null;
+  if (row.auto_tools) {
+    try {
+      const parsed: unknown = JSON.parse(row.auto_tools);
+      if (Array.isArray(parsed) && parsed.every((x) => typeof x === "string")) autoTools = parsed;
+    } catch {
+      // Unparsable counts as never recorded.
+    }
+  }
+  const spaceUpdatedAt = row.space_updated_at === null || row.space_updated_at === undefined ? null : Number(row.space_updated_at);
+  return { hash: row.tools_hash, autoTools, spaceUpdatedAt };
 }
 
 // The column is still named tools_hash; it holds consentHash(space).
-export async function grantConsent(space: Space, userId: string): Promise<void> {
+// `autoTools` is the set a delegated viewer saw run without asking; null for
+// everyone else. `space.updatedAt` is recorded too: a person whose modes
+// let a tool run that would otherwise ask approves again when the Space changes.
+export async function grantConsent(space: Space, userId: string, autoTools: string[] | null = null): Promise<void> {
+  const auto = autoTools ? JSON.stringify(autoTools) : null;
   await db.run(
-    `INSERT INTO space_consents (space_name, user_id, tools_hash, granted_at) VALUES (?, ?, ?, ?)
-     ON CONFLICT (space_name, user_id) DO UPDATE SET tools_hash = excluded.tools_hash, granted_at = excluded.granted_at`,
-    [space.name, userId, consentHash(space, userId), now()]
+    `INSERT INTO space_consents (space_name, user_id, tools_hash, granted_at, auto_tools, space_updated_at) VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT (space_name, user_id) DO UPDATE SET tools_hash = excluded.tools_hash, granted_at = excluded.granted_at, auto_tools = excluded.auto_tools, space_updated_at = excluded.space_updated_at`,
+    [space.name, userId, consentHash(space, userId), now(), auto, space.updatedAt]
   );
+}
+
+/** Record `updatedAt` as the Space version this person has approved, keeping the rest of their consent. */
+export async function refreshConsentVersion(name: string, userId: string, updatedAt: number): Promise<void> {
+  await db.run("UPDATE space_consents SET space_updated_at = ? WHERE space_name = ? AND user_id = ?", [updatedAt, name, userId]);
 }
 
 export async function revokeConsent(name: string, userId: string): Promise<void> {
@@ -598,6 +621,7 @@ export async function deleteSpace(name: string): Promise<void> {
   await db.transaction(async (tx) => {
     await tx.run("DELETE FROM space_kv WHERE space_name = ?", [name]);
     await tx.run("DELETE FROM space_consents WHERE space_name = ?", [name]);
+    await tx.run("DELETE FROM space_tool_approvals WHERE space_name = ?", [name]);
     await tx.run("DELETE FROM space_user_state WHERE space_name = ?", [name]);
     await tx.run("DELETE FROM space_shares WHERE space_name = ?", [name]);
     await tx.run("DELETE FROM spaces WHERE name = ?", [name]);

@@ -23,6 +23,7 @@ export const acmePlugin: Plugin = {
   tools: [
     { name: "acme_list_items", description: "List items", integration: "acme", effect: "read", inputSchema: z.object({ q: z.string().optional() }), handler: (c, a) => handlers.list(c, a) },
     { name: "acme_delete_item", description: "Delete an item", integration: "acme", effect: "destructive", inputSchema: z.object({ id: z.string() }), handler: () => handlers.remove() },
+    { name: "acme_update_item", description: "Update an item", integration: "acme", effect: "write", inputSchema: z.object({ id: z.string() }), handler: () => handlers.remove() },
     { name: "acme_unlabelled", description: "No effect label", integration: "acme", inputSchema: z.object({}), handler: () => handlers.remove() },
     { name: "acme_fail", description: "Always fails", integration: "acme", effect: "read", inputSchema: z.object({}), handler: () => handlers.fail() },
     { name: "acme_set_secret", description: "Rewrite the stored credential", integration: "acme", effect: "write", delegable: false, inputSchema: z.object({}), handler: () => handlers.setSecret() },

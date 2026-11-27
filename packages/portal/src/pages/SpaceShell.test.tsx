@@ -24,6 +24,7 @@ vi.mock("../spaces-api", async (importOriginal) => {
     updateSpaceSharing: vi.fn(),
     updateSpaceDetails: vi.fn(),
     recordSpaceOpen: vi.fn(async () => undefined),
+    setToolApprovals: vi.fn(),
   };
 });
 
@@ -41,6 +42,7 @@ import {
   grantSpaceConsent,
   recordSpaceOpen,
   revokeSpaceConsent,
+  setToolApprovals,
   updateSpaceDetails,
   updateSpaceSharing,
 } from "../spaces-api";
@@ -59,10 +61,10 @@ function space(overrides: Partial<SpaceDetail> = {}): SpaceDetail {
     appUrl: "/s/pr-timeline/app/sig-abc/",
     tools: [
       { name: "github_list_prs", integration: "github", integrationName: "GitHub", effect: "read", connected: true, description: "List PRs" },
-      { name: "github_comment", integration: "github", integrationName: "GitHub", effect: "write", connected: true },
-      { name: "github_merge_pr", integration: "github", integrationName: "GitHub", effect: "destructive", connected: true },
+      { name: "github_comment", integration: "github", integrationName: "GitHub", effect: "write", connected: true, approval: "auto", approvalEditable: true },
+      { name: "github_merge_pr", integration: "github", integrationName: "GitHub", effect: "destructive", connected: true, approval: "ask", approvalEditable: true },
       { name: "bitbucket_list_prs", integration: "bitbucket", integrationName: "Bitbucket", effect: "read", connected: false },
-      { name: "bitbucket_old_tool", integration: "bitbucket", integrationName: "Bitbucket", effect: "read", missing: true },
+      { name: "bitbucket_old_tool", integration: "bitbucket", integrationName: "Bitbucket", effect: "destructive", missing: true, approval: "ask", approvalEditable: false },
     ],
     ...overrides,
   };
@@ -181,7 +183,7 @@ describe("SpaceShell", () => {
       const github = screen.getByRole("heading", { name: "GitHub" }).closest("section")!;
       expect(within(github).getByText("github_list_prs").closest(".ui-box-row")).toHaveTextContent("Reads");
       expect(within(github).getByText("github_comment").closest(".ui-box-row")).toHaveTextContent("Writes");
-      expect(within(github).getByText("github_merge_pr").closest(".ui-box-row")).toHaveTextContent("Asks first");
+      expect(within(github).getByText("github_merge_pr").closest(".ui-box-row")).toHaveTextContent("Deletes or changes");
       expect(within(github).queryByText("Not connected")).not.toBeInTheDocument();
 
       const bitbucket = screen.getByRole("heading", { name: "Bitbucket" }).closest("section")!;
@@ -287,6 +289,259 @@ describe("SpaceShell", () => {
       fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
       expect(await screen.findByRole("heading", { name: "Gallery" })).toBeInTheDocument();
       expect(grantSpaceConsent).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("tool approvals", () => {
+    const control = (tool: string) => screen.getByRole("group", { name: `Approval for ${tool}` });
+    const choose = (tool: string, label: "Always allow" | "Ask first") =>
+      fireEvent.click(within(control(tool)).getByRole("button", { name: label }));
+    const withModes = (tools: SpaceDetail["tools"], modes: Record<string, "auto" | "ask">) =>
+      tools.map((t) => (modes[t.name] ? { ...t, approval: modes[t.name] } : t));
+    const openTools = async () => {
+      await frame();
+      fireEvent.click(screen.getByRole("button", { name: "Menu" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "View tools" }));
+      return screen.findByRole("dialog");
+    };
+
+    describe("consent screen", () => {
+      it("presets the controls from the detail", async () => {
+        vi.mocked(fetchSpace).mockResolvedValue(connectedSpace());
+        renderShell();
+        await screen.findByRole("button", { name: "Approve" });
+        expect(within(control("github_comment")).getByRole("button", { name: "Always allow" })).toHaveAttribute("aria-pressed", "true");
+        expect(within(control("github_merge_pr")).getByRole("button", { name: "Ask first" })).toHaveAttribute("aria-pressed", "true");
+      });
+
+      it("saves only the changed tools, then posts consent with the detail's hash", async () => {
+        vi.mocked(fetchSpace).mockResolvedValue(connectedSpace());
+        vi.mocked(setToolApprovals).mockResolvedValue({ tools: withModes(connectedSpace().tools, { github_merge_pr: "auto" }) });
+        renderShell();
+        await screen.findByRole("button", { name: "Approve" });
+        choose("github_merge_pr", "Always allow");
+        fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+        await frame();
+        expect(setToolApprovals).toHaveBeenCalledTimes(1);
+        expect(setToolApprovals).toHaveBeenCalledWith("pr-timeline", { github_merge_pr: "auto" });
+        expect(grantSpaceConsent).toHaveBeenCalledWith("pr-timeline", "h1");
+        expect(vi.mocked(setToolApprovals).mock.invocationCallOrder[0]).toBeLessThan(
+          vi.mocked(grantSpaceConsent).mock.invocationCallOrder[0]
+        );
+      });
+
+      it("does not save when nothing changed, or when a change is undone", async () => {
+        vi.mocked(fetchSpace).mockResolvedValue(connectedSpace());
+        renderShell();
+        await screen.findByRole("button", { name: "Approve" });
+        choose("github_merge_pr", "Always allow");
+        choose("github_merge_pr", "Ask first");
+        fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+        await frame();
+        expect(setToolApprovals).not.toHaveBeenCalled();
+        expect(grantSpaceConsent).toHaveBeenCalledWith("pr-timeline", "h1");
+      });
+
+      it("shows a failed save's message and does not post consent", async () => {
+        vi.mocked(fetchSpace).mockResolvedValue(connectedSpace());
+        vi.mocked(setToolApprovals).mockRejectedValue(
+          new SpaceApiError(400, { code: "INVALID_APPROVAL", message: "github_merge_pr is not available." })
+        );
+        renderShell();
+        await screen.findByRole("button", { name: "Approve" });
+        choose("github_merge_pr", "Always allow");
+        fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+        expect(await screen.findByText("github_merge_pr is not available.")).toBeInTheDocument();
+        expect(grantSpaceConsent).not.toHaveBeenCalled();
+      });
+
+      it("a stale choice is not sent again after CONSENT_CHANGED when the owner turned delegation on", async () => {
+        const delegatedNow: SpaceDetail = {
+          ...connectedSpace(),
+          consent_hash: "h2",
+          delegate_access: true,
+          delegation_off: null,
+          tools: connectedSpace().tools.map((t) => ({ ...t, delegable: true, ...(t.approval ? { approvalEditable: false } : {}) })),
+        };
+        vi.mocked(fetchSpace).mockResolvedValueOnce(connectedSpace()).mockResolvedValue(delegatedNow);
+        vi.mocked(setToolApprovals).mockResolvedValue({ tools: withModes(connectedSpace().tools, { github_merge_pr: "auto" }) });
+        vi.mocked(grantSpaceConsent).mockRejectedValueOnce(new SpaceApiError(409, { code: "CONSENT_CHANGED", message: "x" }));
+        renderShell();
+        await screen.findByRole("button", { name: "Approve" });
+        choose("github_merge_pr", "Always allow");
+        fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+        await waitFor(() => expect(grantSpaceConsent).toHaveBeenCalledTimes(1));
+        await waitFor(() => expect(screen.queryByRole("group", { name: /Approval for/ })).not.toBeInTheDocument());
+        expect(setToolApprovals).toHaveBeenCalledTimes(1);
+        fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+        await waitFor(() => expect(grantSpaceConsent).toHaveBeenCalledTimes(2));
+        expect(grantSpaceConsent).toHaveBeenLastCalledWith("pr-timeline", "h2");
+        expect(setToolApprovals).toHaveBeenCalledTimes(1);
+      });
+
+      it("forgets local choices when the detail's consent_hash changes", async () => {
+        const reloaded: SpaceDetail = { ...connectedSpace(), consent_hash: "h2" };
+        vi.mocked(fetchSpace).mockResolvedValueOnce(connectedSpace()).mockResolvedValue(reloaded);
+        vi.mocked(setToolApprovals).mockResolvedValue({ tools: connectedSpace().tools });
+        vi.mocked(grantSpaceConsent).mockRejectedValueOnce(new SpaceApiError(409, { code: "CONSENT_CHANGED", message: "x" }));
+        renderShell();
+        await screen.findByRole("button", { name: "Approve" });
+        choose("github_comment", "Ask first");
+        fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+        await waitFor(() => expect(setToolApprovals).toHaveBeenCalledTimes(1));
+        // The reloaded screen shows the server's mode again, not the old choice.
+        await waitFor(() =>
+          expect(within(control("github_comment")).getByRole("button", { name: "Always allow" })).toHaveAttribute("aria-pressed", "true")
+        );
+        fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+        await waitFor(() => expect(grantSpaceConsent).toHaveBeenCalledWith("pr-timeline", "h2"));
+        expect(setToolApprovals).toHaveBeenCalledTimes(1);
+      });
+
+      it("never sends a tool the server now says is not editable", async () => {
+        const locked: SpaceDetail = {
+          ...connectedSpace(),
+          tools: connectedSpace().tools.map((t) => (t.name === "github_merge_pr" ? { ...t, approvalEditable: false } : t)),
+        };
+        vi.mocked(fetchSpace).mockResolvedValueOnce(connectedSpace()).mockResolvedValue(locked);
+        vi.mocked(grantSpaceConsent).mockRejectedValueOnce(new SpaceApiError(409, { code: "INTEGRATION_NOT_CONNECTED", message: "x" }));
+        vi.mocked(setToolApprovals).mockResolvedValue({ tools: connectedSpace().tools });
+        renderShell();
+        await screen.findByRole("button", { name: "Approve" });
+        choose("github_merge_pr", "Always allow");
+        fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+        await waitFor(() => expect(grantSpaceConsent).toHaveBeenCalledTimes(1));
+        await waitFor(() => expect(screen.queryByRole("group", { name: "Approval for github_merge_pr" })).not.toBeInTheDocument());
+        vi.mocked(setToolApprovals).mockClear();
+        fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+        await waitFor(() => expect(grantSpaceConsent).toHaveBeenCalledTimes(2));
+        expect(setToolApprovals).not.toHaveBeenCalled();
+      });
+
+      it("a delegated viewer sees badges, no controls, and never saves", async () => {
+        const base = space({ consented: false, delegate_access: true, delegation_off: null });
+        vi.mocked(fetchSpace).mockResolvedValue({
+          ...base,
+          tools: base.tools.map((t) => ({ ...t, delegable: true, ...(t.approval ? { approvalEditable: false } : {}) })),
+        });
+        renderShell();
+        fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+        expect(screen.getByText("The owner decides which actions ask first.")).toBeInTheDocument();
+        expect(screen.getByText("Runs without asking")).toBeInTheDocument();
+        expect(screen.queryByRole("group", { name: /Approval for/ })).not.toBeInTheDocument();
+        await waitFor(() => expect(grantSpaceConsent).toHaveBeenCalledWith("pr-timeline", "h1"));
+        expect(setToolApprovals).not.toHaveBeenCalled();
+      });
+
+      it("explains a re-consent caused by the owner's approval change", async () => {
+        vi.mocked(fetchSpace).mockResolvedValue(
+          space({ consented: false, delegate_access: true, delegation_off: null, reconsent_reason: "approvals" })
+        );
+        renderShell();
+        expect(await screen.findByText("The owner changed which actions run without asking.")).toBeInTheDocument();
+      });
+
+      it("explains a re-consent caused by a change to the Space itself", async () => {
+        vi.mocked(fetchSpace).mockResolvedValue(space({ consented: false, reconsent_reason: "page" }));
+        renderShell();
+        expect(await screen.findByText("This Space was updated since you approved it. Review it again.")).toBeInTheDocument();
+        expect(screen.queryByText("The owner changed which actions run without asking.")).not.toBeInTheDocument();
+      });
+
+      it("says nothing extra when the tool list changed", async () => {
+        vi.mocked(fetchSpace).mockResolvedValue(
+          space({ consented: false, delegate_access: true, delegation_off: null, reconsent_reason: "tools" })
+        );
+        renderShell();
+        await screen.findByRole("button", { name: "Approve" });
+        expect(screen.queryByText("The owner changed which actions run without asking.")).not.toBeInTheDocument();
+      });
+    });
+
+    describe("View tools", () => {
+      it("saves a change at once and the bridge uses the saved mode on the next call", async () => {
+        vi.mocked(setToolApprovals).mockResolvedValue({ tools: withModes(space().tools, { github_merge_pr: "auto" }) });
+        renderShell();
+        const { send } = await handshake();
+        const dialog = await openTools();
+        choose("github_merge_pr", "Always allow");
+        await waitFor(() => expect(setToolApprovals).toHaveBeenCalledWith("pr-timeline", { github_merge_pr: "auto" }));
+        await waitFor(() =>
+          expect(within(within(dialog).getByRole("group", { name: "Approval for github_merge_pr" })).getByRole("button", { name: "Always allow" })).toHaveAttribute("aria-pressed", "true")
+        );
+        fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+        await send("call", { integration: "github", tool: "merge_pr" });
+        expect(callSpaceTool).toHaveBeenCalledWith("pr-timeline", { tool: "github_merge_pr" });
+      });
+
+      it("two quick toggles end with the server's last answer, even if the answers arrive out of order", async () => {
+        const answers: Array<(v: { tools: SpaceDetail["tools"] }) => void> = [];
+        vi.mocked(setToolApprovals).mockImplementation(() => new Promise((resolve) => answers.push(resolve)));
+        renderShell();
+        const dialog = await openTools();
+        choose("github_merge_pr", "Always allow");
+        choose("github_merge_pr", "Ask first");
+        const pressed = (label: string) =>
+          within(within(dialog).getByRole("group", { name: "Approval for github_merge_pr" })).getByRole("button", { name: label });
+        // Whether the second request waits for the first or is already out, the
+        // later answer must be the one that stays.
+        const first = withModes(space().tools, { github_merge_pr: "auto" });
+        const last = withModes(space().tools, { github_merge_pr: "ask" });
+        await new Promise((r) => setTimeout(r, 0));
+        if (answers.length === 2) {
+          answers[1]({ tools: last });
+          answers[0]({ tools: first });
+        } else {
+          answers[0]({ tools: first });
+          await waitFor(() => expect(answers).toHaveLength(2));
+          answers[1]({ tools: last });
+        }
+        await waitFor(() => expect(setToolApprovals).toHaveBeenLastCalledWith("pr-timeline", { github_merge_pr: "ask" }));
+        await waitFor(() => expect(pressed("Ask first")).toHaveAttribute("aria-pressed", "true"));
+        // Nothing is left pending: the control follows the cache again.
+        await new Promise((r) => setTimeout(r, 20));
+        expect(pressed("Ask first")).toHaveAttribute("aria-pressed", "true");
+        expect(pressed("Always allow")).toHaveAttribute("aria-pressed", "false");
+      });
+
+      it("shows a failed save's message", async () => {
+        vi.mocked(setToolApprovals).mockRejectedValue(new SpaceApiError(500, { code: "UPSTREAM_ERROR", message: "Could not save." }));
+        renderShell();
+        const dialog = await openTools();
+        choose("github_merge_pr", "Always allow");
+        expect(await within(dialog).findByText("Could not save.")).toBeInTheDocument();
+        expect(within(control("github_merge_pr")).getByRole("button", { name: "Ask first" })).toHaveAttribute("aria-pressed", "true");
+      });
+
+      it("a delegated viewer sees badges only", async () => {
+        const base = space({ delegate_access: true, delegation_off: null });
+        vi.mocked(fetchSpace).mockResolvedValue({
+          ...base,
+          tools: base.tools.map((t) => ({ ...t, delegable: true, ...(t.approval ? { approvalEditable: false } : {}) })),
+        });
+        renderShell();
+        const dialog = await openTools();
+        expect(within(dialog).getByText("The owner decides which actions ask first.")).toBeInTheDocument();
+        expect(within(dialog).queryByRole("group")).not.toBeInTheDocument();
+        expect(within(dialog).queryByText(/Viewers follow these settings/)).not.toBeInTheDocument();
+      });
+
+      it("the owner of a delegated Space is told viewers follow these settings", async () => {
+        vi.mocked(fetchSpace).mockResolvedValue(space({ mine: true, delegate_access: true }));
+        renderShell();
+        const dialog = await openTools();
+        expect(dialog).toHaveTextContent(
+          "Viewers follow these settings. Changing an action to Always allow asks each viewer to approve again."
+        );
+        expect(control("github_merge_pr")).toBeInTheDocument();
+      });
+
+      it("the note is absent when the owner has not delegated", async () => {
+        vi.mocked(fetchSpace).mockResolvedValue(space({ mine: true, delegate_access: false }));
+        renderShell();
+        const dialog = await openTools();
+        expect(dialog).not.toHaveTextContent("Viewers follow these settings");
+      });
     });
   });
 
@@ -619,8 +874,8 @@ describe("SpaceShell", () => {
         delegate_access: true,
         delegation_off: null,
         tools: [
-          ...space().tools.map((t) => ({ ...t, delegable: true })),
-          { name: "github_set_token", integration: "github", integrationName: "GitHub", effect: "write", connected: true, delegable: false },
+          ...space().tools.map((t) => ({ ...t, delegable: true, ...(t.approval ? { approvalEditable: false } : {}) })),
+          { name: "github_set_token", integration: "github", integrationName: "GitHub", effect: "write", connected: true, delegable: false, approval: "auto", approvalEditable: false },
         ],
         ...over,
       });

@@ -13,6 +13,8 @@ import {
   putSpaceKv,
   recordSpaceOpen,
   revokeSpaceConsent,
+  setToolApprovals,
+  type ApprovalMode,
   type DelegationOff,
   type SpaceDetail,
   type SpaceSharing,
@@ -50,6 +52,19 @@ export function unconnectedIntegrations(tools: SpaceTool[]): string[] {
   return [...names.values()];
 }
 
+/** A failed save of the approval choices: its message is shown as it is, and consent is not posted. */
+class ApprovalSaveError extends Error {}
+
+/** The tools whose chosen mode differs from the one the detail holds. */
+function changedApprovals(tools: SpaceTool[], choices: Record<string, ApprovalMode>): Record<string, ApprovalMode> {
+  const out: Record<string, ApprovalMode> = {};
+  for (const t of tools) {
+    const chosen = choices[t.name];
+    if (chosen && chosen !== t.approval && t.approvalEditable !== false) out[t.name] = chosen;
+  }
+  return out;
+}
+
 function ConsentScreen({
   space,
   onApprove,
@@ -58,11 +73,13 @@ function ConsentScreen({
   error,
 }: {
   space: SpaceDetail;
-  onApprove: () => void;
+  onApprove: (changes: Record<string, ApprovalMode>) => void;
   onCancel: () => void;
   busy: boolean;
   error: string | null;
 }) {
+  // Choices stay local until Approve.
+  const [choices, setChoices] = useState<Record<string, ApprovalMode>>({});
   // A delegated Space runs with the owner's connections, so the viewer has
   // nothing to connect and sees no connection state. An owner who is missing
   // a connection holds the viewer at a full-page card before this screen.
@@ -76,6 +93,12 @@ function ConsentScreen({
         <h1 className="space-consent-title">{space.title}</h1>
         <p className="space-muted">by {space.ownerEmail}</p>
         {space.description && <p className="space-consent-desc">{space.description}</p>}
+        {space.reconsent_reason === "approvals" && (
+          <p className="space-consent-explain" role="status">The owner changed which actions run without asking.</p>
+        )}
+        {space.reconsent_reason === "page" && (
+          <p className="space-consent-explain" role="status">This Space was updated since you approved it. Review it again.</p>
+        )}
         {delegated ? (
           <p className="space-consent-explain">
             <strong>These tools run with {space.ownerEmail}'s access, not yours.</strong> Your own connections are not
@@ -92,6 +115,8 @@ function ConsentScreen({
           tools={space.tools}
           connectHref={delegated ? undefined : (integration) => `/apps/${encodeURIComponent(integration)}`}
           hideConnection={delegated}
+          approvals={delegated ? undefined : choices}
+          onApprovalChange={delegated ? undefined : (change) => setChoices((prev) => ({ ...prev, ...change }))}
         />
         {blocked && (
           <div className="space-consent-needs" role="status">
@@ -105,7 +130,7 @@ function ConsentScreen({
         {error && <p className="ui-form-error">{error}</p>}
         <div className="space-consent-actions">
           <Button variant="outline" onClick={onCancel} disabled={busy}>Cancel</Button>
-          <Button onClick={onApprove} disabled={busy || blocked}>{busy ? "Approving..." : "Approve"}</Button>
+          <Button onClick={() => onApprove(delegated ? {} : changedApprovals(space.tools, choices))} disabled={busy || blocked}>{busy ? "Approving..." : "Approve"}</Button>
         </div>
       </div>
     </div>
@@ -144,6 +169,33 @@ function SpaceRunner({
   onDetailsSaved: (saved: { title: string; description: string | null }) => void;
 }) {
   const { user } = useAuth();
+  const queryClient = useQueryClient();
+  // Choices being saved, shown until the server's answer replaces them.
+  const [saving, setSaving] = useState<Record<string, ApprovalMode>>({});
+  const [approvalError, setApprovalError] = useState<string | null>(null);
+  // Saves run one at a time, in the order they were made, so the last answer
+  // the server gives is the last one written to the cache.
+  const saveChain = useRef<Promise<void>>(Promise.resolve());
+  const pendingSaves = useRef(0);
+  const changeApprovals = (change: Record<string, ApprovalMode>) => {
+    setApprovalError(null);
+    setSaving((prev) => ({ ...prev, ...change }));
+    pendingSaves.current += 1;
+    saveChain.current = saveChain.current.then(async () => {
+      try {
+        const saved = await setToolApprovals(space.name, change);
+        // The bridge reads the cached detail on its next call.
+        queryClient.setQueryData<SpaceDetail>(["space", space.name], (d) => (d ? { ...d, tools: saved.tools } : d));
+      } catch (e) {
+        setApprovalError(e instanceof Error ? e.message : "Could not save that change.");
+      } finally {
+        // The choices stay on screen until the last pending save has answered.
+        pendingSaves.current -= 1;
+        if (pendingSaves.current === 0) setSaving({});
+      }
+    });
+    return saveChain.current;
+  };
   const frameRef = useRef<HTMLIFrameElement>(null);
   // Fixed at mount: a refetch mints a new sig, and changing src would reload
   // the frame, which the bridge rightly treats as a navigation.
@@ -343,7 +395,18 @@ function SpaceRunner({
       <ConfirmActionModal request={pending?.request ?? null} onAllow={() => settle(true)} onDeny={() => settle(false)} />
 
       <Modal open={toolsOpen} onClose={() => setToolsOpen(false)} title="Tools this Space can use" size="lg">
-        <SpaceToolList tools={space.tools} hideConnection={runsAsOwner(space)} />
+        {space.mine && space.delegate_access && (
+          <p className="space-muted">
+            Viewers follow these settings. Changing an action to Always allow asks each viewer to approve again.
+          </p>
+        )}
+        {approvalError && <p className="ui-form-error">{approvalError}</p>}
+        <SpaceToolList
+          tools={space.tools}
+          hideConnection={runsAsOwner(space)}
+          approvals={runsAsOwner(space) ? undefined : saving}
+          onApprovalChange={runsAsOwner(space) ? undefined : (change) => void changeApprovals(change)}
+        />
       </Modal>
 
       {space.mine && detailsOpen && (
@@ -395,7 +458,17 @@ export default function SpaceShell() {
     queryClient.setQueryData<SpaceDetail>(queryKey, (d) => (d ? { ...d, consented } : d));
 
   const approve = useMutation({
-    mutationFn: () => grantSpaceConsent(name, data?.consent_hash),
+    mutationFn: async (changes: Record<string, ApprovalMode>) => {
+      if (Object.keys(changes).length > 0) {
+        try {
+          const saved = await setToolApprovals(name, changes);
+          queryClient.setQueryData<SpaceDetail>(queryKey, (d) => (d ? { ...d, tools: saved.tools } : d));
+        } catch (e) {
+          throw new ApprovalSaveError(e instanceof Error ? e.message : "Could not save your choices.");
+        }
+      }
+      await grantSpaceConsent(name, data?.consent_hash);
+    },
     // The viewer's connections, or the Space itself, changed since this page
     // loaded: show the new state.
     onError: (e) => {
@@ -494,18 +567,23 @@ export default function SpaceShell() {
   if (!data.consented) {
     return (
       <ConsentScreen
+        // A new consent_hash is a different screen: local choices made on the
+        // old one must not be sent again.
+        key={data.consent_hash ?? ""}
         space={data}
         busy={approve.isPending}
         error={
           approve.error
-            ? approve.error instanceof SpaceApiError && approve.error.code === "INTEGRATION_NOT_CONNECTED"
+            ? approve.error instanceof ApprovalSaveError
+              ? approve.error.message
+              : approve.error instanceof SpaceApiError && approve.error.code === "INTEGRATION_NOT_CONNECTED"
               ? approve.error.message
               : approve.error instanceof SpaceApiError && approve.error.code === "CONSENT_CHANGED"
                 ? "This Space changed. Review it again."
               : "Could not record your approval. Try again."
             : null
         }
-        onApprove={() => approve.mutate()}
+        onApprove={(changes) => approve.mutate(changes)}
         onCancel={() => navigate("/spaces")}
       />
     );

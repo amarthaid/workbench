@@ -12,6 +12,7 @@ import {
   recordSpaceOpen,
   revokeSpaceConsent,
   setSpaceFavorite,
+  setToolApprovals,
   updateSpaceDetails,
   updateSpaceSharing,
 } from "./spaces-api";
@@ -136,6 +137,24 @@ describe("spaces api", () => {
     expect(init.headers).toEqual({ Authorization: "Bearer tok-abc", "Content-Type": "application/json" });
     expect(JSON.parse(init.body as string)).toEqual({ add_users: ["qa@example.com"] });
     expect(saved).toEqual({ visibility: "users", users: ["qa@example.com"] });
+  });
+
+  it("setToolApprovals PUTs the changed tools with the portal bearer and returns the tool list", async () => {
+    fetchMock.mockResolvedValueOnce(respond(200, { tools: [{ name: "github_merge_pr", approval: "auto" }] }));
+    const saved = await setToolApprovals("my space", { github_merge_pr: "auto", github_comment: "ask" });
+    const { url, init } = lastCall();
+    expect(url).toBe("/api/spaces/my%20space/tool-approvals");
+    expect(init.method).toBe("PUT");
+    expect(init.headers).toEqual({ Authorization: "Bearer tok-abc", "Content-Type": "application/json" });
+    expect(JSON.parse(init.body as string)).toEqual({ tools: { github_merge_pr: "auto", github_comment: "ask" } });
+    expect(saved).toEqual({ tools: [{ name: "github_merge_pr", approval: "auto" }] });
+  });
+
+  it("setToolApprovals surfaces a refusal with its code", async () => {
+    fetchMock.mockResolvedValue(respond(403, { code: "APPROVAL_SET_BY_OWNER", message: "m" }));
+    const err = (await setToolApprovals("s1", { a: "auto" }).catch((e) => e)) as SpaceApiError;
+    expect(err).toBeInstanceOf(SpaceApiError);
+    expect(err.code).toBe("APPROVAL_SET_BY_OWNER");
   });
 
   it("updateSpaceSharing sends delegate_access with the reviewed tools_hash", async () => {

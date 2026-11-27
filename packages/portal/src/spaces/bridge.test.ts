@@ -18,7 +18,9 @@ const SPACE: SpaceDetail = {
     { name: "github_merge_pr", integration: "github", integrationName: "GitHub", effect: "destructive", connected: true },
     { name: "github_weird", integration: "github", integrationName: "GitHub", effect: "sideways", connected: true },
     { name: "github_unlabelled", integration: "github", integrationName: "GitHub", connected: true },
-    { name: "github_gone", integration: "github", integrationName: "GitHub", effect: "read", missing: true },
+    { name: "github_gone", integration: "github", integrationName: "GitHub", effect: "read", missing: true, approval: "ask", approvalEditable: false },
+    { name: "github_ask_write", integration: "github", integrationName: "GitHub", effect: "write", connected: true, approval: "ask" },
+    { name: "github_auto_delete", integration: "github", integrationName: "GitHub", effect: "destructive", connected: true, approval: "auto" },
     { name: "bitbucket_list_prs", integration: "bitbucket", integrationName: "Bitbucket", effect: "read", connected: false },
   ],
 };
@@ -224,6 +226,51 @@ describe("call", () => {
     await space.send("call", { integration: "github", tool }).reply;
     expect(opts.confirm).toHaveBeenCalledTimes(1);
     expect(api.call).toHaveBeenCalledWith({ tool: `github_${tool}`, confirmed: true });
+  });
+
+  it("asks for a write the policy sets to ask, and sends confirmed after Allow", async () => {
+    const { space, api, opts } = started();
+    const r = await space.send("call", { integration: "github", tool: "ask_write", args: { a: 1 } }).reply;
+    expect(opts.confirm).toHaveBeenCalledTimes(1);
+    expect(api.call).toHaveBeenCalledWith({ tool: "github_ask_write", args: { a: 1 }, confirmed: true });
+    expect(r.ok).toBe(true);
+  });
+
+  it("does not ask for a destructive tool the policy sets to auto", async () => {
+    const { space, api, opts } = started();
+    await space.send("call", { integration: "github", tool: "auto_delete" }).reply;
+    expect(opts.confirm).not.toHaveBeenCalled();
+    expect(api.call).toHaveBeenCalledWith({ tool: "github_auto_delete" });
+  });
+
+  it("does not ask for a read tool with no approval field", async () => {
+    const { space, api, opts } = started();
+    await space.send("call", { integration: "github", tool: "list_prs" }).reply;
+    expect(opts.confirm).not.toHaveBeenCalled();
+    expect(api.call).toHaveBeenCalledWith({ tool: "github_list_prs" });
+  });
+
+  it("on a 428 for an auto tool still asks and retries once", async () => {
+    const { space, api, opts } = started();
+    api.call
+      .mockRejectedValueOnce(new SpaceApiError(428, { code: "CONFIRMATION_REQUIRED", message: "confirm" }))
+      .mockResolvedValueOnce({ done: true });
+    const r = await space.send("call", { integration: "github", tool: "auto_delete" }).reply;
+    expect(opts.confirm).toHaveBeenCalledTimes(1);
+    expect(api.call).toHaveBeenCalledTimes(2);
+    expect(api.call.mock.calls[1][0]).toEqual({ tool: "github_auto_delete", confirmed: true });
+    expect(r).toMatchObject({ ok: true });
+  });
+
+  it.each(["setApproval", "somethingElse"])("ignores a %s message from the Space", async (type) => {
+    const { space, api, opts } = started();
+    const r = await space.send(type, { tools: { github_merge_pr: "auto" }, integration: "github", tool: "merge_pr" }).reply;
+    expect(r.ok).toBe(false);
+    expect(api.call).not.toHaveBeenCalled();
+    expect(opts.confirm).not.toHaveBeenCalled();
+    // The tool is still asked about afterwards.
+    await space.send("call", { integration: "github", tool: "merge_pr" }).reply;
+    expect(opts.confirm).toHaveBeenCalledTimes(1);
   });
 
   it("ignores a confirmed flag supplied by the Space", async () => {
