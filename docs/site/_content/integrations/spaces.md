@@ -59,6 +59,21 @@ The call rate limit (60 calls a minute per viewer per Space, shared with the KV 
 
 The owner always can. With `org`, any signed-in user can. With `users`, a viewer whose email is on the list can. Admins can list and delete every Space but cannot open one that was not shared with them: opening a Space runs its code as the viewer, which is not an admin power. Every portal endpoint answers 404 when the viewer cannot open the Space, so names cannot be probed.
 
+## Asking for access
+
+A Space shared with specific people answers 404 to everyone else, so a
+person who follows its link sees only the Space name, with no mention of whether
+it exists. They can press **Ask the owner for access**. The portal answers the same way whether or not the Space
+exists, is private or open to everyone, so the button cannot be used to find
+Spaces. If the Space is shared with specific people and has files, the owner
+gets a request (a short message from the requester, plain text) under **Requests**
+in the gallery and in the Sharing dialog. **Approve** adds the requester's email
+to the share list, exactly like adding them by hand; **Reject** keeps it as it
+was. If the Space runs with the owner's access ([delegated access](#delegated-access)),
+the Approve row says so, because approving lends those connections. Only the
+owner decides; admins have no path. A requester can send at most three requests
+per Space a day, twenty a day in total, and have five open at a time.
+
 ## Running a Space
 
 A viewer opens `/s/<name>` in the portal. The portal shell:

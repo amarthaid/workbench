@@ -74,6 +74,23 @@ The same, over the admin API (portal session of an admin only, like every `/api/
 
 An unknown capability is 400 `unknown_capability`, an unknown user 404 `user_not_found`. Each change is audited as `ADMIN_PERMISSION_SET` or `ADMIN_PERMISSION_CLEAR` with your account as the actor.
 
+## Approving new accounts
+
+By default anyone who can sign in gets an account at once. Set
+`REQUIRE_SIGNUP_APPROVAL=true` (and restart) to hold new accounts instead: a
+first-time sign-in creates the account as **pending**, and the person sees
+"waiting for an admin to approve" on the login page. A pending account cannot use
+the portal, an API key, an agent connection or any OAuth grant.
+
+Pending accounts appear under **Admin, Approvals** with a count. **Approve**
+activates the account; **Reject** keeps it blocked and can carry a note. A
+rejected person can ask again 24 hours after their last request. **Disable** on
+the Users tab is the permanent no. Approving from the Users tab (the **Approve**
+button on a pending row) does the same thing.
+
+Admins (anyone on `ADMIN_EMAILS`) are never held, so there is always someone who
+can approve. Turning the setting on does not change existing accounts.
+
 ## Instance config
 
 The **Config** tab holds three instance-wide settings:
