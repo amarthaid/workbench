@@ -160,6 +160,16 @@ const SQLITE_SCHEMA = `
     PRIMARY KEY (space_name, user_id)
   );
 
+  CREATE TABLE IF NOT EXISTS space_user_state (
+    space_name TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    favorited_at INTEGER,
+    last_opened_at INTEGER,
+    PRIMARY KEY (space_name, user_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_space_user_state_user ON space_user_state(user_id);
+
   CREATE TABLE IF NOT EXISTS space_kv (
     space_name TEXT NOT NULL,
     user_id TEXT NOT NULL,
@@ -322,6 +332,16 @@ const POSTGRES_SCHEMA = `
     granted_at BIGINT NOT NULL,
     PRIMARY KEY (space_name, user_id)
   );
+
+  CREATE TABLE IF NOT EXISTS space_user_state (
+    space_name TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    favorited_at BIGINT,
+    last_opened_at BIGINT,
+    PRIMARY KEY (space_name, user_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_space_user_state_user ON space_user_state(user_id);
 
   CREATE TABLE IF NOT EXISTS space_kv (
     space_name TEXT NOT NULL,

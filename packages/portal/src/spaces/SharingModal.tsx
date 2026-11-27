@@ -52,8 +52,8 @@ function saveErrorMessage(e: unknown, choice: SpaceVisibility): string {
 
 interface SharingProps {
   open: boolean;
-  /** The owner's view of the Space, as the page has it. */
-  space: SpaceDetail;
+  /** Which Space; it is read again on open, so a name is all that is needed. */
+  space: Pick<SpaceDetail, "name">;
   onClose: () => void;
   onSaved: (sharing: SpaceSharing) => void;
 }
@@ -136,7 +136,7 @@ interface FormModel {
   confirmTools: () => void;
 }
 
-function SharingForm({ space, onClose, onSaved }: Omit<SharingProps, "open">) {
+function SharingForm({ space, onClose, onSaved }: Omit<SharingProps, "open" | "space"> & { space: SpaceDetail }) {
   const open = true;
   const visibility = space.visibility;
   const users = space.users ?? [];

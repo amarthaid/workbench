@@ -22,10 +22,21 @@ vi.mock("../spaces-api", async (importOriginal) => {
     putSpaceKv: vi.fn(async () => undefined),
     deleteSpaceKv: vi.fn(async () => undefined),
     updateSpaceSharing: vi.fn(),
+    updateSpaceDetails: vi.fn(),
+    recordSpaceOpen: vi.fn(async () => undefined),
   };
 });
 
-import { SpaceApiError, callSpaceTool, fetchSpace, grantSpaceConsent, revokeSpaceConsent, updateSpaceSharing } from "../spaces-api";
+import {
+  SpaceApiError,
+  callSpaceTool,
+  fetchSpace,
+  grantSpaceConsent,
+  recordSpaceOpen,
+  revokeSpaceConsent,
+  updateSpaceDetails,
+  updateSpaceSharing,
+} from "../spaces-api";
 
 function space(overrides: Partial<SpaceDetail> = {}): SpaceDetail {
   return {
@@ -240,6 +251,45 @@ describe("SpaceShell", () => {
       fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
       expect(await screen.findByRole("heading", { name: "Gallery" })).toBeInTheDocument();
       expect(grantSpaceConsent).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("opening and editing details", () => {
+    it("tells the server once when the Space is on screen", async () => {
+      renderShell();
+      await frame();
+      expect(recordSpaceOpen).toHaveBeenCalledTimes(1);
+      expect(recordSpaceOpen).toHaveBeenCalledWith("pr-timeline");
+    });
+
+    it("does not count the consent screen as an open", async () => {
+      vi.mocked(fetchSpace).mockResolvedValue(space({ consented: false }));
+      renderShell();
+      await screen.findByRole("button", { name: "Approve" });
+      expect(recordSpaceOpen).not.toHaveBeenCalled();
+    });
+
+    it("offers Edit details to the owner only", async () => {
+      renderShell();
+      await frame();
+      fireEvent.click(screen.getByRole("button", { name: "Menu" }));
+      expect(screen.queryByRole("menuitem", { name: "Edit details" })).not.toBeInTheDocument();
+    });
+
+    it("saves a new title and description, and the bar shows it", async () => {
+      vi.mocked(fetchSpace).mockResolvedValue(space({ mine: true }));
+      vi.mocked(updateSpaceDetails).mockResolvedValue({ title: "PR overview", description: "All of them", updatedAt: 1 });
+      renderShell();
+      await frame();
+      fireEvent.click(screen.getByRole("button", { name: "Menu" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Edit details" }));
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.change(within(dialog).getByLabelText("Title"), { target: { value: "PR overview" } });
+      fireEvent.change(within(dialog).getByLabelText("Description"), { target: { value: "All of them" } });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(updateSpaceDetails).toHaveBeenCalledWith("pr-timeline", { title: "PR overview", description: "All of them" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(await screen.findByText("PR overview")).toBeInTheDocument();
     });
   });
 

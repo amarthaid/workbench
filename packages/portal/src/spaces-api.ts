@@ -16,6 +16,17 @@ export interface SpaceSummary {
   /** Epoch ms. */
   updatedAt: number;
   mine: boolean;
+  /** I marked it as a favorite. */
+  favorited: boolean;
+  /**
+   * How many people have, among those who can still open it. Always 0 for a
+   * private Space, where only its owner could have.
+   */
+  favorite_count: number;
+  /** Epoch ms I last opened it, null when I never have. */
+  last_opened_at: number | null;
+  /** Owner only: people other than you who opened it in the last 30 days. Absent when it could point at individuals. */
+  viewers_30d?: number;
   /** Owner: the stored setting. Anyone else: whether it is in effect. */
   delegate_access?: boolean;
   /** On, but paused until the owner confirms a changed tool list. */
@@ -217,6 +228,34 @@ export interface SpaceSharingChange {
 }
 
 /** Owner only. add_users / remove_users leave everyone else on the list. */
+export interface SpaceDetailsChange {
+  title?: string;
+  /** Empty clears it. */
+  description?: string;
+}
+
+/** Owner only: the title and description, without opening the Space. */
+export function updateSpaceDetails(
+  name: string,
+  change: SpaceDetailsChange
+): Promise<{ title: string; description: string | null; updatedAt: number }> {
+  return request(`/api/spaces/${seg(name)}`, { method: "PATCH", body: change });
+}
+
+/** Mark or unmark a Space as a favorite; answers the new state and how many people have. */
+export function setSpaceFavorite(name: string, on: boolean): Promise<{ favorited: boolean; favorite_count: number }> {
+  return request(`/api/spaces/${seg(name)}/favorite`, { method: on ? "PUT" : "DELETE" });
+}
+
+/** Tell the server the shell opened this Space. Best effort: a failure changes nothing for the viewer. */
+export async function recordSpaceOpen(name: string): Promise<void> {
+  try {
+    await request(`/api/spaces/${seg(name)}/open`, { method: "POST" });
+  } catch {
+    /* only used to order the gallery */
+  }
+}
+
 export function updateSpaceSharing(name: string, change: SpaceSharingChange): Promise<SpaceSharing> {
   return request<SpaceSharing>(`/api/spaces/${seg(name)}/sharing`, { method: "PATCH", body: change });
 }
