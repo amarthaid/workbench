@@ -183,6 +183,9 @@ describe("GET /api/spaces", () => {
       visibility: "users",
       updatedAt: 1,
       mine: false,
+      favorited: false,
+      favorite_count: 0,
+      last_opened_at: null,
       delegate_access: false,
       delegation_suspended: false,
     });
@@ -315,6 +318,205 @@ describe("PATCH /api/spaces/:name/sharing", () => {
     expect(anon.statusCode).toBe(401);
     expect(await shares()).toEqual(["qa@example.com"]);
     expect((await getSpace("s1"))!.visibility).toBe("users");
+  });
+});
+
+describe("favorites", () => {
+  const fav = (user: string, method: "PUT" | "DELETE", name = "s1") =>
+    app.inject({ method, url: `/api/spaces/${name}/favorite`, headers: as(user) });
+  const row = async (user: string, name = "s1") =>
+    ((await app.inject({ method: "GET", url: "/api/spaces", headers: as(user) })).json().spaces as any[]).find((s) => s.name === name);
+
+  it("PUT marks, DELETE unmarks, both idempotent, and the count is people not clicks", async () => {
+    expect((await fav("u2", "PUT")).json()).toEqual({ favorited: true, favorite_count: 1 });
+    expect((await fav("u2", "PUT")).json()).toEqual({ favorited: true, favorite_count: 1 });
+    expect((await fav("u1", "PUT")).json()).toEqual({ favorited: true, favorite_count: 2 });
+    expect((await fav("u2", "DELETE")).json()).toEqual({ favorited: false, favorite_count: 1 });
+    expect((await fav("u2", "DELETE")).json()).toEqual({ favorited: false, favorite_count: 1 });
+  });
+
+  it("the list says whether I favorited it and how many people did, never who", async () => {
+    await fav("u2", "PUT");
+    await fav("u1", "PUT");
+    expect(await row("u2")).toMatchObject({ favorited: true, favorite_count: 2 });
+    await fav("u2", "DELETE");
+    const after = await row("u2");
+    expect(after).toMatchObject({ favorited: false, favorite_count: 1 });
+    expect(JSON.stringify(after)).not.toContain("u1");
+  });
+
+  it("is 404 for someone who cannot open the Space, so a name cannot be probed", async () => {
+    expect((await fav("u3", "PUT")).statusCode).toBe(404);
+    expect((await fav("u3", "DELETE")).statusCode).toBe(404);
+    expect((await fav("u2", "PUT", "nope")).statusCode).toBe(404);
+  });
+
+  it("stops counting someone who lost access, and counts them again if they get it back", async () => {
+    await fav("u2", "PUT");
+    await fav("u1", "PUT");
+    expect((await row("u1")).favorite_count).toBe(2);
+    await setShares("s1", "u1", ["ops@example.com"]);
+    expect((await row("u1")).favorite_count).toBe(1);
+    await setShares("s1", "u1", ["qa@example.com", "ops@example.com"]);
+    expect((await row("u1")).favorite_count).toBe(2);
+  });
+
+  it("matches the share list by lowercased email, as it is stored", async () => {
+    await db.run("UPDATE users SET email = ? WHERE id = ?", ["QA@Example.com", "u2"]);
+    await fav("u2", "PUT");
+    expect((await row("u2")).favorite_count).toBe(1);
+  });
+
+  it("an everyone-signed-in Space counts everyone, and a private one shows no count", async () => {
+    await upsertSpace({ name: "open", ownerId: "u1", title: "Open", tools: [], visibility: "org" });
+    writeSpaceFiles(tmp, "open", { "index.html": "x" });
+    await upsertSpace({ name: "solo", ownerId: "u1", title: "Solo", tools: [], visibility: "private" });
+    writeSpaceFiles(tmp, "solo", { "index.html": "x" });
+    await fav("u2", "PUT", "open");
+    await fav("u3", "PUT", "open");
+    await fav("u1", "PUT", "solo");
+    expect((await row("u1", "open")).favorite_count).toBe(2);
+    const solo = await row("u1", "solo");
+    expect(solo.favorited).toBe(true);
+    expect(solo.favorite_count).toBe(0);
+  });
+
+  it("is removed when the Space is deleted, so a new Space with the name starts clean", async () => {
+    await fav("u2", "PUT");
+    const { deleteSpace } = await import("../../src/spaces/store");
+    await deleteSpace("s1");
+    const left = await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM space_user_state WHERE space_name = ?", ["s1"]);
+    expect(Number(left!.n)).toBe(0);
+  });
+});
+
+describe("opens", () => {
+  const open = (user: string, name = "s1") => app.inject({ method: "POST", url: `/api/spaces/${name}/open`, headers: as(user) });
+  const row = async (user: string, name = "s1") =>
+    ((await app.inject({ method: "GET", url: "/api/spaces", headers: as(user) })).json().spaces as any[]).find((s) => s.name === name);
+
+  it("records the time for someone who approved the tool list, and nothing for someone who has not", async () => {
+    expect((await open("u2")).json()).toEqual({ recorded: false });
+    expect((await row("u2")).last_opened_at).toBeNull();
+    await consent("u2");
+    expect((await open("u2")).json()).toEqual({ recorded: true });
+    expect(typeof (await row("u2")).last_opened_at).toBe("number");
+  });
+
+  it("is 404 without access", async () => {
+    expect((await open("u3")).statusCode).toBe(404);
+    expect((await open("u2", "nope")).statusCode).toBe(404);
+  });
+
+  it("is per person: one person's open does not mark it opened for another", async () => {
+    await consent("u2");
+    await open("u2");
+    expect((await row("u1")).last_opened_at).toBeNull();
+  });
+
+  describe("how many people used a Space, shown to its owner", () => {
+    const seed = async (name: string, visibility: "org" | "users", openers: number) => {
+      await upsertSpace({ name, ownerId: "u1", title: name, tools: [], visibility });
+      writeSpaceFiles(tmp, name, { "index.html": "x" });
+      const emails: string[] = [];
+      for (let i = 0; i < openers; i++) {
+        const id = `${name}-p${i}`;
+        await seedUser(id, `${id}@example.com`);
+        emails.push(`${id}@example.com`);
+        await db.run("INSERT INTO space_user_state (space_name, user_id, favorited_at, last_opened_at) VALUES (?, ?, NULL, ?)", [name, id, Date.now() - 1000]);
+      }
+      if (visibility === "users") await setShares(name, "u1", emails);
+    };
+    const viewers = async (name: string) => (await app.inject({ method: "GET", url: "/api/spaces", headers: as("u1") })).json().spaces.find((s: any) => s.name === name);
+
+    it("an everyone-signed-in Space shows the number at any size", async () => {
+      await seed("wide", "org", 2);
+      expect((await viewers("wide")).viewers_30d).toBe(2);
+    });
+
+    it("a shared Space shows nothing under the floor, so a small list cannot reveal who opened it", async () => {
+      await seed("small", "users", 4);
+      expect((await viewers("small")).viewers_30d).toBeUndefined();
+      await seed("big", "users", 5);
+      expect((await viewers("big")).viewers_30d).toBe(5);
+    });
+
+    it("leaves out the owner, people who stopped having access, and opens older than 30 days", async () => {
+      await seed("mixed", "users", 6);
+      await db.run("INSERT INTO space_user_state (space_name, user_id, favorited_at, last_opened_at) VALUES (?, ?, NULL, ?)", ["mixed", "u1", Date.now()]);
+      await db.run("UPDATE space_user_state SET last_opened_at = ? WHERE space_name = ? AND user_id = ?", [Date.now() - 31 * 86400000, "mixed", "mixed-p0"]);
+      await setShares("mixed", "u1", ["mixed-p0@example.com", "mixed-p1@example.com", "mixed-p2@example.com", "mixed-p3@example.com", "mixed-p4@example.com"]);
+      // p0 is stale, p5 lost access, the owner never counts: p1..p4 remain, under the floor.
+      expect((await viewers("mixed")).viewers_30d).toBeUndefined();
+      await setShares("mixed", "u1", ["mixed-p1@example.com", "mixed-p2@example.com", "mixed-p3@example.com", "mixed-p4@example.com", "mixed-p5@example.com"]);
+      expect((await viewers("mixed")).viewers_30d).toBe(5);
+    });
+
+    it("is never shown to anyone but the owner", async () => {
+      await seed("wide2", "org", 3);
+      const asViewer = (await app.inject({ method: "GET", url: "/api/spaces", headers: as("u2") })).json().spaces.find((s: any) => s.name === "wide2");
+      expect(asViewer.viewers_30d).toBeUndefined();
+    });
+  });
+});
+
+describe("PATCH /api/spaces/:name (title and description)", () => {
+  const patch = (user: string, body: unknown, name = "s1") =>
+    app.inject({ method: "PATCH", url: `/api/spaces/${name}`, headers: as(user), payload: body as any });
+
+  it("the owner changes title and description, trimmed, and nothing else", async () => {
+    const before = await getSpace("s1");
+    const res = await patch("u1", { title: "  Better items  ", description: "  About them  " });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ title: "Better items", description: "About them" });
+    const after = await getSpace("s1");
+    expect(after).toMatchObject({ title: "Better items", description: "About them", visibility: "users" });
+    expect(after!.tools).toEqual(before!.tools);
+  });
+
+  it("does not count as the Space being updated, but a new tool list does", async () => {
+    await db.run("UPDATE spaces SET updated_at = ? WHERE name = ?", [1000, "s1"]);
+    await patch("u1", { title: "Renamed" });
+    expect((await getSpace("s1"))!.updatedAt).toBe(1000);
+    await app.inject({ method: "PATCH", url: "/api/spaces/s1/sharing", headers: as("u1"), payload: { visibility: "org" } });
+    expect((await getSpace("s1"))!.updatedAt).toBe(1000);
+    await updateSpaceMeta("s1", "u1", { tools: [...TOOLS, "acme_extra"] });
+    expect((await getSpace("s1"))!.updatedAt).toBeGreaterThan(1000);
+  });
+
+  it("a title alone leaves the description, and an empty description clears it", async () => {
+    expect((await patch("u1", { title: "Only title" })).json().description).toBe("d");
+    expect((await patch("u1", { description: "   " })).json().description).toBeNull();
+    expect((await getSpace("s1"))!.description).toBeNull();
+  });
+
+  it("does not ask viewers to approve again: the consent hash is about tools", async () => {
+    await consent("u2");
+    await patch("u1", { title: "Renamed" });
+    const detail = (await app.inject({ method: "GET", url: "/api/spaces/s1", headers: as("u2") })).json();
+    expect(detail.consented).toBe(true);
+    expect(detail.title).toBe("Renamed");
+  });
+
+  it("is owner only: another viewer gets 403, someone with no access 404", async () => {
+    expect((await patch("u2", { title: "Mine now" })).statusCode).toBe(403);
+    expect((await patch("u3", { title: "Mine now" })).statusCode).toBe(404);
+    expect((await getSpace("s1"))!.title).toBe("Items");
+  });
+
+  it.each([
+    [{}, "INVALID_ARGS"],
+    [{ title: "" }, "INVALID_TITLE"],
+    [{ title: "   " }, "INVALID_TITLE"],
+    [{ title: 5 }, "INVALID_TITLE"],
+    [{ title: "x".repeat(121) }, "INVALID_TITLE"],
+    [{ description: 5 }, "INVALID_DESCRIPTION"],
+    [{ description: "x".repeat(1001) }, "INVALID_DESCRIPTION"],
+  ])("rejects %j with %s", async (body, code) => {
+    const res = await patch("u1", body);
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code).toBe(code);
+    expect((await getSpace("s1"))!.title).toBe("Items");
   });
 });
 

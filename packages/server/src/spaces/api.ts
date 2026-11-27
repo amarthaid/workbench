@@ -18,6 +18,8 @@ import {
   getShares,
   getSpace,
   consentHash,
+  distinctOpeners,
+  favoriteCounts,
   grantConsent,
   hasConsent,
   hasFiles,
@@ -28,9 +30,13 @@ import {
   kvPut,
   listAllSpaces,
   ownerEmailOf,
+  OPENERS_FLOOR,
   parseEmails,
+  recordOpen,
   revokeConsent,
+  setFavorite,
   toolsHash,
+  userSpaceStates,
   updateSpaceMeta,
   type Space,
   type Visibility,
@@ -52,6 +58,14 @@ function viewerOf(request: object): Viewer {
   if (!v) throw new Error("viewerOf called outside the spaces scope");
   return v;
 }
+
+const OPENED_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+function openersShown(visibility: Visibility, n: number | undefined): boolean {
+  return n !== undefined && (visibility === "org" || n >= OPENERS_FLOOR);
+}
+
+const MAX_TITLE = 120;
+const MAX_DESCRIPTION = 1000;
 
 interface ErrorBody {
   code: string;
@@ -193,6 +207,11 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
         const out = [];
         // One permission read per request, only when the viewer owns a delegated Space.
         let ownerCan: boolean | undefined;
+        const [states, favoriteTotals, openers] = await Promise.all([
+          userSpaceStates(viewer.userId),
+          favoriteCounts(),
+          distinctOpeners(viewer.userId, Date.now() - OPENED_WINDOW_MS),
+        ]);
         for (const s of await listAllSpaces()) {
           if (!hasFiles(s.name)) continue;
           if (!(await canView(s, viewer))) continue;
@@ -212,6 +231,13 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
             visibility: s.visibility,
             updatedAt: s.updatedAt,
             mine,
+            favorited: states.get(s.name)?.favorited ?? false,
+            favorite_count: favoriteTotals.get(s.name) ?? 0,
+            last_opened_at: states.get(s.name)?.lastOpenedAt ?? null,
+            // Owner only, and only when it cannot point at individuals.
+            ...(mine && openersShown(s.visibility, openers.get(s.name))
+              ? { viewers_30d: openers.get(s.name) as number }
+              : {}),
             delegate_access: mine ? s.accessMode === "owner" : delegation?.mode === "owner",
             delegation_suspended: mine
               ? delegationSuspended(s)
@@ -312,6 +338,80 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
       // 'users' Space cannot be left with nobody on it. A viewer who is not the
       // owner gets the same 404 as for a Space they cannot see, or 403 when they
       // can open it but do not own it.
+      // Favorites: one person's mark, used to order their own gallery. Anyone who
+      // can open the Space may mark it; the count is how many people have.
+      for (const on of [true, false]) {
+        scope.route<{ Params: { name: string } }>({
+          method: on ? "PUT" : "DELETE",
+          url: "/:name/favorite",
+          handler: async (request, reply) => {
+            const viewer = viewerOf(request);
+            const space = await openable(request.params.name, viewer);
+            if (!space) return notFound(reply);
+            await setFavorite(space.name, viewer.userId, on);
+            return { favorited: on, favorite_count: (await favoriteCounts(space.name)).get(space.name) ?? 0 };
+          },
+        });
+      }
+
+      // The shell reports that it mounted the Space. This, not a request for the
+      // Space's files, is what counts as an open: the files route only checks a
+      // signature, cannot tell an open from a reload, and does not look at access
+      // or consent. Only a person who has approved the tool list is recorded.
+      scope.post<{ Params: { name: string } }>("/:name/open", async (request, reply) => {
+        const viewer = viewerOf(request);
+        const space = await openable(request.params.name, viewer);
+        if (!space) return notFound(reply);
+        if (!(await hasConsent(space, viewer.userId))) return { recorded: false };
+        await recordOpen(space.name, viewer.userId);
+        return { recorded: true };
+      });
+
+      // Owner-only title and description, so the portal can edit them without
+      // opening the Space. The tool list stays with the agent: changing it asks
+      // every viewer to approve again, which this route must not do silently.
+      scope.patch<{ Params: { name: string }; Body: { title?: unknown; description?: unknown } }>("/:name", async (request, reply) => {
+        const viewer = viewerOf(request);
+        const space = await openable(request.params.name, viewer);
+        if (!space) return notFound(reply);
+        if (space.ownerId !== viewer.userId) {
+          return fail(reply, 403, { code: "FORBIDDEN", message: "Only the owner can edit this Space." });
+        }
+        const body = (request.body ?? {}) as { title?: unknown; description?: unknown };
+        let title: string | undefined;
+        if (body.title !== undefined) {
+          if (typeof body.title !== "string" || body.title.trim() === "") {
+            return fail(reply, 400, { code: "INVALID_TITLE", message: "A Space needs a title." });
+          }
+          if (body.title.trim().length > MAX_TITLE) {
+            return fail(reply, 400, { code: "INVALID_TITLE", message: `Keep the title to ${MAX_TITLE} characters or fewer.` });
+          }
+          title = body.title.trim();
+        }
+        let description: string | null | undefined;
+        if (body.description !== undefined) {
+          if (body.description !== null && typeof body.description !== "string") {
+            return fail(reply, 400, { code: "INVALID_DESCRIPTION", message: "description must be text." });
+          }
+          const text = typeof body.description === "string" ? body.description.trim() : "";
+          if (text.length > MAX_DESCRIPTION) {
+            return fail(reply, 400, { code: "INVALID_DESCRIPTION", message: `Keep the description to ${MAX_DESCRIPTION} characters or fewer.` });
+          }
+          description = text === "" ? null : text;
+        }
+        if (title === undefined && description === undefined) {
+          return fail(reply, 400, { code: "INVALID_ARGS", message: "Send a title or a description." });
+        }
+        const updated = await updateSpaceMeta(space.name, viewer.userId, { title, description });
+        if (updated === "conflict") {
+          return fail(reply, 409, { code: "CONFLICT", message: "This Space changed meanwhile. Try again." });
+        }
+        if (!updated || updated === "tools_changed") {
+          return fail(reply, 403, { code: "FORBIDDEN", message: "Only the owner can edit this Space." });
+        }
+        return { title: updated.space.title, description: updated.space.description, updatedAt: updated.space.updatedAt };
+      });
+
       scope.patch<{
         Params: { name: string };
         Body: { visibility?: unknown; add_users?: unknown; remove_users?: unknown; delegate_access?: unknown; tools_hash?: unknown };

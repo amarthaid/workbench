@@ -236,8 +236,11 @@ export async function updateSpaceMeta(name: string, ownerId: string, patch: Spac
     description: patch.description === undefined ? cur.description : patch.description,
     tools: patch.tools ? normalizeTools(patch.tools) : cur.tools,
     visibility: patch.visibility ?? cur.visibility,
-    updatedAt: now(),
+    updatedAt: cur.updatedAt,
   };
+  // updated_at is "the Space itself changed": a new tool list counts, a new
+  // title, description or audience does not (see the note on OPENERS_FLOOR).
+  if (toolsHash(next.tools) !== toolsHash(cur.tools)) next.updatedAt = now();
   if (patch.confirmDelegation) {
     const expected = patch.expectedToolsHash;
     if (!expected || expected !== toolsHash(cur.tools) || expected !== toolsHash(next.tools)) return "tools_changed";
@@ -585,8 +588,117 @@ export async function deleteSpace(name: string): Promise<void> {
   await db.transaction(async (tx) => {
     await tx.run("DELETE FROM space_kv WHERE space_name = ?", [name]);
     await tx.run("DELETE FROM space_consents WHERE space_name = ?", [name]);
+    await tx.run("DELETE FROM space_user_state WHERE space_name = ?", [name]);
     await tx.run("DELETE FROM space_shares WHERE space_name = ?", [name]);
     await tx.run("DELETE FROM spaces WHERE name = ?", [name]);
   });
   if (isValidSpaceName(name)) fs.rmSync(spaceDir(name), { recursive: true, force: true });
 }
+
+// ---- per-person state: favorites and last opened -----------------------------
+// One row per (Space, person). A favorite orders that person's own gallery and
+// is counted on the tile; last_opened_at drives their "recently opened" order,
+// the "new for you" mark and, for the owner, how many people have used it.
+
+/** Mark or unmark `name` as a favorite of `userId`. Idempotent either way. */
+export async function setFavorite(name: string, userId: string, on: boolean): Promise<void> {
+  if (on) {
+    // COALESCE keeps the first time, so favoriting twice does not move it.
+    await db.run(
+      `INSERT INTO space_user_state (space_name, user_id, favorited_at, last_opened_at) VALUES (?, ?, ?, NULL)
+       ON CONFLICT (space_name, user_id) DO UPDATE SET
+         favorited_at = COALESCE(space_user_state.favorited_at, excluded.favorited_at)`,
+      [name, userId, now()]
+    );
+  } else {
+    await db.run("UPDATE space_user_state SET favorited_at = NULL WHERE space_name = ? AND user_id = ?", [name, userId]);
+  }
+}
+
+/** Record that `userId` opened `name` now. Idempotent: it only moves the time forward. */
+export async function recordOpen(name: string, userId: string): Promise<void> {
+  await db.run(
+    `INSERT INTO space_user_state (space_name, user_id, favorited_at, last_opened_at) VALUES (?, ?, NULL, ?)
+     ON CONFLICT (space_name, user_id) DO UPDATE SET last_opened_at = excluded.last_opened_at`,
+    [name, userId, now()]
+  );
+}
+
+export interface UserSpaceState {
+  favorited: boolean;
+  /** Epoch ms, null when never opened. */
+  lastOpenedAt: number | null;
+}
+
+/** `userId`'s state for every Space they have a row for. */
+export async function userSpaceStates(userId: string): Promise<Map<string, UserSpaceState>> {
+  const rows = await db.all<{ space_name: string; favorited_at: number | string | null; last_opened_at: number | string | null }>(
+    "SELECT space_name, favorited_at, last_opened_at FROM space_user_state WHERE user_id = ?",
+    [userId]
+  );
+  return new Map(
+    rows.map((r) => [
+      r.space_name,
+      {
+        favorited: r.favorited_at !== null,
+        lastOpenedAt: r.last_opened_at === null ? null : Number(r.last_opened_at),
+      },
+    ])
+  );
+}
+
+// Who still counts for a Space: its owner, anyone when it is open to everyone
+// signed in, and for a shared one only the people still on the list (matched by
+// the lowercased email, which is how shares are stored). Someone removed from
+// the list stops counting but keeps their row, so re-sharing brings it back.
+const STILL_COUNTS = `(
+  s.visibility = 'org'
+  OR st.user_id = s.owner_id
+  OR (s.visibility = 'users' AND EXISTS (
+    SELECT 1 FROM space_shares sh JOIN users u ON LOWER(u.email) = sh.email
+    WHERE sh.space_name = s.name AND u.id = st.user_id))
+)`;
+
+/**
+ * How many people have favorited each Space (absent means none), over people
+ * who can still open it. A private Space is left out: the only person who can
+ * have favorited it is its owner. Pass `name` for one Space.
+ */
+export async function favoriteCounts(name?: string): Promise<Map<string, number>> {
+  const rows = await db.all<{ space_name: string; n: number | string }>(
+    `SELECT st.space_name AS space_name, COUNT(*) AS n
+       FROM space_user_state st JOIN spaces s ON s.name = st.space_name
+      WHERE st.favorited_at IS NOT NULL AND s.visibility <> 'private' AND ${STILL_COUNTS}
+        ${name === undefined ? "" : "AND st.space_name = ?"}
+      GROUP BY st.space_name`,
+    name === undefined ? [] : [name]
+  );
+  return new Map(rows.map((r) => [r.space_name, Number(r.n)]));
+}
+
+/**
+ * How many people other than the owner opened each of `ownerId`'s Spaces since
+ * `sinceMs`, over people who can still open it. One count per person however
+ * often they opened it, so reloads and a heavy user do not inflate it.
+ */
+export async function distinctOpeners(ownerId: string, sinceMs: number): Promise<Map<string, number>> {
+  const rows = await db.all<{ space_name: string; n: number | string }>(
+    `SELECT st.space_name AS space_name, COUNT(*) AS n
+       FROM space_user_state st JOIN spaces s ON s.name = st.space_name
+      WHERE s.owner_id = ? AND st.user_id <> s.owner_id AND st.last_opened_at >= ? AND ${STILL_COUNTS}
+      GROUP BY st.space_name`,
+    [ownerId, sinceMs]
+  );
+  return new Map(rows.map((r) => [r.space_name, Number(r.n)]));
+}
+
+/**
+ * An owner is shown the number of people who opened a Space only when it
+ * cannot point at individuals: it is open to everyone signed in, or enough
+ * people opened it. On a Space shared with three, "2 opened it" is "who".
+ */
+export const OPENERS_FLOOR = 5;
+
+// A portal edit of the title, description or audience is not an update to the
+// Space itself, so it must not move updated_at (that is what "updated since you
+// last opened" reads). Changing the tool list does.

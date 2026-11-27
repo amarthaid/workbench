@@ -9,7 +9,10 @@ import {
   fetchSpaces,
   grantSpaceConsent,
   putSpaceKv,
+  recordSpaceOpen,
   revokeSpaceConsent,
+  setSpaceFavorite,
+  updateSpaceDetails,
   updateSpaceSharing,
 } from "./spaces-api";
 
@@ -81,6 +84,47 @@ describe("spaces api", () => {
     const err = (await grantSpaceConsent("s", "old").catch((e) => e)) as SpaceApiError;
     expect(err.status).toBe(409);
     expect(err.code).toBe("CONSENT_CHANGED");
+  });
+
+  it("setSpaceFavorite is a bodyless PUT to mark and DELETE to unmark, and returns the new state", async () => {
+    fetchMock.mockResolvedValueOnce(respond(200, { favorited: true, favorite_count: 3 }));
+    expect(await setSpaceFavorite("my space", true)).toEqual({ favorited: true, favorite_count: 3 });
+    let { url, init } = lastCall();
+    expect(url).toBe("/api/spaces/my%20space/favorite");
+    expect(init.method).toBe("PUT");
+    expect(init.headers).toEqual({ Authorization: "Bearer tok-abc" });
+    expect(init.body).toBeUndefined();
+
+    fetchMock.mockResolvedValueOnce(respond(200, { favorited: false, favorite_count: 2 }));
+    await setSpaceFavorite("my space", false);
+    ({ url, init } = lastCall());
+    expect(init.method).toBe("DELETE");
+  });
+
+  it("updateSpaceDetails PATCHes title and description to the Space itself, not /sharing", async () => {
+    fetchMock.mockResolvedValueOnce(respond(200, { title: "T", description: null, updatedAt: 5 }));
+    const saved = await updateSpaceDetails("my space", { title: "T", description: "" });
+    const { url, init } = lastCall();
+    expect(url).toBe("/api/spaces/my%20space");
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(init.body as string)).toEqual({ title: "T", description: "" });
+    expect(saved).toEqual({ title: "T", description: null, updatedAt: 5 });
+  });
+
+  it("updateSpaceDetails surfaces a refusal with its code", async () => {
+    fetchMock.mockResolvedValueOnce(respond(400, { code: "INVALID_TITLE", message: "A Space needs a title." }));
+    await expect(updateSpaceDetails("s", { title: "" })).rejects.toMatchObject({ status: 400, code: "INVALID_TITLE" });
+  });
+
+  it("recordSpaceOpen POSTs and never throws, since it only orders the gallery", async () => {
+    await recordSpaceOpen("my space");
+    const { url, init } = lastCall();
+    expect(url).toBe("/api/spaces/my%20space/open");
+    expect(init.method).toBe("POST");
+    fetchMock.mockResolvedValueOnce(respond(500, { code: "UPSTREAM_ERROR", message: "boom" }));
+    await expect(recordSpaceOpen("s")).resolves.toBeUndefined();
+    fetchMock.mockRejectedValueOnce(new Error("offline"));
+    await expect(recordSpaceOpen("s")).resolves.toBeUndefined();
   });
 
   it("updateSpaceSharing PATCHes the change and returns the saved settings", async () => {

@@ -88,3 +88,22 @@ export function PlusIcon() {
     </svg>
   );
 }
+
+/** A heart. `filled` is the marked state; the outline is the unmarked one. */
+export function HeartIcon({ filled = false }: { filled?: boolean }) {
+  return (
+    <svg {...svgProps} fill={filled ? "currentColor" : "none"}>
+      <path d="M8 13.5S2 10 2 5.9A3.4 3.4 0 0 1 8 4a3.4 3.4 0 0 1 6 1.9C14 10 8 13.5 8 13.5z" />
+    </svg>
+  );
+}
+
+export function MoreIcon() {
+  return (
+    <svg {...svgProps} fill="currentColor" stroke="none">
+      <circle cx="3.5" cy="8" r="1.3" />
+      <circle cx="8" cy="8" r="1.3" />
+      <circle cx="12.5" cy="8" r="1.3" />
+    </svg>
+  );
+}

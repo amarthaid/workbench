@@ -136,14 +136,32 @@ Cache-Control: private, no-store
 > [!WARNING] Exfiltration-resistant, not exfiltration-proof
 > A sandboxed frame can still navigate itself to an outside URL and put data in it. The shell stops a Space that navigates (and a navigated document never gets the bridge port), but whatever was in the URL has left. DNS prefetch is not governed by CSP either. Mitigations: authors are signed-in members, consent lists every tool, every call is audited, and admins can delete any Space.
 
+## The gallery
+
+The portal's **Spaces** page orders itself around the person looking at it, because Spaces matter unequally to different people.
+
+- **Favorites** come first, as large tiles. The heart on a tile marks or unmarks it. More than six favorites still show, but the extra ones as compact tiles, so a long list does not push everything else off screen.
+- **Recently opened** is the last four Spaces you opened that are not favorites.
+- **All Spaces** is the rest, most recently updated first. A Space someone else shared that was updated in the last 14 days and that you have never opened carries **New**.
+- Search matches the title, description, owner and name. **Mine** and **Shared with me** narrow the list.
+
+Order never depends on how popular a Space is. A popularity order would put Spaces open to everyone at the top for everybody, and would keep whatever is already on top there. Each tile gets a generated cover from the Space's name (not its title, so a rename does not change it) rather than a screenshot, because a screenshot would show one viewer's private data to everyone else.
+
+**What is counted.** The number next to the heart is how many people have favorited the Space, among people who can still open it: someone removed from the share list stops counting, and counts again if they are added back. It is not shown for a private Space or when it is zero, and never says who. An open is recorded when the portal shell mounts the Space for someone who has approved its tools, once per person however often they reload, and what is kept per person is only when they last opened it. The owner, and only the owner, sees **N people this month** on the tile: people other than the owner who opened it in the last 30 days. It is shown for a Space open to everyone signed in, and for a shared one only from five people up, because a smaller number on a short share list would say who.
+
+**Editing from the gallery.** The owner's tile has a menu: **Edit details** changes the title and description, and **Sharing** opens the same dialog as inside the Space, both without opening it. The audience badge on your own tile (**Private**, **Shared**, **Everyone signed in**) is a shortcut to the same Sharing dialog. The tool list stays with the agent: changing it asks every viewer to approve again.
+
 ## Portal API
 
 Used by the portal shell. Portal session JWT only (`Authorization: Bearer`); API keys and OAuth tokens get 401, and disabled users are refused.
 
 | Method and path | Purpose |
 |---|---|
-| `GET /api/spaces` | Spaces the viewer can open, newest first, with `delegate_access` and `delegation_suspended` |
+| `GET /api/spaces` | Spaces the viewer can open, with `delegate_access` and `delegation_suspended`, and the viewer's own `favorited` and `last_opened_at`, the people-count `favorite_count`, and for the owner `viewers_30d` (see [The gallery](#the-gallery)) |
 | `GET /api/spaces/:name` | Metadata, tools with `effect`, `connected` and `delegable`, `consented`, `consent_hash`, `appUrl`, `delegate_access`, `delegation_suspended`, `delegation_off`; the owner also gets `tools_hash` and `can_delegate`. For a viewer of a delegated Space whose owner is missing a connection, `delegation_off` is `{ reason: "owner_not_connected", message }` |
+| `PATCH /api/spaces/:name` | Owner only: change `title` and `description` (`{ title?, description? }`; an empty description clears it; 120 and 1000 characters at most). It does not change the tool list, so nobody is asked to approve again, and it does not count as the Space being updated. An agent's next `deploy_space` sets both again |
+| `PUT`, `DELETE /api/spaces/:name/favorite` | Mark or unmark the Space as the viewer's favorite; answers `{ favorited, favorite_count }`. Anyone who can open the Space may |
+| `POST /api/spaces/:name/open` | The shell reports that it mounted the Space. Recorded only for a viewer who has approved the tool list; answers `{ recorded }` |
 | `PATCH /api/spaces/:name/sharing` | Owner only: change `visibility`, add or remove people, and turn delegated access on or off (`{ visibility?, add_users?, remove_users?, delegate_access?, tools_hash? }`), same rules as `update_space`; answers `{ visibility, users, delegate_access, delegation_suspended }` |
 | `POST`, `DELETE /api/spaces/:name/consent` | Approve (`{ consent_hash }` from the detail) or revoke. A missing hash, or a Space that changed since it was shown, is 409 `CONSENT_CHANGED`. Approving is refused with 409 `INTEGRATION_NOT_CONNECTED` while the viewer has not connected an integration the Space uses. For a viewer of a delegated Space the viewer's connections are not checked; instead it is refused with 409 `OWNER_NOT_CONNECTED` (`{ code, message }`) while the owner has not connected one |
 | `POST /api/spaces/:name/call` | Run a declared tool as the viewer (or as the owner, when delegated); a viewer of a delegated Space whose owner is missing a connection gets 409 `OWNER_NOT_CONNECTED` for every tool |
