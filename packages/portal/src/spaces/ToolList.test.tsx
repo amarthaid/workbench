@@ -101,12 +101,12 @@ describe("editable mode", () => {
     render(<SpaceToolList tools={[WRITE, DESTROY]} approvals={{}} onApprovalChange={vi.fn()} />);
     expect(screen.getByRole("switch", { name: "Allow all for GitHub" })).toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: "Allow all" })).toBeNull();
-    expect(screen.getByText("Actions run without asking you, even after this Space's page changes.")).toBeInTheDocument();
+    expect(screen.getByText("Actions run without asking you. If this Space changes later, you approve it again.")).toBeInTheDocument();
   });
 
   it("shows the hint only once with several boxes", () => {
     render(<SpaceToolList tools={[WRITE, SHEET_WRITE]} approvals={{}} onApprovalChange={vi.fn()} />);
-    expect(screen.getAllByText("Actions run without asking you, even after this Space's page changes.")).toHaveLength(1);
+    expect(screen.getAllByText("Actions run without asking you. If this Space changes later, you approve it again.")).toHaveLength(1);
   });
 
   it("top-level Allow all spans boxes, with its hint, only when there is more than one box", () => {
@@ -114,7 +114,7 @@ describe("editable mode", () => {
     const { rerender } = render(<SpaceToolList tools={[WRITE, DESTROY]} approvals={{}} onApprovalChange={onChange} />);
     expect(screen.queryByRole("switch", { name: "Allow all" })).toBeNull();
     rerender(<SpaceToolList tools={[WRITE, DESTROY, SHEET_WRITE]} approvals={{}} onApprovalChange={onChange} />);
-    expect(screen.getByText("Actions run without asking you, even after this Space's page changes.")).toBeInTheDocument();
+    expect(screen.getByText("Actions run without asking you. If this Space changes later, you approve it again.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("switch", { name: "Allow all" }));
     expect(onChange).toHaveBeenCalledWith({
       github_create_issue: "auto",

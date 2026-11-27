@@ -99,7 +99,7 @@ export interface SpaceDetail {
   /** Owner only: an admin allowed this user to delegate access. */
   can_delegate?: boolean;
   /** Set with consented false when the viewer had approved before: why they are asked again. */
-  reconsent_reason?: "tools" | "approvals";
+  reconsent_reason?: "tools" | "approvals" | "page";
 }
 
 /**

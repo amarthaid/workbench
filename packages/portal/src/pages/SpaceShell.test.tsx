@@ -441,6 +441,13 @@ describe("SpaceShell", () => {
         expect(await screen.findByText("The owner changed which actions run without asking.")).toBeInTheDocument();
       });
 
+      it("explains a re-consent caused by a change to the Space itself", async () => {
+        vi.mocked(fetchSpace).mockResolvedValue(space({ consented: false, reconsent_reason: "page" }));
+        renderShell();
+        expect(await screen.findByText("This Space was updated since you approved it. Review it again.")).toBeInTheDocument();
+        expect(screen.queryByText("The owner changed which actions run without asking.")).not.toBeInTheDocument();
+      });
+
       it("says nothing extra when the tool list changed", async () => {
         vi.mocked(fetchSpace).mockResolvedValue(
           space({ consented: false, delegate_access: true, delegation_off: null, reconsent_reason: "tools" })

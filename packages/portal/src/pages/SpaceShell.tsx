@@ -96,6 +96,9 @@ function ConsentScreen({
         {space.reconsent_reason === "approvals" && (
           <p className="space-consent-explain" role="status">The owner changed which actions run without asking.</p>
         )}
+        {space.reconsent_reason === "page" && (
+          <p className="space-consent-explain" role="status">This Space was updated since you approved it. Review it again.</p>
+        )}
         {delegated ? (
           <p className="space-consent-explain">
             <strong>These tools run with {space.ownerEmail}'s access, not yours.</strong> Your own connections are not

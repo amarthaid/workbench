@@ -102,7 +102,7 @@ export function SpaceToolList({
               <span>Allow all</span>
             </label>
           )}
-          <p className="space-muted">Actions run without asking you, even after this Space's page changes.</p>
+          <p className="space-muted">Actions run without asking you. If this Space changes later, you approve it again.</p>
         </div>
       )}
       {groups.map((g) => {
