@@ -4,6 +4,8 @@ export interface ModalProps {
   open: boolean;
   onClose: () => void;
   title?: ReactNode;
+  /** Replaces the title row: full-bleed content at the top of the panel, with Close laid over it. The caller puts the title (an h2) inside. */
+  hero?: ReactNode;
   size?: "sm" | "md" | "lg" | "xl";
   dismissible?: boolean;
   children: ReactNode;
@@ -12,7 +14,7 @@ export interface ModalProps {
   className?: string;
 }
 
-export function Modal({ open, onClose, title, size = "md", dismissible = true, children, footer, className }: ModalProps) {
+export function Modal({ open, onClose, title, hero, size = "md", dismissible = true, children, footer, className }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
 
   const triggerRef = useRef<Element | null>(null);
@@ -59,7 +61,17 @@ export function Modal({ open, onClose, title, size = "md", dismissible = true, c
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
       >
-        {title && (
+        {hero && (
+          <div className="ui-modal-hero">
+            {hero}
+            {dismissible && (
+              <button type="button" className="ui-modal-hero-close" onClick={onClose} aria-label="Close">
+                Close
+              </button>
+            )}
+          </div>
+        )}
+        {!hero && title && (
           <div className="ui-modal-head">
             <h2 className="ui-modal-title">{title}</h2>
             {dismissible && (

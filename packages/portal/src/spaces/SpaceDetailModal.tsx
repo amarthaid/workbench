@@ -48,7 +48,15 @@ export function SpaceDetailModal({ space, onClose, onToggleFavorite, onEditDetai
         // The delete dialog is on top: Escape and the backdrop belong to it.
         onClose={deleting ? () => {} : onClose}
         className="space-detail-modal"
-        title={space.title}
+        hero={
+          <div className="space-detail-hero">
+            <Cover space={space} showInitial={false} />
+            <div className="space-detail-hero-text">
+              <Badge variant={vis.variant}>{vis.label}</Badge>
+              <h2 className="space-detail-hero-title">{space.title}</h2>
+            </div>
+          </div>
+        }
         footer={
           <>
             {space.mine && (
@@ -70,12 +78,6 @@ export function SpaceDetailModal({ space, onClose, onToggleFavorite, onEditDetai
           </>
         }
       >
-        <div className="space-detail-hero">
-          <Cover space={space} />
-        </div>
-        <div className="space-detail-head">
-          <Badge variant={vis.variant}>{vis.label}</Badge>
-        </div>
         {space.description && <p className="space-detail-desc">{space.description}</p>}
         <dl className="space-detail-facts">
           <dt>Owner</dt>

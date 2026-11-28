@@ -22,7 +22,7 @@ interface Props {
 }
 
 /** The generated cover, with the Space's initial on it. Decorative: the title is the label. */
-export function Cover({ space }: { space: SpaceSummary }) {
+export function Cover({ space, showInitial = true }: { space: SpaceSummary; showInitial?: boolean }) {
   const c = coverFor(space.name);
   return (
     <span
@@ -31,7 +31,7 @@ export function Cover({ space }: { space: SpaceSummary }) {
       aria-hidden="true"
       style={{ ["--cover-from" as string]: c.from, ["--cover-to" as string]: c.to, ["--cover-angle" as string]: `${c.angle}deg` }}
     >
-      <span className="space-cover-initial">{coverInitial(space.title)}</span>
+      {showInitial && <span className="space-cover-initial">{coverInitial(space.title)}</span>}
     </span>
   );
 }

@@ -1833,11 +1833,33 @@ body {
 .space-tool-tags { align-items: center; }
 
 /* The Space detail modal: the cover enlarged, then the facts a tile has no room for. */
-.space-detail-modal .ui-modal-title { overflow-wrap: anywhere; }
-.space-detail-hero { height: 140px; margin-bottom: var(--s-12); border-radius: var(--radius); overflow: hidden; }
-.space-detail-hero .space-cover { justify-content: flex-start; padding-left: var(--s-24); }
-.space-detail-hero .space-cover-initial { font-size: 64px; }
-.space-detail-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-8); margin-bottom: var(--s-8); }
+.space-detail-modal { padding: 0; }
+.space-detail-modal .ui-modal-body { padding: var(--s-16) var(--s-24) 0; }
+.space-detail-modal .ui-modal-foot { margin-top: var(--s-16); padding: 0 var(--s-24) var(--s-24); }
+/* The art is the header: edge to edge, the name on it, Close laid over its corner. */
+.ui-modal-hero { position: relative; }
+.ui-modal-hero-close {
+  position: absolute;
+  top: var(--s-12);
+  right: var(--s-12);
+  z-index: 2;
+  padding: var(--s-4) var(--s-12);
+  border: 0;
+  border-radius: var(--radius);
+  background: rgba(0, 0, 0, .35);
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ui-modal-hero-close:hover { background: rgba(0, 0, 0, .5); }
+.ui-modal-hero-close:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.space-detail-hero { position: relative; height: 200px; }
+.space-detail-hero .space-cover { position: absolute; inset: 0; }
+.space-detail-hero::after { content: ""; position: absolute; inset: 0; background: linear-gradient(to top, rgba(0, 0, 0, .6), rgba(0, 0, 0, 0) 65%); pointer-events: none; }
+.space-detail-hero-text { position: absolute; left: var(--s-24); right: var(--s-24); bottom: var(--s-16); z-index: 1; display: grid; gap: var(--s-8); justify-items: start; }
+.space-detail-hero-title { margin: 0; font-size: 26px; line-height: 1.15; font-weight: 700; letter-spacing: -.01em; color: #fff; overflow-wrap: anywhere; }
 .space-detail-desc { margin: 0 0 var(--s-12); color: var(--text-2); font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .space-detail-facts { display: grid; grid-template-columns: max-content 1fr; gap: var(--s-4) var(--s-16); margin: 0 0 var(--s-16); font-size: 13px; }
 .space-detail-facts dt { color: var(--text-3); }
