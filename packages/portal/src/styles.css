@@ -1204,7 +1204,11 @@ button.wb-app-cell-link:focus-visible { outline: 2px solid var(--accent); outlin
 
 .wb-app-cell-meta { font-size: 12px; color: var(--text-3); }
 
-.wb-app-cell-action { margin-left: auto; flex: none; }
+/* Same size as the header-band links (.ui-box-action). */
+.wb-app-cell-action { margin-left: auto; flex: none; font-size: 12px; }
+.wb-app-cell-skeleton { min-height: 70px; pointer-events: none; }
+.wb-app-cell-skeleton-logo { width: 28px; height: 28px; flex: none; }
+.wb-app-cell-skeleton .ui-list-skeleton-title { width: 40%; }
 
 .wb-app-cell-muted { font-size: 12px; color: var(--text-4); }
 
@@ -1580,6 +1584,14 @@ button.wb-app-cell-link:focus-visible { outline: 2px solid var(--accent); outlin
 }
 .space-tile-meta { font-size: 12px; color: var(--text-3); }
 .space-tile-badges { display: flex; flex-wrap: wrap; gap: var(--s-4); margin-top: var(--s-2); }
+/* Home: two columns, and the chip row never wraps or grows the tile; the audience chip truncates. */
+@media (min-width: 760px) {
+  .space-grid.is-two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.space-grid.is-two .space-tile-badges { flex-wrap: nowrap; }
+.space-grid.is-two .space-tile-badges > * { flex: none; white-space: nowrap; }
+.space-grid.is-two .space-tile-badges > .space-tile-badge-button { flex: 0 1 auto; min-width: 0; overflow: hidden; }
+.space-grid.is-two .space-tile-badge-button .ui-badge { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 
 .space-tile-actions {
   position: absolute;

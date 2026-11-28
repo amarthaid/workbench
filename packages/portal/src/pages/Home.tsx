@@ -131,7 +131,16 @@ export default function Home() {
           {appsError ? (
             <div className="ui-form-error">Couldn't load apps.</div>
           ) : appsLoading ? (
-            <ListSkeleton rows={2} />
+            <div className="wb-box-tiles" role="status" aria-label="Loading">
+              <div className="wb-app-grid">
+                {[0, 1, 2].map((i) => (
+                  <div key={i} className="wb-app-cell wb-app-cell-skeleton" aria-hidden="true">
+                    <span className="ui-list-skeleton-bar wb-app-cell-skeleton-logo" />
+                    <span className="ui-list-skeleton-bar ui-list-skeleton-title" />
+                  </div>
+                ))}
+              </div>
+            </div>
           ) : connectedApps.length === 0 ? (
             <EmptyState message="No apps connected yet." action={<Link to="/apps">Browse apps</Link>} />
           ) : (
@@ -162,7 +171,7 @@ export default function Home() {
             <EmptyState message="No Spaces yet." action={<Link to="/spaces">About Spaces</Link>} />
           ) : (
             <div className="wb-box-tiles">
-              <div className="space-grid">{topSpaces.map((s) => tile(s, "compact"))}</div>
+              <div className="space-grid is-two">{topSpaces.map((s) => tile(s, "compact"))}</div>
             </div>
           )}
         </Box>
@@ -174,7 +183,7 @@ export default function Home() {
               {vaultIsError
                 ? "Couldn't load vault."
                 : secrets === undefined
-                  ? "—"
+                  ? <span role="status" aria-label="Loading" className="ui-stat-skeleton" />
                   : secrets.length === 0
                     ? "None yet"
                     : `${secrets.length} stored`}

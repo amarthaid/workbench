@@ -227,6 +227,23 @@ describe("Home", () => {
     }
     // One skeleton each for the apps, Spaces and activity lists.
     expect(screen.getAllByRole("status", { name: "Loading" }).length).toBeGreaterThanOrEqual(3 + 4);
+    // The apps skeleton is a tile grid, the same columns as the loaded apps.
+    const appsBox = screen.getByText("Your apps").closest("section")!;
+    expect(appsBox.querySelector(".wb-app-grid")).not.toBeNull();
+  });
+
+  it("shows a skeleton, not a dash, for the vault count while it loads", async () => {
+    vi.mocked(fetchVaultSecrets).mockReturnValue(new Promise<never>(() => {}));
+    renderPage();
+    const row = screen.getByText("Secrets").closest(".ui-box-row")!;
+    expect(row.querySelector('[role="status"]')).not.toBeNull();
+    expect(row).not.toHaveTextContent("—");
+  });
+
+  it("lays the Your Spaces tiles out in two columns", async () => {
+    renderPage();
+    await screen.findByText("PR timeline");
+    expect(document.querySelector(".space-grid.is-two")).not.toBeNull();
   });
 
   it("shows your apps as the same compact tiles as the Apps page", async () => {
