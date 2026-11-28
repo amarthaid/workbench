@@ -237,7 +237,7 @@ describe("Home", () => {
     renderPage();
     const row = screen.getByText("Secrets").closest(".ui-box-row")!;
     expect(row.querySelector('[role="status"]')).not.toBeNull();
-    expect(row).not.toHaveTextContent("—");
+    expect(row).not.toHaveTextContent("\u2014");
   });
 
   it("lays the Your Spaces tiles out in two columns", async () => {

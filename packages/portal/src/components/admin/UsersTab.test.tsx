@@ -93,7 +93,7 @@ describe("UsersTab", () => {
     const off = screen.getByText("off@example.com").closest("tr")!;
     expect(off).toHaveTextContent("Disabled");
     expect(off).toHaveTextContent("Never");
-    expect(off).not.toHaveTextContent("—");
+    expect(off).not.toHaveTextContent("\u2014");
   });
 
   it("shows empty and error states", async () => {
