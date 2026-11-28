@@ -6,7 +6,7 @@ import { relativeTime } from "../format";
 import { Modal } from "../components/ui/Modal";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
-import { ClockIcon, EyeIcon, HeartIcon } from "../components/ui/Icons";
+import { ClockIcon, DoorOpenIcon, EyeIcon, HeartIcon } from "../components/ui/Icons";
 import { Cover, DelegatedBadge, VISIBILITY } from "./SpaceTile";
 import { DeleteSpaceDialog } from "./DeleteSpaceDialog";
 import { ToolsAccordion } from "../components/ToolsAccordion";
@@ -45,39 +45,42 @@ export function SpaceDetailModal({ space, onClose, onToggleFavorite, onEditDetai
           <div className="space-detail-hero">
             <Cover space={space} showInitial={false} />
             <div className="space-detail-hero-text">
-              <span className="space-detail-chips">
-                <Badge variant={vis.variant}>{vis.label}</Badge>
-                <DelegatedBadge space={space} />
-              </span>
               <h2 className="space-detail-hero-title">{space.title}</h2>
-              <p className="space-detail-credit">
-                <span className="space-detail-avatar" aria-hidden="true">
-                  {(space.ownerEmail.trim().charAt(0) || "?").toUpperCase()}
-                </span>
-                <span>{space.mine ? "by you" : `by ${space.ownerEmail}`}</span>
-              </p>
+              <div className="space-detail-hero-row">
+                <p className="space-detail-credit">
+                  <span className="space-detail-avatar" aria-hidden="true">
+                    {(space.ownerEmail.trim().charAt(0) || "?").toUpperCase()}
+                  </span>
+                  <span>{space.mine ? "by you" : `by ${space.ownerEmail}`}</span>
+                </p>
+                <div className="space-detail-hero-side">
+                  <span className="space-detail-chips">
+                    <Badge variant={vis.variant}>{vis.label}</Badge>
+                    <DelegatedBadge space={space} />
+                  </span>
+                  <Link className="ui-button ui-button-primary ui-button-md space-detail-open" to={`/s/${encodeURIComponent(space.name)}`}>
+                    <DoorOpenIcon />
+                    Open
+                  </Link>
+                </div>
+              </div>
             </div>
           </div>
         }
         footer={
-          <>
-            {space.mine && (
-              <>
-                <Button variant="outline" onClick={() => onEditDetails(space)}>
-                  Edit details
-                </Button>
-                <Button variant="outline" onClick={() => onEditSharing(space)}>
-                  Edit sharing
-                </Button>
-                <Button variant="outline" className="space-detail-delete" onClick={() => setDeleting(true)}>
-                  Delete Space
-                </Button>
-              </>
-            )}
-            <Link className="ui-button ui-button-primary ui-button-md" to={`/s/${encodeURIComponent(space.name)}`}>
-              Open
-            </Link>
-          </>
+          space.mine ? (
+            <>
+              <Button variant="outline" onClick={() => onEditDetails(space)}>
+                Edit details
+              </Button>
+              <Button variant="outline" onClick={() => onEditSharing(space)}>
+                Edit sharing
+              </Button>
+              <Button variant="outline" className="space-detail-delete" onClick={() => setDeleting(true)}>
+                Delete Space
+              </Button>
+            </>
+          ) : undefined
         }
       >
         <div className="space-detail-facts-line">

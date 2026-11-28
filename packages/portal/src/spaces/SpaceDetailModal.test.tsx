@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import { renderWithClient } from "../test-utils";
 import { SpaceDetailModal } from "./SpaceDetailModal";
 import type { SpaceSummary } from "../spaces-api";
@@ -66,5 +66,35 @@ describe("SpaceDetailModal dialog name", () => {
   it("is named by the Space title", () => {
     open(space({ title: "PR timeline" }));
     expect(screen.getByRole("dialog", { name: "PR timeline" })).toBeInTheDocument();
+  });
+});
+
+describe("SpaceDetailModal hero row", () => {
+  it("puts the title first, then credit on the left and chips plus Open on the right", () => {
+    open(space({ delegate_access: true, mine: true }));
+    const text = hero().querySelector(".space-detail-hero-text") as HTMLElement;
+    expect(text.firstElementChild?.tagName).toBe("H2");
+    const row = text.querySelector(".space-detail-hero-row") as HTMLElement;
+    expect(row).toHaveTextContent("by you");
+    const side = row.querySelector(".space-detail-hero-side") as HTMLElement;
+    expect(side).toHaveTextContent("Everyone signed in");
+    expect(side).toHaveTextContent("Delegated");
+    const link = within(side).getByRole("link", { name: "Open" });
+    expect(link).toHaveAttribute("href", "/s/pr-timeline");
+    expect(link.querySelector("svg")).not.toBeNull();
+  });
+
+  it("keeps Open out of the footer, and gives a viewer no footer at all", () => {
+    open(space());
+    expect(document.querySelector(".ui-modal-foot")).toBeNull();
+    expect(screen.getAllByRole("link", { name: "Open" })).toHaveLength(1);
+  });
+
+  it("keeps Edit sharing and Delete Space in the owner footer", () => {
+    open(space({ mine: true }));
+    const foot = document.querySelector(".ui-modal-foot") as HTMLElement;
+    expect(within(foot).getByRole("button", { name: "Edit sharing" })).toBeInTheDocument();
+    expect(within(foot).getByRole("button", { name: "Delete Space" })).toBeInTheDocument();
+    expect(within(foot).queryByRole("link", { name: "Open" })).toBeNull();
   });
 });

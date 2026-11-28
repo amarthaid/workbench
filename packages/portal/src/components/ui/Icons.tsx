@@ -142,3 +142,14 @@ export function FileIcon({ kind = "other" }: { kind?: FileKind }) {
     </svg>
   );
 }
+
+export function DoorOpenIcon() {
+  return (
+    <svg {...svgProps}>
+      <path d="M2 14h12" />
+      <path d="M4 14V2.5l6-1.2V14" />
+      <path d="M10 3.5h2V14" />
+      <path d="M7.5 8.2v.6" />
+    </svg>
+  );
+}
