@@ -3,6 +3,7 @@ import { fetchAuthUrl, fetchKeycloakAuthUrl, fetchWaitingState, type WaitingStat
 import { beginLoginCeremony } from "../login-nonce";
 import { Button } from "../components/ui/Button";
 import { BrandLockup } from "../components/BrandMark";
+import { useSwarm } from "../hooks/useSwarm";
 
 // Poll schedule while the tab is visible: 5s, doubling to a 60s cap. A focus or
 // visibility change polls at once and restarts the schedule at 5s.
@@ -19,21 +20,31 @@ const STATUS_TEXT: Record<Phase, string> = {
   none: "Your session for this request expired.",
 };
 
-function Step({ n, status, current, label, children }: {
+function Step({ n, status, current, label, last, loading }: {
   n: number;
   status: "done" | "current" | "todo" | "declined";
   current?: boolean;
   label: string;
-  children?: React.ReactNode;
+  last?: boolean;
+  loading?: boolean;
 }) {
   return (
     <li className="waiting-step" data-status={status} aria-current={current ? "step" : undefined}>
-      <span className="waiting-marker" aria-hidden="true">{status === "done" ? "✓" : n}</span>
+      <span className="waiting-marker" aria-hidden="true">
+        {loading ? <span className="waiting-loader" /> : status === "done" ? "✓" : n}
+      </span>
       <span className="waiting-label">{label}</span>
-      {children}
+      {/* The path to the next step: decorative, the list carries the structure. */}
+      {!last && <span className="waiting-line" aria-hidden="true" />}
     </li>
   );
 }
+
+const NOTE_TEXT: Partial<Record<Phase, string>> = {
+  pending: "An admin will review your request. You can leave this page open.",
+  declined: "Your account request was declined. Try again later or contact an admin.",
+  active: "You are approved. Taking you to sign in.",
+};
 
 export default function Waiting() {
   const [phase, setPhase] = useState<Phase>("checking");
@@ -110,66 +121,59 @@ export default function Waiting() {
   const active = phase === "active";
   const none = phase === "none";
 
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const dark =
+    document.documentElement.dataset.theme === "dark" ||
+    (!document.documentElement.dataset.theme && typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: dark)").matches);
+  // The login swarm as a quiet full-bleed ground. It honours prefers-reduced-motion itself.
+  useSwarm(canvasRef, { ground: dark ? "dark" : "accent", markX: 0.5, markY: 0.5, markFrac: 0.5, ambient: true });
+
   return (
-    <div className="login-shell">
-      <aside className="login-art" data-ground="accent">
-        <div className="login-art-copy">
-          <div className="login-art-brand">
-            <BrandLockup compact />
-          </div>
-          <div>
-            <h1 className="login-art-title">Almost there.</h1>
-            <p className="login-art-sub">
-              New accounts are approved by an admin before first use. This page continues on its own once you are in.
-            </p>
-          </div>
+    <div className="waiting-shell">
+      <canvas ref={canvasRef} className="waiting-canvas" aria-hidden="true" />
+      <main className="waiting-card">
+        <div className="waiting-brand">
+          <BrandLockup compact />
         </div>
-      </aside>
+        <h1 className="waiting-title">{none ? "Request expired" : "Account request"}</h1>
 
-      <section className="login-form">
-        <div className="login-card">
-          <h1 className="login-title">{none ? "Request expired" : "Account request"}</h1>
-
-          {none ? (
-            <>
-              <p className="login-sub">Your session for this request expired. Sign in again to check on it.</p>
+        {none ? (
+          <>
+            <p className="waiting-note">Sign in again to check on your request.</p>
+            <Button variant="outline" size="lg" type="button" onClick={() => window.location.assign("/login")}>
+              Back to sign in
+            </Button>
+          </>
+        ) : (
+          <>
+            <ol className="waiting-steps" aria-label="Account approval progress">
+              <Step n={1} status="done" label="Signed in" />
+              {declined ? (
+                <Step n={2} status="declined" current label="Request declined" />
+              ) : (
+                <Step n={2} status={active ? "done" : "current"} current={!active} label="Waiting for approval" loading={!active} />
+              )}
+              <Step n={3} status={active ? "done" : "todo"} current={active} label="Active" last />
+            </ol>
+            {NOTE_TEXT[phase] && <p className="waiting-note">{NOTE_TEXT[phase]}</p>}
+            {startError && (
+              <p className="ui-form-error" role="alert">
+                {startError}
+              </p>
+            )}
+            {declined && (
               <Button variant="outline" size="lg" type="button" onClick={() => window.location.assign("/login")}>
                 Back to sign in
               </Button>
-            </>
-          ) : (
-            <>
-              <ol className="waiting-steps" aria-label="Account approval progress">
-                <Step n={1} status="done" label="Signed in" />
-                {declined ? (
-                  <Step n={2} status="declined" current label="Request declined">
-                    <p className="waiting-note">Your account request was declined. Try again later or contact an admin.</p>
-                  </Step>
-                ) : (
-                  <Step n={2} status={active ? "done" : "current"} current={!active} label="Waiting for approval">
-                    {!active && (
-                      <p className="waiting-note">
-                        <span className="waiting-loader" aria-hidden="true" />{" "}
-                        An admin will review your request. You can leave this page open.
-                      </p>
-                    )}
-                  </Step>
-                )}
-                <Step n={3} status={active ? "done" : "todo"} current={active} label="Active" />
-              </ol>
-              {declined && (
-                <Button variant="outline" size="lg" type="button" onClick={() => window.location.assign("/login")}>
-                  Back to sign in
-                </Button>
-              )}
-            </>
-          )}
+            )}
+          </>
+        )}
 
-          <div className="login-sub" role="status" aria-live="polite">
-            {startError || STATUS_TEXT[phase]}
-          </div>
+        {/* Announced once; the visible sentence above says it in its own words. */}
+        <div className="ui-sr-only" role="status" aria-live="polite">
+          {STATUS_TEXT[phase]}
         </div>
-      </section>
+      </main>
     </div>
   );
 }

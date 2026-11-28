@@ -8,6 +8,7 @@ const api = vi.hoisted(() => ({
   fetchKeycloakAuthUrl: vi.fn(),
 }));
 vi.mock("../api", () => api);
+vi.mock("../hooks/useSwarm", () => ({ useSwarm: vi.fn() }));
 
 let hidden = false;
 const hrefSet = vi.fn();
@@ -57,6 +58,28 @@ describe("Waiting", () => {
     expect(items[1]).toHaveAttribute("aria-current", "step");
     expect(screen.getByText(/leave this page open/i)).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent(/waiting for approval/i);
+  });
+
+  it("announces the status once: the live region is visually hidden, the sentence is shown separately", async () => {
+    await mount();
+    const live = screen.getByRole("status");
+    expect(live).toHaveClass("ui-sr-only");
+    expect(screen.getAllByText(/waiting for approval/i).filter((e) => !e.classList.contains("ui-sr-only"))).toHaveLength(1);
+    expect(screen.getAllByText(/leave this page open/i)).toHaveLength(1);
+  });
+
+  it("is one centered card over a full-bleed canvas, with decorative connector lines between the steps", async () => {
+    const { container } = render(<Waiting />);
+    await tick(0);
+    expect(container.querySelector(".login-shell")).toBeNull();
+    expect(container.querySelector(".waiting-canvas")).toHaveAttribute("aria-hidden", "true");
+    const card = container.querySelector(".waiting-card") as HTMLElement;
+    expect(card).toBeInTheDocument();
+    expect(card.querySelector(".waiting-brand")).not.toBeNull();
+    const lines = container.querySelectorAll(".waiting-line");
+    expect(lines).toHaveLength(2);
+    lines.forEach((l) => expect(l).toHaveAttribute("aria-hidden", "true"));
+    expect(container.querySelector('.waiting-step[aria-current="step"] .waiting-loader')).not.toBeNull();
   });
 
   it("backs off 5s, 10s, 20s, 40s, then caps at 60s", async () => {
@@ -136,6 +159,7 @@ describe("Waiting", () => {
     api.fetchWaitingState.mockResolvedValue({ state: "declined", provider: "google" });
     await mount();
     expect(screen.getByText(/request was declined/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/request declined/i).length).toBeGreaterThan(0);
     expect(screen.queryByText(/leave this page open/i)).not.toBeInTheDocument();
     screen.getByRole("button", { name: /back to sign in/i }).click();
     expect(window.location.assign).toHaveBeenCalledWith("/login");
@@ -146,7 +170,7 @@ describe("Waiting", () => {
   it("none says the session expired, links back to login, and stops polling", async () => {
     api.fetchWaitingState.mockResolvedValue({ state: "none", provider: null });
     await mount();
-    expect(screen.getAllByText(/session for this request expired/i).length).toBeGreaterThan(0);
+    expect(screen.getByRole("status")).toHaveTextContent(/session for this request expired/i);
     screen.getByRole("button", { name: /back to sign in/i }).click();
     expect(window.location.assign).toHaveBeenCalledWith("/login");
     await tick(120_000);
