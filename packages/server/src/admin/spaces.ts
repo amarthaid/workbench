@@ -68,6 +68,7 @@ export async function searchAdminSpaces(
 export const SPACE_LIST_DEFAULT = 24;
 export const SPACE_LIST_MAX = 100;
 const OPENERS_WINDOW_MS = 30 * 86_400_000;
+export const OPENERS_LIST_MAX = 50;
 
 export interface AdminSpaceItem {
   name: string;
@@ -183,7 +184,7 @@ export async function listAdminSpaces(
       share_count: shares.get(String(r.name)) ?? 0,
       favorite_count: likes.get(String(r.name)) ?? 0,
       openers_30d: list.length,
-      openers: list.map((o) => ({ email: o.email, last_opened_at: o.lastOpenedAt })),
+      openers: list.slice(0, OPENERS_LIST_MAX).map((o) => ({ email: o.email, last_opened_at: o.lastOpenedAt })),
     };
   });
   const last = spaces[spaces.length - 1];

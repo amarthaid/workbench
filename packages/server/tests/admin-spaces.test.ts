@@ -251,6 +251,20 @@ describe("GET /api/admin/spaces (list)", () => {
     expect(by.priv.openers).toEqual([]);
   });
 
+  it("caps the openers list at 50, most recent first, while openers_30d stays the true count", async () => {
+    await seed("busy", { visibility: "org" });
+    const now = Date.now();
+    for (let i = 0; i < 55; i++) {
+      await person(`bp${i}`);
+      await state("busy", `bp${i}`, now - (i + 1) * 60_000);
+    }
+    const item = (await get(LIST)).json().spaces[0];
+    expect(item.openers_30d).toBe(55);
+    expect(item.openers).toHaveLength(50);
+    expect(item.openers[0].email).toBe("bp0@example.com");
+    expect(item.openers[49].email).toBe("bp49@example.com");
+  });
+
   it("a Shared Space counts only people still on the list", async () => {
     for (const id of ["p1", "p2"]) await person(id);
     await seed("team", { visibility: "users" });
