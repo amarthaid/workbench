@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
+import { screen } from "@testing-library/react";
 import { renderWithClient } from "../test-utils";
 import { SpaceDetailModal } from "./SpaceDetailModal";
 import type { SpaceSummary } from "../spaces-api";
@@ -58,5 +59,12 @@ describe("SpaceDetailModal delegation chip", () => {
   it("shows no chip for a Space without delegation", () => {
     open(space());
     expect(hero()).not.toHaveTextContent("Delegated");
+  });
+});
+
+describe("SpaceDetailModal dialog name", () => {
+  it("is named by the Space title", () => {
+    open(space({ title: "PR timeline" }));
+    expect(screen.getByRole("dialog", { name: "PR timeline" })).toBeInTheDocument();
   });
 });

@@ -44,6 +44,7 @@ export function AppQuickView({ integration: i, connected, busy, onConnect, onClo
       size="lg"
       onClose={onClose}
       className="app-quick-modal"
+      ariaLabel={label}
       hero={
         <div className="app-quick-hero">
           <IntegrationLogo name={i.name} displayName={i.displayName} logo={i.logo} size={40} />

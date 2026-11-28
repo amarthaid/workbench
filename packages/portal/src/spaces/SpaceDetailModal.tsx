@@ -40,6 +40,7 @@ export function SpaceDetailModal({ space, onClose, onToggleFavorite, onEditDetai
         // The delete dialog is on top: Escape and the backdrop belong to it.
         onClose={deleting ? () => {} : onClose}
         className="space-detail-modal"
+        ariaLabel={space.title}
         hero={
           <div className="space-detail-hero">
             <Cover space={space} showInitial={false} />

@@ -45,6 +45,12 @@ beforeEach(() => {
 });
 
 describe("AppQuickView", () => {
+  it("is a dialog named by the app", async () => {
+    renderView();
+    expect(screen.getByRole("dialog", { name: "Acme" })).toBeInTheDocument();
+    await screen.findByText("acme_search");
+  });
+
   it("shows the name, a Not connected chip and one facts line", async () => {
     renderView();
     expect(screen.getByRole("heading", { name: "Acme" })).toBeInTheDocument();
