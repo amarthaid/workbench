@@ -98,7 +98,7 @@ export function SpaceDetailModal({ space, onClose, onToggleFavorite, onEditDetai
           </dd>
           {opened && (
             <>
-              <dt>Use</dt>
+              <dt>Opened</dt>
               <dd>{opened}</dd>
             </>
           )}
