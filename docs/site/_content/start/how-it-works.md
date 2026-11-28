@@ -188,6 +188,8 @@ The portal is the human half. The agent cannot do any of it.
 - See which MCP clients hold live refresh tokens on the account, and revoke one.
   Revocation deletes refresh tokens and outstanding authorization codes. Access
   tokens already issued are self-contained JWTs and lapse at their TTL.
+- Browse apps as tiles. Clicking a tile opens a quick view (connection state, auth type, version and the app's tools grouped by effect, with Connect or Reconnect and a **Manage** link). **Manage**, and the connect links agents hand out, go to the full app page, which holds the forms and flows (reconnect, custom-app headers, browser session tools). On Home, an app tile goes straight to that page.
+- Choose the portal theme, Light or Dark, in Settings.
 - Drive a live browser session for cookie capture, over an origin-gated CDP
   bridge (SSE down, REST up).
 

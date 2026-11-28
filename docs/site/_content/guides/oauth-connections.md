@@ -187,7 +187,7 @@ authorized against your workbench account through OAuth 2.1 — a Claude Code in
 desktop client, anything that ran the `/authorize` flow. Each holds a rotating refresh
 token good for 30 days.
 
-The portal shows these in the agents panel. Over HTTP:
+The portal shows these on the Agents page, one row per client: the name, the client id (always visible, because two clients can share a name), when it connected and its scope. **Revoke** on a row opens a confirm that names the client id. Over HTTP:
 
 ```bash
 curl https://workbench.example.com/api/agents \

@@ -15,6 +15,10 @@ Like `browser` and `files`, it is an internal plugin: `auth: { type: "none" }`, 
 
 There is no `vault_get`. `vault_list` returns names and descriptions. The portal is write-only too: once saved, a value is never displayed again — to rotate, replace it.
 
+## The Vault page
+
+Portal → **Vault** lists each secret as a row: name, description, when it was updated and last used, and its `{{vault:NAME}}` reference as a chip. Click the chip to copy the reference. It copies the reference only, never the value. **Replace** opens the form to set a new value; **Delete** asks you to type the secret's name first. **Add secret** and **One-time link** are in the header of the list.
+
 ## Adding a secret
 
 Portal → **Vault** → **Add secret**. Names are lowercase letters, digits, `_ . -`, up to 64 characters. Values up to 8 KB. Stored AES-256-GCM under the server's `ENCRYPTION_KEY`, same as OAuth tokens. Editing a secret without filling in a new description keeps the existing one; the portal only sends the field when it has a value.
