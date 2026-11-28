@@ -1070,7 +1070,8 @@ body {
 
 .wb-page-toolbar {
   display: flex;
-  align-items: center;
+  /* Tabs and controls share one row height, so their centres (one baseline) line up. */
+  align-items: stretch;
   justify-content: space-between;
   gap: var(--s-12);
   flex-wrap: wrap;
@@ -1121,6 +1122,8 @@ body {
 /* .ui-input is full-width; in a toolbar the controls sit side by side at their
    own width. */
 .wb-toolbar-controls .ui-input { width: auto; }
+.wb-page-toolbar .wb-toolbar-controls { padding: var(--s-4) 0 calc(var(--s-4) + 2px); }
+.wb-page-toolbar .ui-tabs { align-items: stretch; }
 .wb-toolbar-controls input.ui-input { min-width: 220px; }
 
 /* Admin > Users: the per-user permissions panel, opened under its row. */
@@ -1163,7 +1166,7 @@ body {
   border-radius: var(--radius);
 }
 
-.wb-app-cell:has(.wb-app-cell-link:hover) { border-color: var(--border-strong); }
+.wb-app-cell:has(.wb-app-cell-link:hover) { border-color: var(--accent-line); }
 
 .wb-app-cell-link {
   display: flex;
@@ -1185,7 +1188,10 @@ button.wb-app-cell-link {
   cursor: pointer;
   border-radius: var(--radius-sm);
 }
-button.wb-app-cell-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button.wb-app-cell-link:focus-visible { outline: none; }
+/* The whole tile opens the quick view: show it with a pointer and a border. */
+.wb-app-cell:not(.wb-app-cell-inert) { cursor: pointer; }
+.wb-app-cell:has(.wb-app-cell-link:focus-visible) { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: 1px; }
 
 .wb-app-cell-inert { opacity: .6; }
 
