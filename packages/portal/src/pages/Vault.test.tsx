@@ -126,7 +126,7 @@ describe("Vault page", () => {
     const confirm = within(dialog).getByRole("button", { name: "Delete secret" });
     expect(confirm).toBeDisabled();
 
-    const input = within(dialog).getByLabelText(/type the secret/i);
+    const input = within(dialog).getByLabelText(/type the secret name/i);
     fireEvent.change(input, { target: { value: "SITE_PW" } });
     expect(confirm).toBeDisabled();
     fireEvent.change(input, { target: { value: "site_pw" } });
@@ -152,7 +152,7 @@ describe("Vault page", () => {
     await screen.findByText("site_pw");
     fireEvent.click(within(rowOf("site_pw")).getByRole("button", { name: /delete site_pw/i }));
     const dialog = await screen.findByRole("dialog");
-    fireEvent.change(within(dialog).getByLabelText(/type the secret/i), { target: { value: "site_pw" } });
+    fireEvent.change(within(dialog).getByLabelText(/type the secret name/i), { target: { value: "site_pw" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete secret" }));
     expect(await screen.findByText("Delete failed")).toBeInTheDocument();
     expect(screen.getByRole("dialog")).toBeInTheDocument();

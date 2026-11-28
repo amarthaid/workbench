@@ -118,7 +118,7 @@ export default function Vault() {
         <TypedNameConfirm
           title="Delete this secret?"
           name={pendingDelete.name}
-          nameLabel="secret"
+          nameLabel="secret name"
           confirmLabel="Delete secret"
           busyLabel="Deleting…"
           busy={remove.isPending}
