@@ -433,7 +433,7 @@ describe("UsersTab permissions", () => {
     expect(screen.getByRole("button", { name: "Permissions for dev@example.com" })).toHaveClass("ui-row-action");
   });
 
-  it("keeps the dates on one line and lets the actions wrap inside the card", async () => {
+  it("keeps the dates and the actions on one line, wrapping the actions only on narrow screens", async () => {
     renderWithClient(<UsersTab />);
     await screen.findByText("dev@example.com");
     const row = screen.getByText("dev@example.com").closest("tr")!;
@@ -445,7 +445,9 @@ describe("UsersTab permissions", () => {
     expect(rule(".wb-col-date")).toMatch(/width:\s*\d+/);
     const actions = screen.getByRole("button", { name: "Disable dev@example.com" }).parentElement!;
     expect(actions).toHaveClass("wb-user-actions");
-    expect(rule(".wb-user-actions")).toMatch(/flex-wrap:\s*wrap/);
+    expect(rule(".wb-user-actions")).toMatch(/flex-wrap:\s*nowrap/);
     expect(rule(".wb-user-actions")).not.toMatch(/(?<![-\w])width:\s*\d+px/);
+    // Below 900px the actions may wrap inside the card instead of overflowing it.
+    expect(css).toMatch(/@media \(max-width: 900px\)\s*\{[^}]*\.wb-user-actions\s*\{\s*flex-wrap:\s*wrap/);
   });
 });
