@@ -1,7 +1,8 @@
+import { Link } from "react-router-dom";
 import type { SpaceSummary, SpaceVisibility } from "../spaces-api";
 import { relativeTime } from "../format";
 import { Badge } from "../components/ui/Badge";
-import { HeartIcon } from "../components/ui/Icons";
+import { DoorOpenIcon, HeartIcon } from "../components/ui/Icons";
 import { coverFor, coverInitial } from "./cover";
 
 export const VISIBILITY: Record<SpaceVisibility, { label: string; variant: "neutral" | "blue" | "primary" }> = {
@@ -53,6 +54,16 @@ export function SpaceTile({ space, size, isNew, onToggleFavorite, onOpen, onEdit
       <div className="space-tile-cover">
         <Cover space={space} />
         <div className="space-tile-actions">
+          {/* Revealed on hover and on focus within the tile, so a keyboard user can reach it. */}
+          <Link
+            className="space-tile-icon-button space-tile-open"
+            to={`/s/${encodeURIComponent(space.name)}`}
+            aria-label={`Open ${space.title}`}
+            title="Open"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <DoorOpenIcon />
+          </Link>
           <button
             type="button"
             className={`space-tile-icon-button space-tile-heart${space.favorited ? " is-on" : ""}`}

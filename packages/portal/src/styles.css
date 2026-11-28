@@ -1632,6 +1632,11 @@ button.wb-app-cell-link:focus-visible { outline: none; }
 .space-tile-heart.is-on { color: var(--accent); }
 .space-tile-large .space-tile-icon-button { color: #fff; background: rgba(0, 0, 0, .28); }
 .space-tile-large .space-tile-icon-button:hover { background: rgba(0, 0, 0, .46); color: #fff; }
+.space-tile-open { text-decoration: none; opacity: 0; }
+.space-tile:hover .space-tile-open,
+.space-tile:focus-within .space-tile-open,
+.space-tile-open:focus-visible { opacity: 1; }
+@media (hover: none) { .space-tile-open { opacity: 1; } }
 .space-tile-count { font-variant-numeric: tabular-nums; }
 /* The audience badge as a control, on tiles the person owns. It sits above the
    stretched link so a click opens Sharing instead of the Space. */
