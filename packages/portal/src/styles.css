@@ -487,8 +487,9 @@ body {
   line-height: 1.4;
   pointer-events: none;
 }
-.ui-tooltip-bottom { top: calc(100% + var(--s-4)); right: 0; }
-.ui-tooltip-top { bottom: calc(100% + var(--s-4)); right: 0; }
+.ui-tooltip-bottom, .ui-tooltip-top { left: 50%; transform: translateX(calc(-50% + var(--tip-shift, 0px))); }
+.ui-tooltip-bottom { top: calc(100% + var(--s-4)); }
+.ui-tooltip-top { bottom: calc(100% + var(--s-4)); }
 .ui-tooltip-left { top: 50%; right: calc(100% + var(--s-8)); transform: translateY(-50%); }
 
 /* ui/PopoverSelect — a ghost trigger with a small listbox floating under it.
