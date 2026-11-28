@@ -103,6 +103,27 @@ export async function recordApprovalChange(
   }
 }
 
+/**
+ * Audit a portal delete of a Space by its owner. Never throws: the Space is
+ * already gone, and a failed audit write must not turn that into an error.
+ */
+export async function recordSpaceDelete(space: Pick<Space, "name">, ownerId: string): Promise<void> {
+  try {
+    await auditLogger.log({
+      user_id: ownerId,
+      integration: "spaces",
+      tool: `space:${space.name}`,
+      action: "SPACE_DELETE",
+      success: true,
+    });
+  } catch (err) {
+    console.error(
+      `[spaces] audit of delete failed: space=${space.name} owner=${ownerId}: ` +
+        (err instanceof Error ? err.message : String(err))
+    );
+  }
+}
+
 // ---- policy ----------------------------------------------------------------
 
 /** A tool the Space cannot use: internal integrations never run from a Space. */

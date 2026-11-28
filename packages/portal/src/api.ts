@@ -944,6 +944,41 @@ export const fetchAdminVault = () => adminGet<AdminVaultStats>("/api/admin/vault
 
 export const fetchAdminFiles = () => adminGet<AdminFilesStats>("/api/admin/files", "files stats");
 
+export interface AdminSpaceOpener {
+  email: string;
+  /** Unix milliseconds. */
+  last_opened_at: number;
+}
+
+export interface AdminSpaceItem {
+  name: string;
+  title: string;
+  description: string | null;
+  owner_email: string | null;
+  visibility: "private" | "users" | "org" | string;
+  /** Unix milliseconds. */
+  updated_at: number;
+  share_count: number;
+  favorite_count: number;
+  /** The true count; `openers` lists at most the 50 most recent. */
+  openers_30d: number;
+  openers: AdminSpaceOpener[];
+}
+
+export interface AdminSpacesPage {
+  spaces: AdminSpaceItem[];
+  has_more: boolean;
+  next_cursor: string | null;
+}
+
+export const fetchAdminSpaces = ({ q, cursor }: { q?: string; cursor?: string } = {}) => {
+  const params = new URLSearchParams();
+  if (q) params.set("q", q);
+  if (cursor) params.set("cursor", cursor);
+  const qs = params.toString();
+  return adminGet<AdminSpacesPage>(`/api/admin/spaces${qs ? `?${qs}` : ""}`, "spaces");
+};
+
 export const fetchAdminInstance = () =>
   adminGet<AdminInstance>("/api/admin/overview/instance", "instance info");
 
@@ -1095,7 +1130,6 @@ export async function clearUserPermission(id: string, capability: string): Promi
 // ─── Admin config ────────────────────────────────────────────────────────
 export interface AdminConfig {
   integrations: { name: string; display_name: string; enabled: boolean }[];
-  custom_apps_policy: { mode: "all" | "none" | "allowlist"; user_ids: string[] };
   browser_blocked_domains: string[];
   browser_allowed_domains: string[];
 }
@@ -1104,9 +1138,6 @@ export const fetchAdminConfig = () => adminGet<AdminConfig>("/api/admin/config",
 
 export const setAdminIntegrationEnabled = (name: string, enabled: boolean) =>
   adminPut(`/api/admin/config/integrations/${encodeURIComponent(name)}`, { enabled });
-
-export const setAdminCustomAppsPolicy = (policy: AdminConfig["custom_apps_policy"]) =>
-  adminPut("/api/admin/config/custom-apps", policy);
 
 export const setAdminBrowserBlockedDomains = (domains: string[], allowed?: string[]) =>
   adminPut("/api/admin/config/browser-blocked-domains", allowed === undefined ? { domains } : { domains, allowed });

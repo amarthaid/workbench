@@ -200,7 +200,8 @@ export interface AuditEvent {
     | "APPROVAL_APPROVE"
     | "APPROVAL_REJECT"
     | "APPROVAL_CANCEL"
-    | "SPACE_APPROVAL_CHANGE";
+    | "SPACE_APPROVAL_CHANGE"
+    | "SPACE_DELETE";
   success: boolean;
   error?: string;
   /** The user's email when the event was written (null if unknown). */

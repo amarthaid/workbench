@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { db } from "../src/db";
 import { config } from "../src/config";
 import {
-  customAppsAllowedFor,
   getSettings,
   isIntegrationDisabled,
   loadSettings,
@@ -23,16 +22,14 @@ afterEach(() => {
 });
 
 describe("instance settings", () => {
-  it("defaults to nothing disabled, custom apps open to everyone, and no blocked domains", async () => {
+  it("defaults to nothing disabled and no blocked domains", async () => {
     await loadSettings();
     expect(getSettings()).toEqual({
       disabled_integrations: [],
-      custom_apps_policy: { mode: "all", user_ids: [] },
       browser_blocked_domains: [],
       browser_allowed_domains: [],
     });
     expect(isIntegrationDisabled("acme")).toBe(false);
-    expect(customAppsAllowedFor("u1")).toBe(true);
   });
 
   it("saves a setting and makes it visible immediately in this process", async () => {
@@ -52,37 +49,16 @@ describe("instance settings", () => {
     expect(rows[0].updated_by).toBe("u-two");
   });
 
-  it("applies each custom-app policy mode", async () => {
-    await saveSetting("custom_apps_policy", { mode: "none", user_ids: [] }, "u-admin");
-    expect(customAppsAllowedFor("u1")).toBe(false);
-    await saveSetting("custom_apps_policy", { mode: "allowlist", user_ids: ["u1"] }, "u-admin");
-    expect(customAppsAllowedFor("u1")).toBe(true);
-    expect(customAppsAllowedFor("u2")).toBe(false);
-    await saveSetting("custom_apps_policy", { mode: "all", user_ids: [] }, "u-admin");
-    expect(customAppsAllowedFor("u2")).toBe(true);
-  });
-
   it("a corrupt stored value falls back to the default instead of throwing or disabling anything", async () => {
-    for (const [key, value] of [
-      ["disabled_integrations", "not json"],
-      ["custom_apps_policy", "{also not json"],
-    ]) {
-      await db.run("INSERT INTO instance_settings (key, value) VALUES (?, ?)", [key, value]);
-    }
+    await db.run("INSERT INTO instance_settings (key, value) VALUES (?, ?)", ["disabled_integrations", "not json"]);
     await loadSettings();
     expect(getSettings().disabled_integrations).toEqual([]);
-    expect(getSettings().custom_apps_policy).toEqual({ mode: "all", user_ids: [] });
   });
 
   it("a wrongly shaped stored value falls back to the default", async () => {
     await db.run("INSERT INTO instance_settings (key, value) VALUES (?, ?)", ["disabled_integrations", '{"a":1}']);
-    await db.run("INSERT INTO instance_settings (key, value) VALUES (?, ?)", [
-      "custom_apps_policy",
-      JSON.stringify({ mode: "everyone", user_ids: "u1" }),
-    ]);
     await loadSettings();
     expect(getSettings().disabled_integrations).toEqual([]);
-    expect(getSettings().custom_apps_policy).toEqual({ mode: "all", user_ids: [] });
   });
 
   it("drops non-string entries from a stored list", async () => {

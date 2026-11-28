@@ -16,10 +16,11 @@
 /* Popover */
 .af-pop { position: absolute; z-index: 20; top: calc(100% + 6px); right: 0; width: 360px; max-width: calc(100vw - 48px);
   background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-lg, 8px);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, .16); display: grid; }
-.af-pop-body { padding: var(--s-16); display: grid; gap: var(--s-12); }
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .16); display: grid; grid-template-columns: minmax(0, 1fr); }
+.af-pop-body { padding: var(--s-16); display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s-12); }
 .af-pop-body h3 { font-size: 14px; margin: 0; }
-.af-pop-foot { display: flex; justify-content: space-between; align-items: center; gap: var(--s-8); padding: var(--s-12) var(--s-16); border-top: 1px solid var(--border); }
+.af-pop-foot { display: flex; justify-content: space-between; align-items: center; gap: var(--s-8); padding: var(--s-16); border-top: 1px solid var(--border); }
+.af-pop-foot .af-sub { white-space: normal; flex: 1; min-width: 0; justify-content: center; text-align: center; }
 .af-pop .ui-input { width: 100%; min-height: 32px; }
 .af-field { display: grid; gap: 2px; }
 .af-lab { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: .05em; font-weight: 700; }

@@ -252,6 +252,11 @@ export function updateSpaceDetails(
   return request(`/api/spaces/${seg(name)}`, { method: "PATCH", body: change });
 }
 
+/** Owner only: remove the Space and everything stored in it. Cannot be undone. */
+export async function deleteSpace(name: string): Promise<void> {
+  await request<unknown>(`/api/spaces/${seg(name)}`, { method: "DELETE" });
+}
+
 /** Mark or unmark a Space as a favorite; answers the new state and how many people have. */
 export function setSpaceFavorite(name: string, on: boolean): Promise<{ favorited: boolean; favorite_count: number }> {
   return request(`/api/spaces/${seg(name)}/favorite`, { method: on ? "PUT" : "DELETE" });

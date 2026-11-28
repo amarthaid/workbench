@@ -2,7 +2,7 @@ import { listCustomApps, integrationKey, type CustomApp } from "./store";
 import { resolveAuthHeaders } from "./auth";
 import { discoverTools } from "./client";
 import { withTimeout } from "./timeout";
-import { customAppsAllowedFor } from "../settings/instance-settings";
+import { can } from "../permissions/store";
 
 export interface IndexedTool {
   /** Namespaced name exposed to the agent: `${appName}__${remoteName}`. */
@@ -47,9 +47,9 @@ export function invalidateIndex(userId: string): void {
 }
 
 export async function ensureIndex(userId: string): Promise<IndexedTool[]> {
-  // Checked before the cache, so a policy change takes effect without waiting
-  // for the cached index to expire.
-  if (!customAppsAllowedFor(userId)) return [];
+  // Checked before the cache, so a revoke takes effect without waiting for the
+  // cached index to expire. One read per call, so one per tool listing.
+  if (!(await can(userId, "custom_apps.create"))) return [];
 
   const cached = cache.get(userId);
   if (cached && Date.now() - cached.at < TTL_MS) return cached.tools;

@@ -6,6 +6,7 @@ import { Box } from "../components/ui/Box";
 import { EmptyState } from "../components/ui/EmptyState";
 import { Input } from "../components/ui/Input";
 import { Segmented } from "../components/ui/Segmented";
+import { SpaceDetailModal } from "../spaces/SpaceDetailModal";
 import { SpaceTile } from "../spaces/SpaceTile";
 import { EditDetailsModal } from "../spaces/EditDetailsModal";
 import { SharingModal } from "../spaces/SharingModal";
@@ -41,6 +42,7 @@ export default function Spaces() {
   const [filter, setFilter] = useState<SpaceFilter>("all");
   const [editing, setEditing] = useState<SpaceSummary | null>(null);
   const [sharing, setSharing] = useState<SpaceSummary | null>(null);
+  const [detailName, setDetailName] = useState<string | null>(null);
   const [requestsOpen, setRequestsOpen] = useState(false);
   // Only an owner's rows carry a count. The chip hides at zero.
   const pendingRequests = spaces.reduce((n, s) => n + (s.mine ? Number(s.pending_requests) || 0 : 0), 0);
@@ -64,6 +66,10 @@ export default function Spaces() {
     onSuccess: (res, s) => patchRow(s.name, res),
   });
 
+  // Read from the list on every render, so the heart and a rename show at once,
+  // and a Space that left the list closes its own modal.
+  const detail = detailName ? spaces.find((s) => s.name === detailName) : undefined;
+
   const now = Date.now();
   const arranged = useMemo(() => arrangeSpaces(spaces, { query, filter }), [spaces, query, filter]);
   const { favorites, recent, rest } = arranged;
@@ -76,7 +82,7 @@ export default function Spaces() {
       size={size}
       isNew={isNewForMe(s, now)}
       onToggleFavorite={(x) => favorite.mutate(x)}
-      onEditDetails={setEditing}
+      onOpen={(x) => setDetailName(x.name)}
       onEditSharing={setSharing}
     />
   );
@@ -164,6 +170,26 @@ export default function Spaces() {
         </div>
       )}
 
+      {detail && !editing && !sharing && (
+        <SpaceDetailModal
+          space={detail}
+          onClose={() => setDetailName(null)}
+          onToggleFavorite={(x) => favorite.mutate(x)}
+          onEditDetails={(x) => {
+            setDetailName(null);
+            setEditing(x);
+          }}
+          onEditSharing={(x) => {
+            setDetailName(null);
+            setSharing(x);
+          }}
+          onDeleted={(name) => {
+            setDetailName(null);
+            qc.setQueryData<SpaceSummary[]>(["spaces"], (rows) => rows?.filter((r) => r.name !== name));
+            qc.removeQueries({ queryKey: ["space", name] });
+          }}
+        />
+      )}
       <RequestsModal open={requestsOpen} onClose={() => setRequestsOpen(false)} />
       {editing && (
         <EditDetailsModal

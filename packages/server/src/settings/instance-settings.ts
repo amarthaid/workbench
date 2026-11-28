@@ -2,16 +2,8 @@ import { config } from "../config";
 import { db } from "../db";
 import { isHostBlockedBy, normaliseBlockedDomain } from "./browser-blocklist";
 
-export type CustomAppsMode = "all" | "none" | "allowlist";
-
-export interface CustomAppsPolicy {
-  mode: CustomAppsMode;
-  user_ids: string[];
-}
-
 export interface InstanceSettings {
   disabled_integrations: string[];
-  custom_apps_policy: CustomAppsPolicy;
   /** Hosts agent browser tabs may not load (each also blocks its subdomains). */
   browser_blocked_domains: string[];
   /** Exceptions to the blocklist: the more specific entry wins, allow wins a tie. */
@@ -20,7 +12,6 @@ export interface InstanceSettings {
 
 const DEFAULTS: InstanceSettings = {
   disabled_integrations: [],
-  custom_apps_policy: { mode: "all", user_ids: [] },
   browser_blocked_domains: [],
   browser_allowed_domains: [],
 };
@@ -35,13 +26,6 @@ export function getSettings(): InstanceSettings {
 
 export function isIntegrationDisabled(name: string): boolean {
   return snapshot.disabled_integrations.includes(name);
-}
-
-export function customAppsAllowedFor(userId: string): boolean {
-  const p = snapshot.custom_apps_policy;
-  if (p.mode === "all") return true;
-  if (p.mode === "none") return false;
-  return p.user_ids.includes(userId);
 }
 
 /** True when an agent browser tab must not load a URL on this host. */
@@ -70,15 +54,6 @@ function parseDisabled(raw: string | undefined): string[] {
   return Array.isArray(v) ? stringList(v) : [];
 }
 
-function parsePolicy(raw: string | undefined): CustomAppsPolicy {
-  const v = parseJson(raw) as { mode?: unknown; user_ids?: unknown } | undefined;
-  if (!v || typeof v !== "object") return DEFAULTS.custom_apps_policy;
-  const mode = v.mode;
-  if (mode !== "all" && mode !== "none" && mode !== "allowlist") return DEFAULTS.custom_apps_policy;
-  if (!Array.isArray(v.user_ids)) return DEFAULTS.custom_apps_policy;
-  return { mode, user_ids: stringList(v.user_ids) };
-}
-
 function parseBlockedDomains(raw: string | undefined): string[] {
   const out = new Set<string>();
   for (const d of stringList(parseJson(raw))) {
@@ -93,14 +68,13 @@ export async function loadSettings(): Promise<void> {
   const byKey = new Map(rows.map((r) => [r.key, r.value]));
   snapshot = {
     disabled_integrations: parseDisabled(byKey.get("disabled_integrations")),
-    custom_apps_policy: parsePolicy(byKey.get("custom_apps_policy")),
     browser_blocked_domains: parseBlockedDomains(byKey.get("browser_blocked_domains")),
     browser_allowed_domains: parseBlockedDomains(byKey.get("browser_allowed_domains")),
   };
 }
 
 export async function saveSetting(
-  key: "disabled_integrations" | "custom_apps_policy" | "browser_blocked_domains" | "browser_allowed_domains",
+  key: "disabled_integrations" | "browser_blocked_domains" | "browser_allowed_domains",
   value: unknown,
   updatedBy: string
 ): Promise<void> {

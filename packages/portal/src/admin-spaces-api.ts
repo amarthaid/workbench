@@ -1,4 +1,4 @@
-// Portal client for GET /api/admin/spaces (admin session only). Mirrors the
+// Portal client for GET /api/admin/spaces/search (admin session only). Mirrors the
 // auth handling of spaces-api.ts: the viewer's Bearer token, nothing else.
 
 const API_URL = import.meta.env.VITE_API_URL || "";
@@ -16,7 +16,7 @@ export interface AdminSpaceSearch {
 
 export async function searchAdminSpaces(q: string, signal?: AbortSignal): Promise<AdminSpaceSearch> {
   const token = localStorage.getItem("awb_token");
-  const res = await fetch(`${API_URL}/api/admin/spaces?q=${encodeURIComponent(q)}&limit=20`, {
+  const res = await fetch(`${API_URL}/api/admin/spaces/search?q=${encodeURIComponent(q)}&limit=20`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     signal,
   });

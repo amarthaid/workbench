@@ -186,7 +186,12 @@ export function ActivityFilters({ value, onChange, integrations, spaceField, par
       if (e.key === "Escape") closePopover();
     }
     function onDown(e: MouseEvent) {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+      const wrap = wrapRef.current;
+      if (!wrap) return;
+      // Picking a suggestion re-renders and removes the clicked option before
+      // this runs, so `contains(target)` is false for a click that was inside.
+      // The event path was fixed at dispatch and still names the wrapper.
+      if (!e.composedPath().includes(wrap)) setOpen(false);
     }
     document.addEventListener("keydown", onKey);
     document.addEventListener("mousedown", onDown);

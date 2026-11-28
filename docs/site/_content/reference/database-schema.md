@@ -282,8 +282,8 @@ Admin-set, instance-wide settings, one row per key. Nothing secret is stored her
 
 | Column | Type | Stores | Written by |
 |---|---|---|---|
-| `key` | TEXT PK | `disabled_integrations`, `custom_apps_policy`, `browser_blocked_domains` or `browser_allowed_domains` | Admin Config tab |
-| `value` | TEXT NOT NULL | JSON: a list of integration names, `{ "mode": "all" \| "none" \| "allowlist", "user_ids": [...] }`, or a list of normalised domains | Admin Config tab |
+| `key` | TEXT PK | `disabled_integrations`, `browser_blocked_domains`, `browser_allowed_domains`, `custom_apps_policy` (read only by a one-time migration, then ignored) or `custom_apps_policy_migrated` (its marker) | Admin Config tab |
+| `value` | TEXT NOT NULL | JSON: a list of integration names or of normalised domains; the legacy `custom_apps_policy` is `{ "mode": "all" \| "none" \| "allowlist", "user_ids": [...] }` | Admin Config tab |
 | `updated_at` | INTEGER | Unix seconds of the last change | Admin Config tab |
 | `updated_by` | TEXT | The admin's user id | Admin Config tab |
 

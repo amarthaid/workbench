@@ -1,6 +1,9 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { useState } from "react";
-import { fireEvent, screen, within } from "@testing-library/react";
+import { flushSync } from "react-dom";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderWithClient } from "../test-utils";
 import {
   ActivityFilters,
@@ -111,6 +114,84 @@ describe("ActivityFilters", () => {
     fireEvent.mouseDown(screen.getByRole("button", { name: "elsewhere" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  // In a browser, React's update for a mouse down is flushed in the microtask
+  // checkpoint after its own listener, before the event bubbles on to `document`,
+  // so the clicked option is already gone from the DOM when the popover's
+  // outside-click handler looks at its target. A scripted dispatchEvent has no
+  // checkpoint, so flush by hand on `body`, which sits between the two.
+  function mouseDownLikeBrowser(el: Element) {
+    const g = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const prev = g.IS_REACT_ACT_ENVIRONMENT;
+    g.IS_REACT_ACT_ENVIRONMENT = false;
+    const flush = () => flushSync(() => {});
+    document.body.addEventListener("mousedown", flush);
+    try {
+      el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+    } finally {
+      document.body.removeEventListener("mousedown", flush);
+      g.IS_REACT_ACT_ENVIRONMENT = prev;
+    }
+  }
+
+  it("a mouse click on a Space suggestion selects it and keeps the popover open", async () => {
+    const onChange = vi.fn();
+    renderWithClient(<Harness onChange={onChange} />);
+    openPopover();
+    const dialog = screen.getByRole("dialog", { name: "Filters" });
+    const box = within(dialog).getByRole("combobox", { name: "Space" });
+    fireEvent.focus(box);
+    mouseDownLikeBrowser(await screen.findByRole("option", { name: /Branch Cockpit/ }));
+    await waitFor(() => expect(box).toHaveValue("Branch Cockpit"));
+    expect(screen.getByRole("dialog", { name: "Filters" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    expect((onChange.mock.calls[0][0] as AppliedFilters).space).toBe("cockpit");
+  });
+
+  it("a mouse click on a Person suggestion selects it and keeps the popover open", async () => {
+    const onChange = vi.fn();
+    renderWithClient(<Harness onChange={onChange} />);
+    openPopover();
+    const dialog = screen.getByRole("dialog", { name: "Filters" });
+    const box = within(dialog).getByRole("combobox", { name: "Person" });
+    fireEvent.focus(box);
+    mouseDownLikeBrowser(await screen.findByRole("option", { name: /ana@example.com/ }));
+    await waitFor(() => expect(box).toHaveValue("ana@example.com"));
+    expect(screen.getByRole("dialog", { name: "Filters" })).toBeInTheDocument();
+  });
+
+  it("Esc closes the suggestion list first, then the popover", async () => {
+    renderWithClient(<Harness onChange={vi.fn()} />);
+    openPopover();
+    const box = within(screen.getByRole("dialog", { name: "Filters" })).getByRole("combobox", { name: "Space" });
+    fireEvent.focus(box);
+    await screen.findAllByRole("option");
+    fireEvent.keyDown(box, { key: "Escape" });
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Filters" })).toBeInTheDocument();
+    fireEvent.keyDown(box, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("a mouse down outside the popover and its list still closes it", async () => {
+    renderWithClient(<><button>elsewhere</button><Harness onChange={vi.fn()} /></>);
+    openPopover();
+    fireEvent.focus(within(screen.getByRole("dialog", { name: "Filters" })).getByRole("combobox", { name: "Space" }));
+    await screen.findAllByRole("option");
+    mouseDownLikeBrowser(screen.getByRole("button", { name: "elsewhere" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("gives the popover the same inner padding on every side", () => {
+    const css = readFileSync(join(__dirname, "activity-filters.css"), "utf8");
+    const rule = (sel: string) => new RegExp(`^${sel.replace(/\./g, "\\.")}\\s*\\{([^}]*)\\}`, "m").exec(css)?.[1] ?? "";
+    expect(rule(".af-pop-body")).toMatch(/padding:\s*var\(--s-16\)\s*;/);
+    expect(rule(".af-pop-foot")).toMatch(/padding:\s*var\(--s-16\)\s*;/);
+    // Grid tracks must be able to shrink or wide content pushes past the right edge.
+    expect(rule(".af-pop-body")).toMatch(/minmax\(0,\s*1fr\)/);
+    expect(rule(".af-pop")).toMatch(/minmax\(0,\s*1fr\)/);
+    expect(rule(".af-pop-foot .af-sub")).toMatch(/white-space:\s*normal/);
   });
 
   it("Reset clears the draft without applying", () => {

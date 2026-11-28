@@ -18,6 +18,7 @@ import {
   isInternalTool,
   policyRows,
   recordApprovalChange,
+  recordSpaceDelete,
   shownConsentHash,
   writeApprovals,
   type ApprovalMode,
@@ -48,6 +49,7 @@ import {
   parseEmails,
   recordOpen,
   revokeConsent,
+  deleteSpace,
   setFavorite,
   toolsHash,
   userSpaceStates,
@@ -402,6 +404,20 @@ export async function registerSpaceApiRoutes(app: FastifyInstance): Promise<void
         if (!(await checkConsent(space, viewer.userId, await policyRows(space, viewer.userId))).consented) return { recorded: false };
         await recordOpen(space.name, viewer.userId);
         return { recorded: true };
+      });
+
+      // Owner-only delete. Same 404/403 shape as the other owner routes. The
+      // audit row is written after the delete and never undoes it.
+      scope.delete<{ Params: { name: string } }>("/:name", async (request, reply) => {
+        const viewer = viewerOf(request);
+        const space = await openable(request.params.name, viewer);
+        if (!space) return notFound(reply);
+        if (space.ownerId !== viewer.userId) {
+          return fail(reply, 403, { code: "FORBIDDEN", message: "Only the owner can delete this Space." });
+        }
+        await deleteSpace(space.name);
+        await recordSpaceDelete(space, viewer.userId);
+        return { deleted: true };
       });
 
       // Owner-only title and description, so the portal can edit them without

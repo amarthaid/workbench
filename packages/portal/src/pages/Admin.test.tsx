@@ -17,6 +17,7 @@ vi.mock("../components/admin/ProfilesCard", () => ({
 }));
 vi.mock("../components/admin/VaultTab", () => ({ default: () => <p>vault-body</p> }));
 vi.mock("../components/admin/FilesTab", () => ({ default: () => <p>files-body</p> }));
+vi.mock("../components/admin/SpacesTab", () => ({ default: () => <p>spaces-body</p> }));
 const approvals = vi.hoisted(() => ({ fetchAdminApprovals: vi.fn() }));
 vi.mock("../approvals-api", async (orig) => ({ ...(await orig<typeof import("../approvals-api")>()), ...approvals }));
 vi.mock("../components/admin/UsersTab", () => ({ default: () => <p>users-body</p> }));
@@ -59,7 +60,7 @@ describe("Admin page", () => {
     renderAt("/admin");
     const names = screen.getAllByRole("tab").map((t) => t.textContent);
     expect(names).toEqual([
-      "Overview", "Activity", "Connections", "Custom apps", "Browser profiles", "Vault", "Files", "Approvals", "Users", "Config",
+      "Overview", "Activity", "Connections", "Custom apps", "Browser profiles", "Vault", "Files", "Spaces", "Approvals", "Users", "Config",
     ]);
   });
 
@@ -67,6 +68,12 @@ describe("Admin page", () => {
     renderAt("/admin/connections");
     expect(screen.getByRole("tab", { name: "Connections" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByText("connections-body")).toBeInTheDocument();
+  });
+
+  it("opens the Spaces tab at /admin/spaces", () => {
+    renderAt("/admin/spaces");
+    expect(screen.getByRole("tab", { name: "Spaces" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("spaces-body")).toBeInTheDocument();
   });
 
   it("a tab click changes the route and shows only that tab", () => {

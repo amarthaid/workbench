@@ -14,6 +14,11 @@ export const CAPABILITIES = {
     label: "Delegate access in Spaces",
     description: "Lets this user share Spaces that run with their connected apps.",
   },
+  "custom_apps.create": {
+    default: "deny",
+    label: "Add and use custom apps",
+    description: "Lets this user connect their own MCP servers as custom apps.",
+  },
 } as const satisfies Record<string, CapabilityDef>;
 
 export type Capability = keyof typeof CAPABILITIES;

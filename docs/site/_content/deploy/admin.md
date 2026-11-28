@@ -30,7 +30,7 @@ reach the allowlist.
 
 ## What the Overview shows
 
-Every section is its own tab with its own URL (`/admin`, `/admin/activity`, `/admin/connections`, `/admin/custom-apps`, `/admin/profiles`, `/admin/vault`, `/admin/files`, `/admin/users`, `/admin/config`), so the browser's back button moves between them. Each tab loads only when you open it, so nothing walks the profiles or the workspace on disk until you ask. They are read-only and fail independently.
+Every section is its own tab with its own URL (`/admin`, `/admin/activity`, `/admin/connections`, `/admin/custom-apps`, `/admin/profiles`, `/admin/vault`, `/admin/files`, `/admin/spaces`, `/admin/users`, `/admin/config`), so the browser's back button moves between them. Each tab loads only when you open it, so nothing walks the profiles or the workspace on disk until you ask. They are read-only and fail independently.
 
 The **Overview** tab holds:
 
@@ -44,6 +44,8 @@ The **Overview** tab holds:
 - **Browser profiles:** disk used per user and whether the profile is live. "Live" means a use-marker file moved in the last hour. Workers and pods that share a profiles volume all show up here.
 - **Vault:** counts only. Secrets stored, users holding any, secrets unused for 90 days, pending one-time links, and the users holding the most. No secret name or value is ever returned.
 - **Files:** the agent file workspace. Disk used, file count, the age of the oldest file (older than `WORKSPACE_TTL_HOURS` means the reaper is not running), and the largest users and files by size. No file name or content is ever returned.
+
+- **Spaces:** every Space, newest updated first, as a card with title and name, owner email, audience (Only me, Specific people with the count, or Everyone signed in), last updated, the description clamped to two lines, the like count and how many people opened it in the last 30 days. Expanding a card lists who opened it and when they last did (the owner's own opens are excluded). The list is paged and has a search box (name prefix or title). It is read only: no delete, edit or open from here. Each opener list is capped at 50 people per Space; the count stays the true number.
 
 ## Managing users
 
@@ -60,7 +62,10 @@ The **Users** tab lists every user with their connection and custom-app counts, 
 
 | Capability | Default | What it allows |
 |---|---|---|
+| Add and use custom apps | off | The user can connect their own MCP servers as custom apps. A user without it cannot add or update custom apps, and agents stop seeing the tools of any custom apps they already have (the apps themselves are kept) |
 | Delegate access in Spaces | off | The user can turn on [delegated access](../integrations/spaces.md#delegated-access) for their shared Spaces, so viewers run its tools with this user's connections |
+
+Users created after this permission shipped start without **Add and use custom apps**; an admin allows it per user. On first start after the upgrade, the old Config setting "Who can add custom apps" is converted once: with everyone allowed (also the old default, when it was never set), every existing user is granted the permission; with selected users, each listed user that still exists; with no one, nobody. Those rows show as granted by `system`. A `custom_apps_policy_migrated` marker in `instance_settings` stops it running again, and the old setting is then ignored.
 
 Setting **Delegate access in Spaces** back to Default while the user has Spaces using it asks first ("dev@example.com has 2 Spaces using delegated access. They will stop working for viewers until it is allowed again."). Their Spaces keep the setting: viewers get **Shared access is off**, and allowing it again resumes them. The permission is read on every call, so a change applies at once.
 
@@ -93,10 +98,9 @@ can approve. Turning the setting on does not change existing accounts.
 
 ## Instance config
 
-The **Config** tab holds three instance-wide settings:
+The **Config** tab holds two instance-wide settings:
 
 - **Integrations:** turn an integration off for every user. It disappears from tool search, schema lookup and execution, the REST endpoint and the connect flow. Existing connections are kept, and turning it back on restores everything.
-- **Custom apps:** choose who can add custom apps: everyone, no one, or selected users. Excluded users keep their existing apps, but agents stop seeing those apps' tools.
 - **Browser blocked domains:** domains that agent browser tabs may not load, one per line. A plain entry also blocks its subdomains; a `*.example.com` entry blocks only the subdomains, not `example.com` itself. A second list holds **exceptions**: hosts to allow even though a block entry matches. The more specific entry wins and an exception wins a tie, so block `*.prod.example.com` plus exception `x.prod.example.com` allows only `x.prod.example.com` (and its subdomains) among the prod hosts. Entries in both lists are normalised (lowercased, a trailing dot dropped, a pasted URL reduced to its host, international names to punycode), and an entry that is not a hostname or IP rejects the save and is named in the error. Every HTTP(S) request is checked, not just navigations; WebSocket connections are not. See [Browser](../integrations/browser.md).
 
 Changes apply at once in the process that handled the request. Other workers and pods pick them up within `INSTANCE_SETTINGS_POLL_SECONDS` (default 5), so allow that long before assuming a change is everywhere. OAuth client secrets are not editable here; they stay in environment variables.
