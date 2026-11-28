@@ -247,18 +247,16 @@ describe("SpaceDetailModal inline edit", () => {
 });
 
 describe("audience and delegation indicators", () => {
-  it("is focusable and opens a tooltip with the full meaning on focus", () => {
+  it("is focusable and carries the full meaning as its title", () => {
     open(space({ visibility: "private", delegate_access: true }));
     const aud = screen.getByRole("img", { name: "Audience: Private" });
     expect(aud).toHaveAttribute("tabindex", "0");
-    fireEvent.focus(aud);
-    expect(screen.getByRole("tooltip")).toHaveTextContent("Only you can open this");
+    expect(aud).toHaveAttribute("title", "Only you can open this");
   });
 
   it("explains delegation and its pause", () => {
     open(space({ delegate_access: true, delegation_suspended: true }));
     const d = screen.getByRole("img", { name: "Delegated, paused" });
-    fireEvent.mouseEnter(d.parentElement!);
-    expect(screen.getByRole("tooltip")).toHaveTextContent("Delegation is paused until the owner confirms");
+    expect(d).toHaveAttribute("title", "Delegation is paused until the owner confirms");
   });
 });
