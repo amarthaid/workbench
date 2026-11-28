@@ -5,7 +5,7 @@ import { fetchSpace, type SpaceSummary } from "../spaces-api";
 import { relativeTime } from "../format";
 import { Modal } from "../components/ui/Modal";
 import { Button } from "../components/ui/Button";
-import { ClockIcon, DoorOpenIcon, EyeIcon, HeartIcon } from "../components/ui/Icons";
+import { ClockIcon, ArrowRightIcon, EyeIcon, HeartIcon } from "../components/ui/Icons";
 import { AudienceIndicator, Cover, DelegatedIndicator } from "./SpaceTile";
 import { DeleteSpaceDialog } from "./DeleteSpaceDialog";
 import { EditableDescription, EditableTitle, useDetailsSave, type DetailsSaved } from "./InlineDetails";
@@ -77,7 +77,7 @@ export function SpaceDetailModal({ space, onClose, onToggleFavorite, onDetailsSa
               </>
             )}
             <Link className="ui-button ui-button-primary ui-button-md space-detail-open" to={`/s/${encodeURIComponent(space.name)}`}>
-              <DoorOpenIcon />
+              <ArrowRightIcon />
               Open
             </Link>
           </>

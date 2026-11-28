@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import type { SpaceSummary, SpaceVisibility } from "../spaces-api";
 import { relativeTime } from "../format";
 import { Badge } from "../components/ui/Badge";
-import { DelegateIcon, DelegatePausedIcon, DoorOpenIcon, GlobeIcon, HeartIcon, LockIcon, UsersIcon } from "../components/ui/Icons";
+import { DelegateIcon, DelegatePausedIcon, ArrowRightIcon, GlobeIcon, HeartIcon, LockIcon, UsersIcon } from "../components/ui/Icons";
 import { coverFor, coverInitial } from "./cover";
 
 type Variant = "neutral" | "blue" | "primary" | "orange";
@@ -152,7 +152,7 @@ export function SpaceTile({ space, size, isNew, onToggleFavorite, onOpen, onEdit
             title="Open"
             onClick={(e) => e.stopPropagation()}
           >
-            <DoorOpenIcon />
+            <ArrowRightIcon />
           </Link>
         </span>
       </div>
