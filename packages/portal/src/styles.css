@@ -686,6 +686,11 @@ body {
 .ui-row-actions.is-reveal:focus-within { opacity: 1; }
 @media (hover: none) { .ui-row-actions.is-reveal { opacity: 1; } }
 
+/* --- Header band tools (filter, sort, bulk bar, primary action) --- */
+.ui-list-tools { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: var(--s-8); }
+.ui-list-tools .ui-input { width: auto; min-width: 140px; max-width: 220px; }
+.ui-list-row-leading input[type="checkbox"] { margin: 0; }
+
 /* --- List skeleton: same height as a real row --- */
 .ui-list-skeleton-row { min-height: 56px; }
 .ui-list-skeleton-bar { display: block; background: var(--bg-sunk); border-radius: var(--radius-sm); animation: ui-list-pulse 1.4s ease-in-out infinite; }

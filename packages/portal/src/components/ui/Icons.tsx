@@ -107,3 +107,38 @@ export function MoreIcon() {
     </svg>
   );
 }
+
+export function DownloadIcon() {
+  return (
+    <svg {...svgProps}>
+      <path d="M8 2.5v8M4.5 7.5L8 11l3.5-3.5" />
+      <path d="M2.5 13.5h11" />
+    </svg>
+  );
+}
+
+export function KeyIcon() {
+  return (
+    <svg {...svgProps}>
+      <circle cx="5.5" cy="10.5" r="2.5" />
+      <path d="M7.3 8.7L13.5 2.5M11 5l1.8 1.8M9.3 6.7l1.4 1.4" />
+    </svg>
+  );
+}
+
+export type FileKind = "image" | "table" | "document" | "archive" | "code" | "other";
+
+/** A page glyph with a small mark for the kind of file. */
+export function FileIcon({ kind = "other" }: { kind?: FileKind }) {
+  return (
+    <svg {...svgProps}>
+      <path d="M3.5 1.5h6l3 3v10h-9z" />
+      <path d="M9.5 1.5v3h3" />
+      {kind === "image" && <path d="M5.5 12l2-2.5 1.5 1.5 1.5-2 1 3" />}
+      {kind === "table" && <path d="M5.5 8h5M5.5 10.5h5M8 7v6" />}
+      {kind === "document" && <path d="M5.5 8h5M5.5 10h5M5.5 12h3" />}
+      {kind === "archive" && <path d="M8 6v1.5M8 9v1.5M8 12v1" />}
+      {kind === "code" && <path d="M7 8.5L5.5 10 7 11.5M9 8.5L10.5 10 9 11.5" />}
+    </svg>
+  );
+}
