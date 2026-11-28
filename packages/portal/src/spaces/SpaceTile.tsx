@@ -3,7 +3,6 @@ import type { ReactNode } from "react";
 import type { SpaceSummary, SpaceVisibility } from "../spaces-api";
 import { relativeTime } from "../format";
 import { Badge } from "../components/ui/Badge";
-import { Tooltip } from "../components/ui/Tooltip";
 import { DelegateIcon, DelegatePausedIcon, DoorOpenIcon, GlobeIcon, HeartIcon, LockIcon, UsersIcon } from "../components/ui/Icons";
 import { coverFor, coverInitial } from "./cover";
 
@@ -31,18 +30,15 @@ function Glyph({ variant, dashed = false, children }: { variant: Variant; dashed
   );
 }
 
-/** Who can open the Space, as an icon with a tooltip. */
+/** Who can open the Space, as an icon with a native title. */
 export function AudienceIndicator({ space }: { space: SpaceSummary }) {
   const vis = VISIBILITY[space.visibility] ?? VISIBILITY.private;
   const aud = AUDIENCE[space.visibility] ?? AUDIENCE.private;
   return (
-    <Tooltip label={aud.tip} placement="top">
-      <span role="img" tabIndex={0} aria-label={`Audience: ${vis.label}`} title={aud.tip}>
-        <Glyph variant={vis.variant}>
-          {aud.icon}
-        </Glyph>
-      </span>
-    </Tooltip>
+    // The native title is the hover text: a custom tooltip is clipped by the dialog's overflow.
+    <span role="img" tabIndex={0} aria-label={`Audience: ${vis.label}`} title={aud.tip}>
+      <Glyph variant={vis.variant}>{aud.icon}</Glyph>
+    </span>
   );
 }
 
@@ -80,13 +76,11 @@ export function DelegatedIndicator({ space }: { space: SpaceSummary }) {
     ? "Delegation is paused until the owner confirms"
     : "Runs with the owner's connections, so viewers need no accounts of their own";
   return (
-    <Tooltip label={tip} placement="top">
-      <span role="img" tabIndex={0} aria-label={paused ? "Delegated, paused" : "Delegated"} title={tip}>
-        <Glyph variant={paused ? "neutral" : "orange"} dashed={paused}>
-          {paused ? <DelegatePausedIcon /> : <DelegateIcon />}
-        </Glyph>
-      </span>
-    </Tooltip>
+    <span role="img" tabIndex={0} aria-label={paused ? "Delegated, paused" : "Delegated"} title={tip}>
+      <Glyph variant={paused ? "neutral" : "orange"} dashed={paused}>
+        {paused ? <DelegatePausedIcon /> : <DelegateIcon />}
+      </Glyph>
+    </span>
   );
 }
 
