@@ -1538,6 +1538,100 @@ describe("cascade through the API", () => {
   });
 });
 
+describe("DELETE /api/spaces/:name", () => {
+  const del = (user: string | null, name = "s1", headers: Record<string, string> = {}) =>
+    app.inject({ method: "DELETE", url: `/api/spaces/${name}`, headers: user ? { ...as(user), ...headers } : headers });
+  const count = async (table: string, col = "space_name") =>
+    Number((await db.get<{ n: number | string }>(`SELECT COUNT(*) AS n FROM ${table} WHERE ${col} = 's1'`))?.n ?? 0);
+  const deleteAudit = () =>
+    db.all<{ user_id: string; integration: string; tool: string; success: unknown }>(
+      "SELECT user_id, integration, tool, success FROM audit_log WHERE action = 'SPACE_DELETE' ORDER BY id"
+    );
+
+  async function populate() {
+    await consent("u2");
+    await kvPut("s1", "u2", "k", JSON.stringify({ a: 1 }));
+    await app.inject({ method: "PUT", url: "/api/spaces/s1/favorite", headers: as("u2") });
+    await db.run("INSERT INTO space_tool_approvals (space_name, user_id, tool, mode, updated_at) VALUES ('s1', 'u2', 'acme_x', 'ask', 1)");
+    await db.run(
+      "INSERT INTO approval_requests (id, kind, subject, requester_id, status, created_at) VALUES ('r1', 'space.access', 's1', 'u3', 'pending', 1)"
+    );
+  }
+
+  it("the owner deletes it and every table and the files are clean", async () => {
+    await populate();
+    const res = await del("u1");
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ deleted: true });
+    for (const t of ["spaces:name", "space_shares", "space_consents", "space_tool_approvals", "space_user_state", "space_kv"]) {
+      const [table, col] = t.split(":");
+      expect(await count(table, col)).toBe(0);
+    }
+    expect(fs.existsSync(path.join(tmp, "s1"))).toBe(false);
+    const r = await db.get<{ status: string }>("SELECT status FROM approval_requests WHERE id = 'r1'");
+    expect(r?.status).toBe("cancelled");
+    expect((await app.inject({ method: "GET", url: "/api/spaces/s1", headers: as("u1") })).statusCode).toBe(404);
+  });
+
+  it("re-creating the same name leaves no stale rows", async () => {
+    await populate();
+    expect((await del("u1")).statusCode).toBe(200);
+    await upsertSpace({ name: "s1", ownerId: "u1", title: "Again", tools: TOOLS, visibility: "org" });
+    writeSpaceFiles(tmp, "s1", { "index.html": "<p>new</p>" });
+    expect(await count("space_consents")).toBe(0);
+    expect(await count("space_kv")).toBe(0);
+    expect(await count("space_user_state")).toBe(0);
+    expect(await count("space_tool_approvals")).toBe(0);
+    expect((await db.get<{ status: string }>("SELECT status FROM approval_requests WHERE id = 'r1'"))?.status).not.toBe("pending");
+    expect(fs.existsSync(path.join(tmp, "s1", "index.html"))).toBe(true);
+    expect(fs.readFileSync(path.join(tmp, "s1", "index.html"), "utf8")).toBe("<p>new</p>");
+  });
+
+  it("a person who can open it but does not own it gets 403 and nothing is deleted", async () => {
+    const res = await del("u2");
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ code: "FORBIDDEN" });
+    expect(await getSpace("s1")).not.toBeNull();
+    expect(await deleteAudit()).toEqual([]);
+  });
+
+  it("a person who cannot open it gets 404 and nothing is deleted", async () => {
+    const res = await del("u3");
+    expect(res.statusCode).toBe(404);
+    expect(await getSpace("s1")).not.toBeNull();
+  });
+
+  it("an unknown Space is 404", async () => {
+    expect((await del("u1", "nope")).statusCode).toBe(404);
+  });
+
+  it("an API key or a non-session bearer is 401 and nothing is deleted", async () => {
+    const { apiKey } = await setApiKey("u1");
+    expect((await del(null, "s1", { "x-workbench-api-key": apiKey })).statusCode).toBe(401);
+    expect((await del(null, "s1", { authorization: `Bearer ${apiKey}` })).statusCode).toBe(401);
+    expect((await del(null, "s1", { authorization: "Bearer mcp-access-token-abc" })).statusCode).toBe(401);
+    expect((await del(null)).statusCode).toBe(401);
+    expect(await getSpace("s1")).not.toBeNull();
+    expect(fs.existsSync(path.join(tmp, "s1"))).toBe(true);
+    expect(await deleteAudit()).toEqual([]);
+  });
+
+  it("writes one SPACE_DELETE audit row for the owner", async () => {
+    expect((await del("u1")).statusCode).toBe(200);
+    const rows = await deleteAudit();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ user_id: "u1", integration: "spaces", tool: "space:s1" });
+  });
+
+  it("a throwing audit logger still answers 200 and the Space is gone", async () => {
+    vi.spyOn(auditLogger, "log").mockRejectedValue(new Error("audit store down"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect((await del("u1")).statusCode).toBe(200);
+    expect(await getSpace("s1")).toBeNull();
+    expect(err).toHaveBeenCalled();
+  });
+});
+
 describe("tool approvals in the portal API", () => {
   const WRITE = "acme_update_item";
   const DESTRUCTIVE = "acme_delete_item";
