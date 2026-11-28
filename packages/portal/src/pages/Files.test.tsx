@@ -387,7 +387,7 @@ describe("Files page", () => {
   });
 
   describe("selection and bulk actions", () => {
-    it("shows the bulk bar in the header band once something is selected", async () => {
+    it("shows the bulk bar in its own row under the header once something is selected", async () => {
       vi.mocked(fetchWorkspaceFiles).mockResolvedValue(listing() as never);
       renderPage();
       await screen.findByText("statement.csv");
@@ -395,7 +395,8 @@ describe("Files page", () => {
       expect(screen.queryByRole("button", { name: "Delete selected" })).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole("checkbox", { name: "Select statement.csv" }));
 
-      const band = document.querySelector(".ui-box-head") as HTMLElement;
+      const band = document.querySelector(".ui-bulk-bar") as HTMLElement;
+      expect(band.closest(".ui-box-head")).toBeNull();
       expect(within(band).getByText("1 selected")).toBeInTheDocument();
       expect(within(band).getByRole("button", { name: "Delete selected" })).toBeInTheDocument();
       expect(within(band).getByRole("button", { name: "Download selected" })).toBeInTheDocument();

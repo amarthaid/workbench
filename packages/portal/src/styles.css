@@ -678,7 +678,7 @@ body {
 .ui-row-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .ui-row-action:disabled { opacity: 0.5; cursor: default; }
 .ui-row-action-danger { color: var(--danger); }
-.ui-row-action-danger:hover:not(:disabled) { background: var(--danger-soft); color: var(--danger); }
+.ui-row-action-danger:hover:not(:disabled) { background: transparent; color: var(--danger); text-decoration: underline; }
 /* Hover-revealed actions: hidden by opacity (never display), so they stay in
    the tab order, and shown again on row hover, row focus and their own focus. */
 .ui-row-actions.is-reveal { opacity: 0; }
@@ -691,6 +691,12 @@ body {
 .ui-list-tools { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: var(--s-8); }
 .ui-list-tools .ui-input { width: auto; min-width: 140px; max-width: 220px; }
 .ui-list-row-leading input[type="checkbox"] { margin: 0; }
+/* Bulk bar: its own row under the header, always present so selecting never moves anything. */
+.ui-bulk-bar { display: flex; align-items: center; gap: var(--s-8); min-height: 44px; padding: var(--s-4) var(--s-12); border-bottom: 1px solid var(--border); }
+.ui-bulk-bar .ui-stat-note { border-top: 0; padding: 0; margin-right: var(--s-4); }
+/* The quota note stays on one line; the header wraps instead. */
+.ui-box-heading .ui-stat-note { border-top: 0; padding: 0; white-space: nowrap; }
+.ui-box-head { flex-wrap: wrap; }
 
 /* --- List skeleton: same height as a real row --- */
 .ui-list-skeleton-row { min-height: 56px; }

@@ -253,20 +253,6 @@ export default function Files() {
           </Select>
         </>
       )}
-      {count > 0 && (
-        <>
-          <span className="ui-stat-note">{count} selected</span>
-          <Button variant="outline" size="sm" onClick={() => void downloadSelected()}>
-            Download selected
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setConfirmBulk(true)}>
-            Delete selected
-          </Button>
-          <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
-            Clear
-          </Button>
-        </>
-      )}
       <input
         ref={fileInput}
         type="file"
@@ -300,6 +286,26 @@ export default function Files() {
         }
         action={headerActions}
       >
+        {files.length > 0 && (
+          <div className="ui-bulk-bar">
+            {count > 0 ? (
+              <>
+                <span className="ui-stat-note">{count} selected</span>
+                <Button variant="outline" size="sm" onClick={() => void downloadSelected()}>
+                  Download selected
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => setConfirmBulk(true)}>
+                  Delete selected
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
+                  Clear
+                </Button>
+              </>
+            ) : (
+              <span className="ui-stat-note">Select files to download or delete them together</span>
+            )}
+          </div>
+        )}
         {error && <div className="ui-form-error">{error}</div>}
 
         {isLoading && <ListSkeleton rows={4} />}
