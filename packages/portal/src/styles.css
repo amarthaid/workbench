@@ -646,6 +646,7 @@ body {
   background: var(--bg-sunk);
   color: var(--text-2);
 }
+.ui-list-row-initial { font-size: 13px; font-weight: 600; color: var(--text-2); }
 .ui-list-row-tile svg { width: 16px; height: 16px; }
 .ui-list-row-main { display: flex; flex-direction: column; flex: 1; gap: 2px; min-width: 0; }
 .ui-list-row-line { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-4) var(--s-8); min-width: 0; }
