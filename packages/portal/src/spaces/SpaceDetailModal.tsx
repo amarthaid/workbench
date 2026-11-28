@@ -178,7 +178,6 @@ export function SpaceDetailModal({ space, onClose, onToggleFavorite, onEditDetai
           </>
         }
       >
-        {space.description && <p className="space-detail-desc">{space.description}</p>}
         <div className="space-detail-facts-line">
           <button
             type="button"
@@ -204,6 +203,7 @@ export function SpaceDetailModal({ space, onClose, onToggleFavorite, onEditDetai
             Updated {relativeTime(Math.floor(space.updatedAt / 1000))}
           </span>
         </div>
+        {space.description && <p className="space-detail-desc">{space.description}</p>}
         <section className="space-detail-tools" aria-label="Tools">
           <h3 className="space-detail-subhead">Tools</h3>
           {detail.isLoading ? (
