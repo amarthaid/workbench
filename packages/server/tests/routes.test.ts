@@ -612,7 +612,8 @@ describe("API routes", () => {
         auth: { type: "oauth2" as const, authorizationUrl: "", tokenUrl: "", scopes: [] },
       });
       vi.spyOn(registry, "listToolsByIntegration").mockReturnValue([
-        { name: "slack_post", description: "Post a message" } as never,
+        { name: "slack_post", description: "Post a message", effect: "write" } as never,
+        { name: "slack_unlabelled", description: "No label" } as never,
       ]);
       const app = await buildApp();
       const res = await app.inject({
@@ -622,7 +623,11 @@ describe("API routes", () => {
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
       expect(body.name).toBe("slack");
-      expect(body.tools).toEqual([{ name: "slack_post", description: "Post a message" }]);
+      // The effect label rides along; an unlabelled tool counts as destructive.
+      expect(body.tools).toEqual([
+        { name: "slack_post", description: "Post a message", effect: "write" },
+        { name: "slack_unlabelled", description: "No label", effect: "destructive" },
+      ]);
     });
 
     it("returns the built-in browser integration from the registry", async () => {

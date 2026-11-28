@@ -57,11 +57,35 @@ describe("Agents", () => {
     expect(await screen.findByText("No key")).toBeInTheDocument();
   });
 
-  it("lists connected agents with their id and connection age", async () => {
+  it("lists connected agents with an initial tile, id, connection age and scope chip", async () => {
     renderPage();
-    expect(await screen.findByText("Test Agent")).toBeInTheDocument();
-    expect(screen.getByText("cli-1")).toBeInTheDocument();
-    expect(screen.getByText("2h ago")).toBeInTheDocument();
+    const row = (await screen.findByText("Test Agent")).closest(".ui-list-row") as HTMLElement;
+    expect(within(row).getByText("cli-1")).toBeInTheDocument();
+    expect(within(row).getByText("cli-1").className).toContain("wb-mono");
+    expect(row).toHaveTextContent("Connected 2h ago");
+    expect(within(row).getByText("mcp")).toBeInTheDocument();
+    expect(row.querySelector(".ui-list-row-tile")).toHaveTextContent("T");
+  });
+
+  it("shows the client id on every row, so two agents with one name are told apart", async () => {
+    vi.mocked(fetchAgents).mockResolvedValue({
+      agents: [
+        { client_id: "cli-a", client_name: "Claude", scopes: [], connected_since: NOW - 60, expires_at: NOW + 3600 },
+        { client_id: "cli-b", client_name: "Claude", scopes: [], connected_since: NOW - 60, expires_at: NOW + 3600 },
+      ],
+    });
+    renderPage();
+    expect(await screen.findByText("cli-a")).toBeInTheDocument();
+    expect(screen.getByText("cli-b")).toBeInTheDocument();
+    expect(screen.getAllByText("Claude")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "Revoke Claude (cli-a)" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Revoke Claude (cli-b)" })).toBeInTheDocument();
+  });
+
+  it("shows skeleton rows while loading", () => {
+    vi.mocked(fetchAgents).mockReturnValue(new Promise(() => {}) as never);
+    renderPage();
+    expect(screen.getByRole("status", { name: "Loading" })).toBeInTheDocument();
   });
 
   it("falls back to the client id when an agent has no name", async () => {
@@ -75,12 +99,24 @@ describe("Agents", () => {
     vi.mocked(revokeAgent).mockResolvedValue({ revoked: 1 });
     renderPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: "Revoke Test Agent" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Revoke Test Agent (cli-1)" }));
     const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("Revoke access for Test Agent (cli-1)?");
     expect(within(dialog).getByText(/access token/)).toBeInTheDocument();
+    expect(revokeAgent).not.toHaveBeenCalled();
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Revoke" }));
     await waitFor(() => expect(revokeAgent).toHaveBeenCalledWith("cli-1"));
+    expect(revokeAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not revoke when the confirm is cancelled", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Revoke Test Agent (cli-1)" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(revokeAgent).not.toHaveBeenCalled();
   });
 
   it("says so when no agents are connected", async () => {
@@ -92,7 +128,7 @@ describe("Agents", () => {
   it("surfaces a revoke failure", async () => {
     vi.mocked(revokeAgent).mockRejectedValue(new Error("Revoke failed"));
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "Revoke Test Agent" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Revoke Test Agent (cli-1)" }));
     const dialog = await screen.findByRole("dialog");
     fireEvent.click(within(dialog).getByRole("button", { name: "Revoke" }));
     expect(await screen.findByText("Revoke failed")).toBeInTheDocument();

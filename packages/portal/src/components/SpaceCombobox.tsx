@@ -102,6 +102,10 @@ function RemoteSpaceCombobox({ value, onChange, id, placeholder, ...rest }: Rest
     },
   });
 
+  // What the person picked, by slug: the box shows its title, the value stays the slug.
+  const [picked, setPicked] = useState<{ name: string; title: string } | null>(null);
+  const shownName = picked && picked.name === value && picked.title ? picked.title : value;
+
   const trimmed = typed.trim();
   const short = trimmed.length < MIN_CHARS;
   // Between a keystroke and the settled query, do not show the previous
@@ -125,9 +129,12 @@ function RemoteSpaceCombobox({ value, onChange, id, placeholder, ...rest }: Rest
       aria-label={rest["aria-label"] ?? "Space"}
       placeholder={placeholder ?? "Search all Spaces"}
       value={value}
+      displayValue={shownName}
       options={options}
       onQueryChange={onQueryChange}
       onSelect={(v) => {
+        const hit = data?.spaces.find((s) => s.name === v);
+        setPicked(hit ? { name: hit.name, title: hit.title } : null);
         clearTimeout(timer.current);
         setTyped("");
         setSettled("");

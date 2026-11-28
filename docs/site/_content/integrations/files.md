@@ -19,6 +19,14 @@ That sounds severe, and it is the deliberate trade that makes everything else si
 
 What it means in practice: **an agent that needs a file to outlive the window must hand it somewhere durable in the same run** — a Drive upload, a Slack upload, a Sheet.
 
+## In the portal
+
+Portal → **Files** lists each file as a row with its type icon, the full name (long names are shortened in the middle so the timestamp at the end stays visible; hover for the whole name), size, when it was written and an expiry chip that changes colour as the 24 hours run out. **Download** is always shown on the row; **Delete** appears on hover and on keyboard focus. **Upload** is at the top right.
+
+- **Single delete has no dialog.** The row disappears and a toast says "<name> deleted. Undo". The delete request is sent after 5 seconds. Undo inside that window cancels it and the row returns. Closing or leaving the tab inside the window also cancels it, so the file is kept.
+- **Bulk delete.** Tick the checkboxes; a bar appears with **Delete selected**, **Download selected** and **Clear**. Delete selected confirms with the count, then deletes one file at a time and reports how many failed.
+- With more than 15 files, a name filter and a sort control (newest, expiring soonest, size) appear in the list header.
+
 ## At a glance
 
 | | |

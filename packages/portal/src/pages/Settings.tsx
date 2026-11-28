@@ -3,7 +3,7 @@ import { PageHeader } from "../components/ui/PageHeader";
 import { Box, BoxRow } from "../components/ui/Box";
 import { Button } from "../components/ui/Button";
 import { Badge } from "../components/ui/Badge";
-import { ThemeToggle } from "../components/ui/ThemeToggle";
+import { ThemeSegmented } from "../components/ui/ThemeToggle";
 import ApiKeyPanel, { useApiKeyStatus } from "../components/ApiKeyPanel";
 
 const HELP_URL = "https://barockok.github.io/workbench/";
@@ -30,7 +30,7 @@ export default function Settings() {
         <Box title="Appearance">
           <BoxRow>
             <span className="wb-detail-key">Theme</span>
-            <span className="wb-detail-val"><ThemeToggle /></span>
+            <span className="wb-detail-val"><ThemeSegmented /></span>
           </BoxRow>
         </Box>
 

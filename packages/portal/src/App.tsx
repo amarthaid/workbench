@@ -21,6 +21,7 @@ import Admin from "./pages/Admin";
 import RequireAdmin from "./components/RequireAdmin";
 import Spaces from "./pages/Spaces";
 import SpaceShell from "./pages/SpaceShell";
+import { ToastProvider } from "./components/ui/Toast";
 
 function Boot({ label = "Loading" }: { label?: string }) {
   return (
@@ -73,9 +74,11 @@ function AppRoutes() {
       <Route
         element={
           <RequireAuth>
-            <AppShell>
-              <Outlet />
-            </AppShell>
+            <ToastProvider>
+              <AppShell>
+                <Outlet />
+              </AppShell>
+            </ToastProvider>
           </RequireAuth>
         }
       >

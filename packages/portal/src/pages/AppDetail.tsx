@@ -15,12 +15,15 @@ import {
 } from "../api";
 import { PageHeader } from "../components/ui/PageHeader";
 import { Box, BoxRow } from "../components/ui/Box";
-import { DataTable } from "../components/ui/DataTable";
 import { EmptyState } from "../components/ui/EmptyState";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { ConfirmDialog } from "../components/dialogs/ConfirmDialog";
+import { TypedNameConfirm } from "../components/dialogs/TypedNameConfirm";
+import { RowAction, RowActions } from "../components/ui/RowActions";
+import { ToolsAccordion } from "../components/ToolsAccordion";
+import { integrationTools } from "../components/integration-tools";
 import { AutoReconnectPanel } from "../components/AutoReconnectPanel";
 import { CustomAppHeadersEditor } from "../components/CustomAppHeadersEditor";
 import IntegrationLogo from "../components/IntegrationLogo";
@@ -42,7 +45,6 @@ export default function AppDetail() {
 
   async function onDeleteApp() {
     if (!data) return;
-    setConfirmDelete(false);
     setDeleteBusy(true);
     setDeleteError(null);
     try {
@@ -50,7 +52,6 @@ export default function AppDetail() {
       navigate("/apps");
     } catch (e) {
       setDeleteError(e instanceof Error ? e.message : "Delete failed");
-    } finally {
       setDeleteBusy(false);
     }
   }
@@ -96,6 +97,7 @@ export default function AppDetail() {
 
       <PageHeader
         title={label}
+        icon={<IntegrationLogo name={data.name} displayName={data.displayName} logo={data.logo} size={32} />}
         actions={
           alwaysOn ? undefined : (
             <>
@@ -104,16 +106,18 @@ export default function AppDetail() {
                   {connected ? "Reconnect" : "Connect"}
                 </Button>
               )}
-              {connected && !headersApp && (
-                <Button variant="danger" onClick={() => flow.disconnect(data.name)}>
-                  Disconnect
-                </Button>
-              )}
-              {data.custom && (
-                <Button variant="danger" disabled={deleteBusy} onClick={() => setConfirmDelete(true)}>
-                  Delete app
-                </Button>
-              )}
+              <RowActions>
+                {connected && !headersApp && (
+                  <RowAction danger onClick={() => flow.disconnect(data.name)}>
+                    Disconnect
+                  </RowAction>
+                )}
+                {data.custom && (
+                  <RowAction danger disabled={deleteBusy} onClick={() => setConfirmDelete(true)}>
+                    Remove app
+                  </RowAction>
+                )}
+              </RowActions>
             </>
           )
         }
@@ -124,7 +128,6 @@ export default function AppDetail() {
       <div className="wb-section-gap">
         <Box title="Status">
           <BoxRow>
-            <IntegrationLogo name={data.name} displayName={data.displayName} logo={data.logo} size={28} />
             <span className="wb-detail-desc">{data.description ?? "No description provided."}</span>
           </BoxRow>
           <BoxRow>
@@ -183,38 +186,36 @@ export default function AppDetail() {
           {data.tools.length === 0 ? (
             <EmptyState message="This app exposes no tools." />
           ) : (
-            <DataTable
-              caption={`Tools exposed by ${label}`}
-              head={
-                <tr>
-                  <th scope="col">Tool</th>
-                  <th scope="col">Description</th>
-                </tr>
-              }
-            >
-              {data.tools.map((t) => (
-                <tr key={t.name}>
-                  <td><code className="wb-mono">{t.name}</code></td>
-                  <td className="wb-detail-desc">{t.description}</td>
-                </tr>
-              ))}
-            </DataTable>
+            <ToolsAccordion tools={integrationTools(data)} defaultOpen="all" singleApp />
           )}
         </Box>
       </div>
 
       {flow.dialogs}
 
-      <ConfirmDialog
-        open={confirmDelete}
-        title={`Delete ${label}?`}
-        body="This removes the custom app and its stored credentials. Agents will lose its tools."
-        confirmLabel="Delete"
-        destructive
-        onCancel={() => setConfirmDelete(false)}
-        onConfirm={onDeleteApp}
-      />
-      {deleteError && <div className="ui-form-error">{deleteError}</div>}
+      {confirmDelete && (
+        <TypedNameConfirm
+          title={`Remove ${label}?`}
+          name={label}
+          nameLabel="app name"
+          confirmLabel="Remove app"
+          busyLabel="Removing…"
+          busy={deleteBusy}
+          error={deleteError}
+          impact={
+            <ul className="space-delete-impact">
+              <li>Its stored credentials are deleted.</li>
+              <li>Agents lose its tools.</li>
+              <li>This cannot be undone.</li>
+            </ul>
+          }
+          onConfirm={() => void onDeleteApp()}
+          onCancel={() => {
+            setConfirmDelete(false);
+            setDeleteError(null);
+          }}
+        />
+      )}
     </>
   );
 }

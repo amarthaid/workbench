@@ -6,10 +6,12 @@ import { MCP_URL, API_KEY_PLACEHOLDER, mcpConfigFor } from "../mcp-config";
 import { relativeTime } from "../format";
 import { PageHeader } from "../components/ui/PageHeader";
 import { Box, BoxRow } from "../components/ui/Box";
-import { DataTable } from "../components/ui/DataTable";
 import { EmptyState } from "../components/ui/EmptyState";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
+import { ListRow } from "../components/ui/ListRow";
+import { RowAction, RowActions } from "../components/ui/RowActions";
+import { ListSkeleton } from "../components/ui/ListSkeleton";
 import { ConfirmDialog } from "../components/dialogs/ConfirmDialog";
 
 export default function Agents() {
@@ -77,55 +79,50 @@ export default function Agents() {
 
         <Box title={`Connected agents (${agents.length})`}>
           {isLoading ? (
-            <div className="ui-loading">Loading agents…</div>
+            <ListSkeleton rows={3} />
           ) : isError ? (
             <div className="ui-form-error">Couldn't load agents.</div>
           ) : agents.length === 0 ? (
             <EmptyState message="No agents connected." />
           ) : (
-            <DataTable
-              caption="Agents holding an active authorization"
-              head={
-                <tr>
-                  <th scope="col">Agent</th>
-                  <th scope="col">Client ID</th>
-                  <th scope="col">Connected</th>
-                  <th scope="col">Scopes</th>
-                  <th scope="col"><span className="ui-sr-only">Actions</span></th>
-                </tr>
-              }
-            >
-              {agents.map((a) => {
-                const label = a.client_name || a.client_id;
-                return (
-                  <tr key={a.client_id}>
-                    <td>{label}</td>
-                    <td><code className="wb-mono">{a.client_id}</code></td>
-                    <td className="wb-cell-time">{relativeTime(a.connected_since)}</td>
-                    <td className="wb-chip-row">
-                      {a.scopes.length === 0 ? "—" : a.scopes.map((s) => <Badge key={s} variant="neutral">{s}</Badge>)}
-                    </td>
-                    <td className="ui-num">
-                      <Button
-                        size="xs"
-                        variant="danger"
-                        aria-label={`Revoke ${label}`}
+            agents.map((a) => {
+              const label = a.client_name || a.client_id;
+              return (
+                <ListRow
+                  key={a.client_id}
+                  icon={<span className="ui-list-row-initial">{label.charAt(0).toUpperCase()}</span>}
+                  title={label}
+                  chips={a.scopes.map((sc) => (
+                    <Badge key={sc} variant="neutral">{sc}</Badge>
+                  ))}
+                  subtitle={
+                    <>
+                      <code className="wb-mono">{a.client_id}</code>
+                      {" · "}
+                      Connected {relativeTime(a.connected_since)}
+                    </>
+                  }
+                  actions={
+                    <RowActions>
+                      <RowAction
+                        danger
+                        aria-label={`Revoke ${label} (${a.client_id})`}
                         onClick={() => setPendingRevoke(a)}
                       >
                         Revoke
-                      </Button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </DataTable>
+                      </RowAction>
+                    </RowActions>
+                  }
+                />
+              );
+            })
           )}
         </Box>
       </div>
 
       <ConfirmDialog
         open={pendingRevoke !== null}
-        title={`Revoke ${pendingRevoke?.client_name || pendingRevoke?.client_id || ""}`}
+        title={pendingRevoke ? `Revoke access for ${pendingRevoke.client_name || pendingRevoke.client_id} (${pendingRevoke.client_id})?` : ""}
         body="This agent will stop being able to renew its access. A session already in flight may keep working until its access token expires."
         confirmLabel="Revoke"
         destructive

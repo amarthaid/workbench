@@ -419,7 +419,7 @@ describe("the Space detail modal", () => {
     });
 
     it("counts per app on the app header", async () => {
-      const dialog = await openWith([tool(1), tool(2), tool(3, { effect: "write" }), tool(4, { effect: "delete" }), tool(5, { effect: "delete" })]);
+      const dialog = await openWith([tool(1), tool(2), tool(3, { effect: "write" }), tool(4, { effect: "delete" }), tool(5, { effect: "delete" }), inApp("Demo", 9)]);
       const head = await within(dialog).findByRole("button", { name: /Acme/ });
       expect(head).toHaveTextContent("2 reads");
       expect(head).toHaveTextContent("1 write");
@@ -428,7 +428,7 @@ describe("the Space detail modal", () => {
     });
 
     it("uses singular chip words for one and plural for more on the app header", async () => {
-      const one = await openWith([tool(1), tool(2, { effect: "write" }), tool(3, { effect: "delete" })]);
+      const one = await openWith([tool(1), tool(2, { effect: "write" }), tool(3, { effect: "delete" }), inApp("Demo", 9)]);
       const oneHead = await within(one).findByRole("button", { name: /Acme/ });
       expect(oneHead).toHaveTextContent("1 read");
       expect(oneHead).not.toHaveTextContent("1 reads");
@@ -439,10 +439,23 @@ describe("the Space detail modal", () => {
     });
 
     it("uses plural chip words for several on the app header", async () => {
-      const dialog = await openWith([tool(1), tool(2), tool(3, { effect: "write" }), tool(4, { effect: "write" }), tool(5, { effect: "write" })]);
+      const dialog = await openWith([tool(1), tool(2), tool(3, { effect: "write" }), tool(4, { effect: "write" }), tool(5, { effect: "write" }), inApp("Demo", 9)]);
       const head = await within(dialog).findByRole("button", { name: /Acme/ });
       expect(head).toHaveTextContent("2 reads");
       expect(head).toHaveTextContent("3 writes");
+    });
+
+    it("names an app header with a space before its chips", async () => {
+      const dialog = await openWith([tool(1), tool(2), tool(3, { effect: "write" }), inApp("Demo", 9)]);
+      expect(await within(dialog).findByRole("button", { name: "Acme, 2 reads, 1 write" })).toBeInTheDocument();
+    });
+
+    it("leaves the per-app chips off the header when there is a single app", async () => {
+      const dialog = await openWith([tool(1), tool(2, { effect: "write" })]);
+      const head = await within(dialog).findByRole("button", { name: "Acme" });
+      expect(head).not.toHaveTextContent("read");
+      expect(head).not.toHaveTextContent("write");
+      expect(dialog.querySelector(".space-detail-tool-summary")).toHaveTextContent("1 read");
     });
 
     it("opens the first app only when there are three apps", async () => {

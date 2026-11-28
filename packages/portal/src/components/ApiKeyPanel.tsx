@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getApiKeyStatus, mintApiKey, revokeApiKey, revealApiKey } from "../api";
 import { MCP_URL, API_KEY_PLACEHOLDER, mcpConfigFor } from "../mcp-config";
 import { Button } from "./ui/Button";
+import { RowAction, RowActions } from "./ui/RowActions";
 function maskKey(k: string): string {
   return "•".repeat(Math.max(8, k.length - 4)) + k.slice(-4);
 }
@@ -106,7 +107,7 @@ export default function ApiKeyPanel() {
 
       {/* Config snippet — always visible once a key exists or was just minted. */}
       {(revealed || hasKey) && (
-        <div className="apikey-reveal" style={{ marginTop: 10 }}>
+        <div className="apikey-reveal">
           <pre className="wb-code"><code>{mcpConfigFor(snippetKey)}</code></pre>
           <div className="wb-inline-row">
             <Button variant="outline" onClick={() => copy(mcpConfigFor(copyKey), "cfg")}>
@@ -121,13 +122,19 @@ export default function ApiKeyPanel() {
         </div>
       )}
 
-      <div className="apikey-actions" style={{ marginTop: 14 }}>
-        <Button onClick={handleMint} disabled={busy}>
-          {busy ? "Working…" : hasKey || revealed ? "Regenerate key" : "Generate key"}
-        </Button>
-        {(hasKey || revealed) && (
-          <Button variant="danger" onClick={handleRevoke} disabled={busy}>
-            Revoke
+      <div className="apikey-actions">
+        {hasKey || revealed ? (
+          <RowActions>
+            <RowAction onClick={handleMint} disabled={busy}>
+              {busy ? "Working…" : "Regenerate key"}
+            </RowAction>
+            <RowAction danger onClick={handleRevoke} disabled={busy}>
+              Revoke
+            </RowAction>
+          </RowActions>
+        ) : (
+          <Button onClick={handleMint} disabled={busy}>
+            {busy ? "Working…" : "Generate key"}
           </Button>
         )}
       </div>

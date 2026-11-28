@@ -1,18 +1,15 @@
 import { useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { fetchSpaces, setSpaceFavorite, type SpaceSummary } from "../spaces-api";
+import { useQuery } from "@tanstack/react-query";
+import { fetchSpaces } from "../spaces-api";
 import { PageHeader } from "../components/ui/PageHeader";
 import { Box } from "../components/ui/Box";
 import { EmptyState } from "../components/ui/EmptyState";
 import { Input } from "../components/ui/Input";
 import { Segmented } from "../components/ui/Segmented";
-import { SpaceDetailModal } from "../spaces/SpaceDetailModal";
-import { SpaceTile } from "../spaces/SpaceTile";
-import { EditDetailsModal } from "../spaces/EditDetailsModal";
-import { SharingModal } from "../spaces/SharingModal";
 import { RequestsModal } from "../spaces/RequestsModal";
+import { useSpaceGallery } from "../spaces/useSpaceGallery";
 import { Button } from "../components/ui/Button";
-import { LARGE_FAVORITES, arrangeSpaces, isNewForMe, type SpaceFilter } from "../spaces/arrange";
+import { LARGE_FAVORITES, arrangeSpaces, type SpaceFilter } from "../spaces/arrange";
 
 export const EXAMPLE_PROMPT = "Build me a Space that shows my open GitHub and Bitbucket PRs in one timeline";
 
@@ -35,57 +32,19 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
 }
 
 export default function Spaces() {
-  const qc = useQueryClient();
   const { data, isLoading, isError } = useQuery({ queryKey: ["spaces"], queryFn: fetchSpaces });
   const spaces = data ?? [];
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<SpaceFilter>("all");
-  const [editing, setEditing] = useState<SpaceSummary | null>(null);
-  const [sharing, setSharing] = useState<SpaceSummary | null>(null);
-  const [detailName, setDetailName] = useState<string | null>(null);
   const [requestsOpen, setRequestsOpen] = useState(false);
   // Only an owner's rows carry a count. The chip hides at zero.
   const pendingRequests = spaces.reduce((n, s) => n + (s.mine ? Number(s.pending_requests) || 0 : 0), 0);
 
-  const patchRow = (name: string, patch: Partial<SpaceSummary>) =>
-    qc.setQueryData<SpaceSummary[]>(["spaces"], (rows) => rows?.map((r) => (r.name === name ? { ...r, ...patch } : r)));
+  const { tile, modals } = useSpaceGallery(spaces);
 
-  // The heart moves at once and settles on what the server says (the count is
-  // everyone's, not ours). A failure puts it back.
-  const favorite = useMutation({
-    mutationFn: (s: SpaceSummary) => setSpaceFavorite(s.name, !s.favorited),
-    onMutate: (s) => {
-      const before = { favorited: s.favorited, favorite_count: s.favorite_count };
-      patchRow(s.name, {
-        favorited: !s.favorited,
-        favorite_count: Math.max(0, s.favorite_count + (s.favorited ? -1 : 1)),
-      });
-      return before;
-    },
-    onError: (_e, s, before) => before && patchRow(s.name, before),
-    onSuccess: (res, s) => patchRow(s.name, res),
-  });
-
-  // Read from the list on every render, so the heart and a rename show at once,
-  // and a Space that left the list closes its own modal.
-  const detail = detailName ? spaces.find((s) => s.name === detailName) : undefined;
-
-  const now = Date.now();
   const arranged = useMemo(() => arrangeSpaces(spaces, { query, filter }), [spaces, query, filter]);
   const { favorites, recent, rest } = arranged;
   const shownCount = favorites.length + recent.length + rest.length;
-
-  const tile = (s: SpaceSummary, size: "large" | "compact") => (
-    <SpaceTile
-      key={s.name}
-      space={s}
-      size={size}
-      isNew={isNewForMe(s, now)}
-      onToggleFavorite={(x) => favorite.mutate(x)}
-      onOpen={(x) => setDetailName(x.name)}
-      onEditSharing={setSharing}
-    />
-  );
 
   return (
     <>
@@ -170,51 +129,8 @@ export default function Spaces() {
         </div>
       )}
 
-      {detail && !editing && !sharing && (
-        <SpaceDetailModal
-          space={detail}
-          onClose={() => setDetailName(null)}
-          onToggleFavorite={(x) => favorite.mutate(x)}
-          onEditDetails={(x) => {
-            setDetailName(null);
-            setEditing(x);
-          }}
-          onEditSharing={(x) => {
-            setDetailName(null);
-            setSharing(x);
-          }}
-          onDeleted={(name) => {
-            setDetailName(null);
-            qc.setQueryData<SpaceSummary[]>(["spaces"], (rows) => rows?.filter((r) => r.name !== name));
-            qc.removeQueries({ queryKey: ["space", name] });
-          }}
-        />
-      )}
       <RequestsModal open={requestsOpen} onClose={() => setRequestsOpen(false)} />
-      {editing && (
-        <EditDetailsModal
-          open
-          space={editing}
-          onClose={() => setEditing(null)}
-          onSaved={(saved) => {
-            patchRow(editing.name, { title: saved.title, description: saved.description });
-            qc.setQueryData(["space", editing.name], (d: object | undefined) => (d ? { ...d, title: saved.title, description: saved.description } : d));
-          }}
-        />
-      )}
-      {sharing && (
-        <SharingModal
-          open
-          space={sharing}
-          onClose={() => setSharing(null)}
-          onRequestsDecided={() => void qc.invalidateQueries({ queryKey: ["spaces"] })}
-          onSaved={(saved) => {
-            patchRow(sharing.name, { visibility: saved.visibility });
-            void qc.invalidateQueries({ queryKey: ["spaces"] });
-            void qc.invalidateQueries({ queryKey: ["space", sharing.name] });
-          }}
-        />
-      )}
+      {modals}
     </>
   );
 }

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { useState } from "react";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { renderWithClient } from "../test-utils";
 import { SpaceCombobox } from "./SpaceCombobox";
@@ -100,5 +101,31 @@ describe("SpaceCombobox local", () => {
     expect(admin.searchAdminSpaces).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
     fetchSpy.mockRestore();
+  });
+});
+
+describe("SpaceCombobox remote value", () => {
+  it("shows the title of the picked Space and keeps the slug as the value", async () => {
+    admin.searchAdminSpaces.mockResolvedValue({
+      spaces: [{ name: "release-desk", title: "Release desk", owner_email: "dev@example.com" }],
+      has_more: false,
+    });
+    const onChange = vi.fn();
+    function Harness() {
+      const [v, setV] = useState("");
+      return <SpaceCombobox source={{ kind: "remote" }} value={v} onChange={(n) => { onChange(n); setV(n); }} />;
+    }
+    renderWithClient(<Harness />);
+    const box = screen.getByRole("combobox");
+    type(box, "rel");
+    await screen.findByRole("option");
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(onChange).toHaveBeenCalledExactlyOnceWith("release-desk");
+    expect(screen.getByRole("combobox")).toHaveValue("Release desk");
+  });
+
+  it("falls back to the slug when the title is not known", () => {
+    renderWithClient(<SpaceCombobox source={{ kind: "remote" }} value="release-desk" onChange={() => {}} />);
+    expect(screen.getByRole("combobox")).toHaveValue("release-desk");
   });
 });

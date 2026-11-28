@@ -2,6 +2,15 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderWithClient } from "../../test-utils";
 import UsersTab from "./UsersTab";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../../styles.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+const rule = (selector: string) => {
+  const hit = css.split("}").find((b) => b.split("{")[0].split(",").map((x) => x.trim()).includes(selector));
+  return hit ? hit.slice(hit.indexOf("{") + 1) : "";
+};
 
 const api = vi.hoisted(() => ({
   fetchAdminUsers: vi.fn(),
@@ -83,7 +92,8 @@ describe("UsersTab", () => {
     expect(dev).toHaveTextContent("2");
     const off = screen.getByText("off@example.com").closest("tr")!;
     expect(off).toHaveTextContent("Disabled");
-    expect(off).toHaveTextContent("—");
+    expect(off).toHaveTextContent("Never");
+    expect(off).not.toHaveTextContent("\u2014");
   });
 
   it("shows empty and error states", async () => {
@@ -410,5 +420,34 @@ describe("UsersTab permissions", () => {
       expect(screen.getByText("off@example.com")).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Pending (0)" })).toBeInTheDocument();
     });
+  });
+
+  it("uses the red-text row action for Revoke key and Disable, and a plain one for the rest", async () => {
+    renderWithClient(<UsersTab />);
+    await screen.findByText("dev@example.com");
+    for (const name of ["Revoke key for dev@example.com", "Disable dev@example.com"]) {
+      const b = screen.getByRole("button", { name });
+      expect(b).toHaveClass("ui-row-action", "ui-row-action-danger");
+      expect(b).not.toHaveClass("ui-button-danger");
+    }
+    expect(screen.getByRole("button", { name: "Permissions for dev@example.com" })).toHaveClass("ui-row-action");
+  });
+
+  it("keeps the dates and the actions on one line, wrapping the actions only on narrow screens", async () => {
+    renderWithClient(<UsersTab />);
+    await screen.findByText("dev@example.com");
+    const row = screen.getByText("dev@example.com").closest("tr")!;
+    const joined = row.querySelectorAll("td")[1];
+    const last = row.querySelectorAll("td")[2];
+    expect(joined).toHaveClass("wb-col-date");
+    expect(last).toHaveClass("wb-col-date");
+    expect(rule(".wb-col-date")).toMatch(/white-space:\s*nowrap/);
+    expect(rule(".wb-col-date")).toMatch(/width:\s*\d+/);
+    const actions = screen.getByRole("button", { name: "Disable dev@example.com" }).parentElement!;
+    expect(actions).toHaveClass("wb-user-actions");
+    expect(rule(".wb-user-actions")).toMatch(/flex-wrap:\s*nowrap/);
+    expect(rule(".wb-user-actions")).not.toMatch(/(?<![-\w])width:\s*\d+px/);
+    // Below 900px the actions may wrap inside the card instead of overflowing it.
+    expect(css).toMatch(/@media \(max-width: 900px\)\s*\{[^}]*\.wb-user-actions\s*\{\s*flex-wrap:\s*wrap/);
   });
 });

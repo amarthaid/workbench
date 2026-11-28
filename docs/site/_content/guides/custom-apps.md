@@ -4,7 +4,7 @@ description: Adding your own remote MCP server as an app, authenticated with OAu
 ---
 
 A custom app is a remote MCP server (streamable HTTP) that you add yourself, from
-the Apps page in the portal. Its tools appear next to the built-in ones in
+the Apps page in the portal (**Add custom app**, the button at the top right). Its tools appear next to the built-in ones in
 `search_tools` and run through `execute_tools`, namespaced as `appName__tool`.
 Each app belongs to the user who added it. An administrator can limit who may add
 custom apps (see [Administration](../deploy/admin.md)).
@@ -64,7 +64,8 @@ control the connection, and are refused (case-insensitive):
 
 - There is nothing to connect or disconnect. A headers app is connected as long as
   it has headers; the portal hides Connect, Reconnect and Disconnect for it.
-  Delete removes the app and its stored headers.
+  **Remove app** (on the app's page, behind a confirm where you type the app's name)
+  removes the app and its stored headers.
 - If the key is later revoked upstream, calls fail with an authentication hint.
   Edit the headers to supply a new key.
 - The same URL rules apply as for OAuth apps: private and loopback addresses are

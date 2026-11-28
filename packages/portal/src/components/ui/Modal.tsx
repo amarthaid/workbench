@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
 
 export interface ModalProps {
   open: boolean;
@@ -12,9 +12,12 @@ export interface ModalProps {
   footer?: ReactNode;
   /** Extra class on the dialog panel, for a call site that needs its own layout. */
   className?: string;
+  /** The dialog's accessible name, for a modal whose title lives in the hero. A titled modal is named by its title unless this is given. */
+  ariaLabel?: string;
 }
 
-export function Modal({ open, onClose, title, hero, size = "md", dismissible = true, children, footer, className }: ModalProps) {
+export function Modal({ open, onClose, title, hero, size = "md", dismissible = true, children, footer, className, ariaLabel }: ModalProps) {
+  const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
 
   const triggerRef = useRef<Element | null>(null);
@@ -58,6 +61,8 @@ export function Modal({ open, onClose, title, hero, size = "md", dismissible = t
         className={`ui-modal ui-modal-${size}${className ? ` ${className}` : ""}`}
         role="dialog"
         aria-modal="true"
+        aria-label={ariaLabel}
+        aria-labelledby={!ariaLabel && !hero && title ? titleId : undefined}
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
       >
@@ -73,7 +78,7 @@ export function Modal({ open, onClose, title, hero, size = "md", dismissible = t
         )}
         {!hero && title && (
           <div className="ui-modal-head">
-            <h2 className="ui-modal-title">{title}</h2>
+            <h2 id={titleId} className="ui-modal-title">{title}</h2>
             {dismissible && (
               <button type="button" className="ui-button ui-button-ghost ui-button-sm" onClick={onClose} aria-label="Close">
                 Close

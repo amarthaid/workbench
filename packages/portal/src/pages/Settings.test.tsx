@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import Settings from "./Settings";
 
@@ -16,7 +16,7 @@ vi.mock("../api", () => ({
   revokeApiKey: vi.fn(async () => ({ success: true })),
 }));
 
-import { mintApiKey } from "../api";
+import { mintApiKey, getApiKeyStatus } from "../api";
 
 function renderPage() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -54,9 +54,35 @@ describe("Settings", () => {
     expect(logout).toHaveBeenCalledTimes(1);
   });
 
-  it("offers a theme toggle", () => {
+  describe("theme", () => {
+    beforeEach(() => {
+      localStorage.clear();
+      document.documentElement.dataset.theme = "light";
+    });
+
+    it("is a labeled Light and Dark control that switches the theme", () => {
+      renderPage();
+      const group = screen.getByRole("group", { name: "Theme" });
+      expect(within(group).getAllByRole("button").map((b) => b.textContent)).toEqual(["Light", "Dark"]);
+      expect(within(group).getByRole("button", { name: "Light" })).toHaveAttribute("aria-pressed", "true");
+      fireEvent.click(within(group).getByRole("button", { name: "Dark" }));
+      expect(document.documentElement.dataset.theme).toBe("dark");
+      expect(localStorage.getItem("wb-theme")).toBe("dark");
+      expect(within(group).getByRole("button", { name: "Dark" })).toHaveAttribute("aria-pressed", "true");
+      fireEvent.click(within(group).getByRole("button", { name: "Light" }));
+      expect(document.documentElement.dataset.theme).toBe("light");
+    });
+  });
+
+  it("styles Regenerate key and Revoke as row actions, Revoke in red text", async () => {
+    vi.mocked(getApiKeyStatus).mockResolvedValue({ hasKey: true });
     renderPage();
-    expect(screen.getByRole("button", { name: "Toggle theme" })).toBeInTheDocument();
+    const regenerate = await screen.findByRole("button", { name: "Regenerate key" });
+    const revoke = screen.getByRole("button", { name: "Revoke" });
+    expect(regenerate).toHaveClass("ui-row-action");
+    expect(regenerate).not.toHaveClass("ui-row-action-danger");
+    expect(revoke).toHaveClass("ui-row-action", "ui-row-action-danger");
+    expect(revoke).not.toHaveClass("ui-button-danger");
   });
 
   it("opens the help link in a new tab without leaking the referrer", () => {

@@ -129,7 +129,8 @@ export interface ReconnectStatus {
 export interface IntegrationDetail extends IntegrationSummary {
   authType: string;
   autoReconnect?: { credentials: ReconnectCredential[] };
-  tools: { name: string; description: string }[];
+  /** `effect` is read, write or destructive; absent from an older server, which the UI treats as destructive. */
+  tools: { name: string; description: string; effect?: string }[];
 }
 
 export async function fetchIntegration(name: string): Promise<IntegrationDetail> {

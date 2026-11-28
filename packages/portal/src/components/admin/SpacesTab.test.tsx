@@ -56,6 +56,7 @@ describe("SpacesTab", () => {
     expect(card).toHaveTextContent("3d ago");
     expect(card).toHaveTextContent("Tracks the release train.");
     expect(within(card).getByText("Tracks the release train.")).toHaveClass("admin-space-desc");
+    expect(card.querySelector(".admin-space-cover .space-cover-initial")).toHaveTextContent("R");
     expect(card).toHaveTextContent("4 likes");
     expect(card).toHaveTextContent("2 people opened it in 30 days");
     expect(screen.getByText("Secret").closest("article")).toHaveTextContent("Only me");
@@ -153,5 +154,14 @@ describe("SpacesTab", () => {
     api.fetchAdminSpaces.mockRejectedValue(new Error("boom"));
     renderWithClient(<SpacesTab />);
     expect(await screen.findByText("Couldn't load Spaces.")).toBeInTheDocument();
+  });
+
+  it("puts the generated cover on the card as a left band with its initial", async () => {
+    renderWithClient(<SpacesTab />);
+    const card = (await screen.findByText("Release desk")).closest("article")!;
+    expect(card).toHaveClass("admin-space");
+    const cover = card.querySelector(".admin-space-cover .space-cover");
+    expect(cover).not.toBeNull();
+    expect(cover!.querySelector(".space-cover-initial")).toHaveTextContent("R");
   });
 });

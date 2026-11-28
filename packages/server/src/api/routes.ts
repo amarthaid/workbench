@@ -2,7 +2,7 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { FastifyInstance } from "fastify";
-import { Integration } from "@a-workbench/shared";
+import { Integration, effectOf } from "@a-workbench/shared";
 import { registry } from "../plugins/registry";
 import { createAuthState, makeBinding } from "../auth/oauth";
 import { buildPluginAuthUrl, handlePluginCallback, getPluginOAuthCreds } from "../auth/plugin-oauth";
@@ -469,6 +469,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
         tools: registry.listToolsByIntegration(integration).map((t) => ({
           name: t.name,
           description: t.description,
+          effect: effectOf(t),
         })),
       };
     }

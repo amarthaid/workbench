@@ -104,4 +104,29 @@ describe("Modal", () => {
     const { rerender } = render(<Harness open />);
     expect(() => rerender(<Harness open={false} />)).not.toThrow();
   });
+
+  it("names the dialog by its title", () => {
+    render(<Modal open onClose={vi.fn()} title="Connect">Body</Modal>);
+    expect(screen.getByRole("dialog", { name: "Connect" })).toBeInTheDocument();
+  });
+
+  it("names a hero dialog with ariaLabel, and an ariaLabel wins when there is no title", () => {
+    render(
+      <Modal open onClose={vi.fn()} hero={<h2>Release desk</h2>} ariaLabel="Release desk">
+        Body
+      </Modal>
+    );
+    expect(screen.getByRole("dialog", { name: "Release desk" })).toBeInTheDocument();
+  });
+
+  it("gives two titled dialogs different title ids", () => {
+    render(
+      <>
+        <Modal open onClose={vi.fn()} title="One">a</Modal>
+        <Modal open onClose={vi.fn()} title="Two">b</Modal>
+      </>
+    );
+    expect(screen.getByRole("dialog", { name: "One" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Two" })).toBeInTheDocument();
+  });
 });

@@ -26,7 +26,7 @@ vi.mock("../context/AuthContext", () => ({
 vi.mock("../components/CookieAuthPopup", () => ({ default: () => null }));
 vi.mock("../components/ApiKeyAuthModal", () => ({ default: () => null }));
 
-import { fetchIntegration, fetchConnections, fetchVaultSecrets, startIntegrationAuth, disconnectIntegration, updateCustomAppHeaders } from "../api";
+import { fetchIntegration, fetchConnections, fetchVaultSecrets, startIntegrationAuth, disconnectIntegration, updateCustomAppHeaders, removeCustomApp } from "../api";
 
 const DETAIL = {
   name: "acme",
@@ -38,8 +38,8 @@ const DETAIL = {
   authType: "oauth2",
   configured: true,
   tools: [
-    { name: "acme_search", description: "Search issues" },
-    { name: "acme_create", description: "Create an issue" },
+    { name: "acme_search", description: "Search **issues** quickly", effect: "read" },
+    { name: "acme_create", description: "Create an issue", effect: "write" },
   ],
 };
 
@@ -75,11 +75,40 @@ describe("AppDetail", () => {
     expect(screen.getByText("oauth2")).toBeInTheDocument();
   });
 
-  it("lists every tool with its description", async () => {
+  it("lists every tool in the shared accordion with effect badges", async () => {
     renderAt("acme");
     expect(await screen.findByText("acme_search")).toBeInTheDocument();
-    expect(screen.getByText("Create an issue")).toBeInTheDocument();
+    expect(screen.getByText("acme_create")).toBeInTheDocument();
+    expect(screen.getByText("Reads")).toBeInTheDocument();
+    expect(screen.getByText("Writes")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Tools (2)" })).toBeInTheDocument();
+    expect(screen.queryByRole("table")).toBeNull();
+  });
+
+  it("renders a tool description as markdown once the tool is expanded", async () => {
+    renderAt("acme");
+    fireEvent.click(await screen.findByRole("button", { name: /acme_search/ }));
+    expect(screen.getByText("issues", { selector: "strong" })).toBeInTheDocument();
+  });
+
+  it("still renders a deep link to a registry app with its tools", async () => {
+    vi.mocked(fetchIntegration).mockResolvedValue({
+      ...DETAIL,
+      name: "slack",
+      displayName: "Slack",
+      tools: [{ name: "slack_post", description: "Post a message", effect: "write" }],
+    });
+    renderAt("slack");
+    expect(await screen.findByRole("heading", { level: 1, name: "Slack" })).toBeInTheDocument();
+    expect(fetchIntegration).toHaveBeenCalledWith("slack");
+    expect(screen.getByText("slack_post")).toBeInTheDocument();
+  });
+
+  it("puts the app logo in the page header", async () => {
+    vi.mocked(fetchIntegration).mockResolvedValue({ ...DETAIL, logo: "/api/integrations/acme/logo" });
+    renderAt("acme");
+    const logo = await screen.findByRole("img", { name: "Acme logo" });
+    expect(logo.closest("header")).not.toBeNull();
   });
 
   it("offers Connect while disconnected", async () => {
@@ -246,13 +275,48 @@ describe("AppDetail", () => {
       expect(save).not.toBeDisabled();
     });
 
+    it("removing a custom app needs the app's name typed first", async () => {
+      vi.mocked(fetchIntegration).mockResolvedValue({ ...DETAIL, name: "custom:a1", displayName: "Tracker", custom: true, authType: "oauth2" });
+      vi.mocked(removeCustomApp).mockResolvedValue(undefined as never);
+      renderAt("custom:a1");
+      fireEvent.click(await screen.findByRole("button", { name: "Remove app" }));
+      const dialog = await screen.findByRole("dialog");
+      const confirm = within(dialog).getByRole("button", { name: "Remove app" });
+      expect(confirm).toBeDisabled();
+      fireEvent.change(within(dialog).getByRole("textbox"), { target: { value: "tracker" } });
+      expect(confirm).toBeDisabled();
+      fireEvent.change(within(dialog).getByRole("textbox"), { target: { value: "Tracker" } });
+      expect(confirm).toBeEnabled();
+      fireEvent.click(confirm);
+      await waitFor(() => expect(removeCustomApp).toHaveBeenCalledWith("a1"));
+    });
+
+    it("keeps the removal dialog open and shows the error when removing fails", async () => {
+      vi.mocked(fetchIntegration).mockResolvedValue({ ...DETAIL, name: "custom:a1", displayName: "Tracker", custom: true, authType: "oauth2" });
+      vi.mocked(removeCustomApp).mockRejectedValue(new Error("Delete failed"));
+      renderAt("custom:a1");
+      fireEvent.click(await screen.findByRole("button", { name: "Remove app" }));
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.change(within(dialog).getByRole("textbox"), { target: { value: "Tracker" } });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Remove app" }));
+      expect(await within(dialog).findByText("Delete failed")).toBeInTheDocument();
+    });
+
+    it("uses the shared red-text style for Disconnect and Remove app", async () => {
+      vi.mocked(fetchIntegration).mockResolvedValue({ ...DETAIL, name: "custom:a1", custom: true, authType: "oauth2" });
+      vi.mocked(fetchConnections).mockResolvedValue({ connections: [{ name: "custom:a1", connected: true }] });
+      renderAt("custom:a1");
+      expect(await screen.findByRole("button", { name: "Disconnect" })).toHaveClass("ui-row-action-danger");
+      expect(screen.getByRole("button", { name: "Remove app" })).toHaveClass("ui-row-action-danger");
+    });
+
     it("offers no Connect, Reconnect or Disconnect for a headers app", async () => {
       vi.mocked(fetchIntegration).mockResolvedValue(HEADERS_APP);
       vi.mocked(fetchConnections).mockResolvedValue({ connections: [{ name: "custom:a2", connected: true }] });
       renderAt("custom:a2");
       await screen.findByLabelText("Header name 1");
       expect(screen.queryByRole("button", { name: /^(Connect|Reconnect|Disconnect)$/ })).toBeNull();
-      expect(screen.getByRole("button", { name: "Delete app" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Remove app" })).toBeInTheDocument();
     });
 
     it("keeps Reconnect and Disconnect for an OAuth custom app", async () => {
@@ -274,7 +338,7 @@ describe("AppDetail", () => {
 
     it("offers no header editor for an OAuth app", async () => {
       renderAt("acme");
-      await screen.findByText("Acme");
+      await screen.findByRole("heading", { level: 1, name: "Acme" });
       expect(screen.queryByLabelText("Header name 1")).toBeNull();
     });
   });

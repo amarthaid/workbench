@@ -6,6 +6,7 @@ import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
 import { EmptyState } from "../ui/EmptyState";
 import { Input } from "../ui/Input";
+import { Cover } from "../../spaces/SpaceTile";
 import { ADMIN_STALE_MS, CardBody } from "./CardBody";
 import "./spaces-tab.css";
 
@@ -28,6 +29,10 @@ function SpaceCard({ space }: { space: AdminSpaceItem }) {
   const summary = n === 0 ? "No one opened it in 30 days" : `${n} ${n === 1 ? "person" : "people"} opened it in 30 days`;
   return (
     <article className="admin-space">
+      <div className="admin-space-cover">
+        <Cover space={space} />
+      </div>
+      <div className="admin-space-body">
       <header className="admin-space-head">
         <h3 className="admin-space-title">{space.title}</h3>
         <code className="admin-space-name">{space.name}</code>
@@ -64,6 +69,7 @@ function SpaceCard({ space }: { space: AdminSpaceItem }) {
           {more > 0 && <li className="admin-space-when">and {more} more</li>}
         </ul>
       )}
+      </div>
     </article>
   );
 }

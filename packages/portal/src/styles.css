@@ -19,6 +19,8 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body, #root { height: 100%; }
+/* The page scrolls on the root: keep its gutter so content does not shift between short and long pages. */
+html { scrollbar-gutter: stable; }
 
 body {
   background: var(--bg);
@@ -160,7 +162,7 @@ body {
 .apikey-blurb {
   color: var(--text-3);
   font-size: 12px;
-  margin-bottom: var(--s-16);
+  margin: 0;
   font-family: var(--sans);
 }
 .apikey-blurb code {
@@ -172,6 +174,8 @@ body {
 }
 .apikey-panel { width: 100%; }
 .apikey-actions { display: flex; gap: var(--s-8); }
+/* Text actions: pull the first one left by its padding so its text lines up with the buttons above. */
+.apikey-actions .ui-row-actions { margin-left: calc(-1 * var(--s-8)); }
 /* The panel sits in a `justify-items: start` grid, which sizes items to their
    content — without this the code block inside collapses to its longest line
    instead of spanning the row, as it does on Agents. */
@@ -629,6 +633,133 @@ body {
 
 .ui-box-row + .ui-box-row { border-top: 1px solid var(--border); }
 
+/* --- List row: icon tile, title, subtitle, chips, actions --- */
+.ui-list-row { min-height: 56px; }
+.ui-list-row-leading { display: flex; align-items: center; flex: none; }
+.ui-list-row-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-sunk);
+  color: var(--text-2);
+}
+.ui-list-row-initial { font-size: 13px; font-weight: 600; color: var(--text-2); }
+.ui-list-row-tile svg { width: 16px; height: 16px; }
+.ui-list-row-main { display: flex; flex-direction: column; flex: 1; gap: 2px; min-width: 0; }
+.ui-list-row-line { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-4) var(--s-8); min-width: 0; }
+.ui-list-row-title { min-width: 0; overflow-wrap: anywhere; font-weight: 500; color: var(--text); }
+.ui-list-row-title-button { border: 0; background: transparent; font: inherit; font-weight: 500; text-align: left; cursor: pointer; }
+.ui-list-row-title-button:hover { color: var(--accent); }
+.ui-list-row-title-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+.ui-list-row-chips { display: inline-flex; flex-wrap: wrap; gap: var(--s-4); }
+.ui-list-row-subtitle { font-size: 12px; color: var(--text-3); overflow-wrap: anywhere; }
+.ui-list-row-actions { display: flex; align-items: center; flex: none; gap: var(--s-8); margin-left: auto; }
+@media (max-width: 520px) {
+  .ui-list-row { flex-wrap: wrap; }
+  .ui-list-row-actions { flex-basis: 100%; margin-left: 0; }
+}
+
+/* --- Row actions: text buttons, destructive ones in red text --- */
+.ui-row-actions { display: inline-flex; align-items: center; gap: var(--s-4); }
+.ui-row-action {
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 13px;
+  padding: var(--s-4) var(--s-8);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.ui-row-action:hover:not(:disabled) { background: var(--bg-sunk); color: var(--text); }
+.ui-row-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ui-row-action:disabled { opacity: 0.5; cursor: default; }
+.ui-row-action-danger { color: var(--danger); }
+.ui-row-action-danger:hover:not(:disabled) { background: transparent; color: var(--danger); text-decoration: underline; }
+/* Hover-revealed actions: hidden by opacity (never display), so they stay in
+   the tab order, and shown again on row hover, row focus and their own focus. */
+.ui-row-actions.is-reveal { opacity: 0; }
+.ui-list-row:hover .ui-row-actions.is-reveal,
+.ui-list-row:focus-within .ui-row-actions.is-reveal,
+.ui-row-actions.is-reveal:focus-within { opacity: 1; }
+@media (hover: none) { .ui-row-actions.is-reveal { opacity: 1; } }
+
+/* --- Header band tools (filter, sort, bulk bar, primary action) --- */
+.ui-list-tools { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: var(--s-8); }
+.ui-list-tools .ui-input { width: auto; min-width: 140px; max-width: 220px; }
+.ui-list-row-leading input[type="checkbox"] { margin: 0; }
+/* Bulk bar: its own row under the header, always present so selecting never moves anything. */
+.ui-bulk-bar { display: flex; align-items: center; gap: var(--s-8); min-height: 44px; padding: var(--s-4) var(--s-12); border-bottom: 1px solid var(--border); }
+.ui-bulk-bar .ui-stat-note { border-top: 0; padding: 0; margin-right: var(--s-4); }
+/* The quota note stays on one line; the header wraps instead. */
+.ui-box-heading .ui-stat-note { border-top: 0; padding: 0; white-space: nowrap; }
+.ui-box-head { flex-wrap: wrap; }
+
+/* --- List skeleton: same height as a real row --- */
+.ui-list-skeleton-row { min-height: 56px; }
+.ui-list-skeleton-bar { display: block; background: var(--bg-sunk); border-radius: var(--radius-sm); animation: ui-list-pulse 1.4s ease-in-out infinite; }
+.ui-list-row-tile.ui-list-skeleton-bar { border-color: transparent; }
+.ui-list-skeleton-title { width: 40%; height: 12px; }
+.ui-list-skeleton-sub { width: 24%; height: 10px; margin-top: var(--s-4); }
+@keyframes ui-list-pulse { 50% { opacity: 0.5; } }
+@media (prefers-reduced-motion: reduce) { .ui-list-skeleton-bar { animation: none; } }
+
+/* --- Copy chip --- */
+.ui-copy-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-8);
+  max-width: 100%;
+  padding: 2px var(--s-8);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunk);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ui-copy-chip:hover { color: var(--text); border-color: var(--accent-line); }
+.ui-copy-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ui-copy-chip.is-copied { color: var(--accent); }
+.ui-copy-chip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: all; }
+.ui-copy-chip svg { flex: none; width: 14px; height: 14px; }
+
+/* --- Toast --- */
+.ui-toast-region {
+  position: fixed;
+  left: 50%;
+  bottom: var(--s-24);
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-8);
+  width: max-content;
+  max-width: calc(100vw - var(--s-32));
+  pointer-events: none;
+}
+.ui-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s-16);
+  padding: var(--s-8) var(--s-16);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+}
+.ui-toast-action { border: 0; background: transparent; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; padding: var(--s-4); border-radius: var(--radius-sm); }
+.ui-toast-action:hover { text-decoration: underline; }
+.ui-toast-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 /* Visually hidden but read by assistive technology. */
 .ui-sr-only {
   position: absolute;
@@ -939,7 +1070,8 @@ body {
 
 .wb-page-toolbar {
   display: flex;
-  align-items: center;
+  /* Tabs and controls share one row height, so their centres (one baseline) line up. */
+  align-items: stretch;
   justify-content: space-between;
   gap: var(--s-12);
   flex-wrap: wrap;
@@ -990,6 +1122,8 @@ body {
 /* .ui-input is full-width; in a toolbar the controls sit side by side at their
    own width. */
 .wb-toolbar-controls .ui-input { width: auto; }
+.wb-page-toolbar .wb-toolbar-controls { padding: var(--s-4) 0 calc(var(--s-4) + 2px); }
+.wb-page-toolbar .ui-tabs { align-items: stretch; }
 .wb-toolbar-controls input.ui-input { min-width: 220px; }
 
 /* Admin > Users: the per-user permissions panel, opened under its row. */
@@ -1032,7 +1166,7 @@ body {
   border-radius: var(--radius);
 }
 
-.wb-app-cell:has(a:hover) { border-color: var(--border-strong); }
+.wb-app-cell:has(.wb-app-cell-link:hover) { border-color: var(--accent-line); }
 
 .wb-app-cell-link {
   display: flex;
@@ -1043,6 +1177,21 @@ body {
   color: inherit;
   text-decoration: none;
 }
+
+/* The tile body is a button: strip the button chrome so it reads like the old link. */
+button.wb-app-cell-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+button.wb-app-cell-link:focus-visible { outline: none; }
+/* The whole tile opens the quick view: show it with a pointer and a border. */
+.wb-app-cell:not(.wb-app-cell-inert) { cursor: pointer; }
+.wb-app-cell:has(.wb-app-cell-link:focus-visible) { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: 1px; }
 
 .wb-app-cell-inert { opacity: .6; }
 
@@ -1063,7 +1212,11 @@ body {
 
 .wb-app-cell-meta { font-size: 12px; color: var(--text-3); }
 
-.wb-app-cell-action { margin-left: auto; flex: none; }
+/* Same size as the header-band links (.ui-box-action). */
+.wb-app-cell-action { margin-left: auto; flex: none; font-size: 12px; }
+.wb-app-cell-skeleton { min-height: 70px; pointer-events: none; }
+.wb-app-cell-skeleton-logo { width: 28px; height: 28px; flex: none; }
+.wb-app-cell-skeleton .ui-list-skeleton-title { width: 40%; }
 
 .wb-app-cell-muted { font-size: 12px; color: var(--text-4); }
 
@@ -1439,6 +1592,14 @@ body {
 }
 .space-tile-meta { font-size: 12px; color: var(--text-3); }
 .space-tile-badges { display: flex; flex-wrap: wrap; gap: var(--s-4); margin-top: var(--s-2); }
+/* Home: two columns, and the chip row never wraps or grows the tile; the audience chip truncates. */
+@media (min-width: 760px) {
+  .space-grid.is-two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.space-grid.is-two .space-tile-badges { flex-wrap: nowrap; }
+.space-grid.is-two .space-tile-badges > * { flex: none; white-space: nowrap; }
+.space-grid.is-two .space-tile-badges > .space-tile-badge-button { flex: 0 1 auto; min-width: 0; overflow: hidden; }
+.space-grid.is-two .space-tile-badge-button .ui-badge { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 
 .space-tile-actions {
   position: absolute;
@@ -1846,15 +2007,25 @@ body {
   padding: var(--s-4) var(--s-12);
   border: 0;
   border-radius: var(--radius);
-  background: rgba(0, 0, 0, .35);
+  background: rgba(0, 0, 0, .5);
   color: #fff;
   font: inherit;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
 }
-.ui-modal-hero-close:hover { background: rgba(0, 0, 0, .5); }
+.ui-modal-hero-close:hover { background: rgba(0, 0, 0, .7); }
 .ui-modal-hero-close:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+/* The app quick view: a plain band instead of cover art, so Close takes the normal text colors. */
+.app-quick-modal { padding: 0; }
+.app-quick-modal .ui-modal-body { padding: var(--s-16) var(--s-24) 0; }
+.app-quick-modal .ui-modal-foot { margin-top: var(--s-16); padding: 0 var(--s-24) var(--s-24); }
+.app-quick-hero { display: flex; align-items: center; gap: var(--s-12); padding: var(--s-24) 88px var(--s-16) var(--s-24); background: var(--bg-sunk); border-bottom: 1px solid var(--border); }
+.app-quick-title { margin: 0; font-size: 22px; line-height: 1.2; font-weight: 700; letter-spacing: -.01em; color: var(--text); overflow-wrap: anywhere; }
+.app-quick-modal .ui-modal-hero-close { background: transparent; color: var(--text-2); }
+.app-quick-modal .ui-modal-hero-close:hover { background: var(--bg-sunk); color: var(--text); }
+.app-quick-modal .ui-modal-hero-close:focus-visible { outline-color: var(--accent); }
+.wb-page-title-with-icon { display: flex; align-items: center; gap: var(--s-12); min-width: 0; }
 .space-detail-hero { position: relative; height: 200px; }
 .space-detail-hero .space-cover { position: absolute; inset: 0; }
 .space-detail-hero::after { content: ""; position: absolute; inset: 0; background: linear-gradient(to top, rgba(0, 0, 0, .6), rgba(0, 0, 0, 0) 65%); pointer-events: none; }
@@ -1882,6 +2053,8 @@ body {
 .space-detail-heart.is-on { color: var(--accent); }
 .space-detail-subhead { margin: 0 0 var(--s-8); font-size: 12px; font-weight: 600; color: var(--text-2); }
 .space-detail-tool-summary { display: flex; flex-wrap: wrap; gap: var(--s-8); margin: 0 0 var(--s-12); }
+.space-detail-tool-summary .space-detail-chips { margin-left: 0; justify-content: flex-start; gap: var(--s-8); }
+.space-detail-tool-summary.is-inset { margin: 0; padding: var(--s-8) var(--s-12); }
 .space-detail-app { margin-bottom: var(--s-8); }
 .space-detail-app-head { display: flex; align-items: center; gap: var(--s-8); width: 100%; padding: var(--s-8) var(--s-12); border: 0; background: var(--bg-sunk); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
 .space-detail-app-head:focus-visible, .space-detail-tool-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -1916,3 +2089,28 @@ body {
 .space-detail-tool-effect { margin: 0; font-size: 12px; color: var(--text-3); }
 .space-detail-delete { color: var(--danger); margin-right: auto; }
 .space-delete-impact { margin: 0; padding-left: var(--s-16); font-size: 13px; color: var(--text-2); }
+
+/* --- Home, Settings and admin fixes --- */
+.space-detail-chips { display: flex; flex-wrap: wrap; gap: var(--s-4); }
+.wb-box-tiles { display: grid; gap: var(--s-8); padding: var(--s-12); }
+.ui-stat-skeleton {
+  display: inline-block;
+  width: 56px;
+  height: 20px;
+  vertical-align: middle;
+  background: var(--bg-sunk);
+  border-radius: var(--radius-sm);
+  animation: ui-list-pulse 1.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) { .ui-stat-skeleton { animation: none; } }
+/* Dates stay on one line: a fixed width wide enough for "Nov 28, 2026" and "3 months ago". */
+.wb-col-date { width: 120px; white-space: nowrap; }
+/* The row actions stay on one line; they wrap only when the card is narrower than the content. */
+.wb-user-actions { display: flex; flex-wrap: nowrap; align-items: center; justify-content: flex-end; gap: 0 var(--s-4); white-space: nowrap; }
+/* The actions cell takes the width of its content so the email column gives way, not the actions. */
+.ui-table td:has(> .wb-user-actions) { width: 1%; white-space: nowrap; }
+.ui-table tbody tr td:first-child:has(~ td > .wb-user-actions) { overflow-wrap: anywhere; word-break: break-word; }
+@media (max-width: 900px) { .wb-user-actions { flex-wrap: wrap; } }
+.wb-user-actions .ui-row-action { white-space: nowrap; padding: var(--s-4) var(--s-4); }
+.ui-table th { white-space: nowrap; }
+.app-quick-modal .space-detail-tool-summary.is-inset { padding-left: 0; padding-right: 0; }
