@@ -26,7 +26,8 @@ export const REREQUEST_AFTER_SECONDS = 24 * 60 * 60;
  * note is never part of it.
  */
 export class AccountPendingError extends Error {
-  constructor(readonly declined: boolean) {
+  /** `userId` is absent only when the pending cap stopped the user from being created. */
+  constructor(readonly declined: boolean, readonly userId?: string) {
     super(declined ? "Account declined" : "Account pending");
     this.name = "AccountPendingError";
   }
@@ -103,7 +104,7 @@ export async function settleSignInStatus(user: { id: string; email: string | nul
     });
     status = await getUserStatus(user.id);
   }
-  if (status === "pending") throw new AccountPendingError(await ensurePendingRequest(user.id));
+  if (status === "pending") throw new AccountPendingError(await ensurePendingRequest(user.id), user.id);
   // Disabled, or an active row an older worker disabled (fails closed).
   if (await isUserDisabled(user.id)) throw new Error("Account disabled");
 }
@@ -115,15 +116,22 @@ export async function settleSignInStatus(user: { id: string; email: string | nul
  */
 async function ensurePendingRequest(userId: string): Promise<boolean> {
   if (await pendingRequestFor(ACCOUNT_ACTIVATE, userId, userId)) return false;
-  const latest = await latestRequestFor(ACCOUNT_ACTIVATE, userId, userId);
-  const now = Math.floor(Date.now() / 1000);
-  if (latest?.status === "rejected" && latest.decidedAt !== null && now - latest.decidedAt < REREQUEST_AFTER_SECONDS) {
-    return true;
-  }
+  if (await isRecentlyDeclined(userId)) return true;
   if ((await countPending(ACCOUNT_ACTIVATE)) >= PENDING_SIGNUP_CAP) return false;
   // ON CONFLICT DO NOTHING: two sign-ins at once leave one request.
   if (await insertRequest(db, { kind: ACCOUNT_ACTIVATE, subject: userId, requesterId: userId })) {
     await auditSignup(userId, "account.activate account activation (requested)");
   }
   return false;
+}
+
+/**
+ * Read-only: the latest activation request was rejected less than a day ago
+ * and no request is open. Opens nothing; the waiting-room endpoint uses it.
+ */
+export async function isRecentlyDeclined(userId: string): Promise<boolean> {
+  if (await pendingRequestFor(ACCOUNT_ACTIVATE, userId, userId)) return false;
+  const latest = await latestRequestFor(ACCOUNT_ACTIVATE, userId, userId);
+  const now = Math.floor(Date.now() / 1000);
+  return latest?.status === "rejected" && latest.decidedAt !== null && now - latest.decidedAt < REREQUEST_AFTER_SECONDS;
 }

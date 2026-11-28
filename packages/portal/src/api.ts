@@ -175,6 +175,15 @@ export async function fetchKeycloakAuthUrl(ticket?: string, nonce?: string): Pro
   return res.json();
 }
 
+// The waiting room's poll. No bearer: the server reads its signed awb_waiting
+// cookie. It answers only a coarse state and the provider the person used.
+export type WaitingState = "pending" | "declined" | "active" | "none";
+export async function fetchWaitingState(): Promise<{ state: WaitingState; provider: "google" | "keycloak" | null }> {
+  const res = await fetch(`${API_URL}/api/auth/waiting`, { cache: "no-store" });
+  if (!res.ok) throw new Error("Waiting state unavailable");
+  return res.json();
+}
+
 // Read-only: names the client and destination for the consent screen.
 // Never consumes the ticket (resume does that).
 export interface AuthorizeInfo { clientName: string | null; redirectOrigin: string; scope: string }

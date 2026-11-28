@@ -28,6 +28,7 @@ import { decide } from "../../src/approvals/engine";
 import { ACCOUNT_ACTIVATE, PENDING_SIGNUP_CAP, accountActivate } from "../../src/approvals/kinds";
 import { getUserStatus } from "../../src/auth/user-status";
 import { verifySession } from "../../src/auth/session";
+import { mintWaitingValue, _resetWaitingRateForTest } from "../../src/auth/waiting-cookie";
 
 const ADMIN = { userId: "u-admin", email: "admin@example.com" };
 const PORTAL = "http://localhost:5173";
@@ -159,10 +160,10 @@ describe("sign-up with REQUIRE_SIGNUP_APPROVAL off", () => {
 });
 
 describe("sign-up with REQUIRE_SIGNUP_APPROVAL on", () => {
-  it("creates a pending user and one request, issues no session, and redirects to the login page", async () => {
+  it("creates a pending user and one request, issues no session, and redirects to the waiting room", async () => {
     const res = await signInGoogle({ sub: "g-1", email: "new@example.com" });
     expect(res.statusCode).toBe(302);
-    expect(res.headers.location).toBe(`${PORTAL}/login?error=account_pending`);
+    expect(res.headers.location).toBe(`${PORTAL}/waiting`);
     expect(res.headers.location as string).not.toContain("token");
     const user = await userByEmail("new@example.com");
     // Dual write: the old column is set too, for workers that only read it.
@@ -176,7 +177,7 @@ describe("sign-up with REQUIRE_SIGNUP_APPROVAL on", () => {
   it("a repeat sign-in while pending adds no second request", async () => {
     await signInGoogle({ sub: "g-1", email: "new@example.com" });
     const again = await signInGoogle({ sub: "g-1", email: "new@example.com" });
-    expect(again.headers.location).toBe(`${PORTAL}/login?error=account_pending`);
+    expect(again.headers.location).toBe(`${PORTAL}/waiting`);
     const user = await userByEmail("new@example.com");
     expect(await requestsFor(user!.id)).toHaveLength(1);
   });
@@ -214,13 +215,13 @@ describe("sign-up with REQUIRE_SIGNUP_APPROVAL on", () => {
       "u-orphan", "orphan@example.com", "g-orphan", 1,
     ]);
     const res = await signInGoogle({ sub: "g-orphan", email: "orphan@example.com" });
-    expect(res.headers.location).toBe(`${PORTAL}/login?error=account_pending`);
+    expect(res.headers.location).toBe(`${PORTAL}/waiting`);
     expect((await requestsFor("u-orphan")).map((r) => r.status)).toEqual(["pending"]);
   });
 
   it("holds Keycloak sign-ups the same way", async () => {
     const res = await signInKeycloak({ sub: "kc-1", email: "kc@example.com" });
-    expect(res.headers.location).toBe(`${PORTAL}/login?error=account_pending`);
+    expect(res.headers.location).toBe(`${PORTAL}/waiting`);
     const user = await userByEmail("kc@example.com");
     expect(user?.status).toBe("pending");
     expect(await requestsFor(user!.id)).toHaveLength(1);
@@ -270,7 +271,7 @@ describe("a pending user's callback never issues a session or an authorization c
       { ticket: "tkt-pend", cookie: "awb_oauth_binding=bind-secret" }
     );
     expect(res.statusCode).toBe(302);
-    expect(res.headers.location).toBe(`${PORTAL}/login?error=account_pending`);
+    expect(res.headers.location).toBe(`${PORTAL}/waiting`);
     expect(await tableCount("oauth_auth_codes")).toBe(0);
     const ticket = await db.get("SELECT state FROM pending_auth WHERE state = 'tkt-pend'");
     expect(ticket).toBeTruthy();
@@ -320,7 +321,7 @@ describe("deciding", () => {
     await decide(ADMIN, request.id, "reject", { kinds: [ACCOUNT_ACTIVATE], note: "private reason" });
     expect(await getUserStatus(user.id)).toBe("pending");
     const res = await signInGoogle({ sub: "g-1", email: "new@example.com" });
-    expect(res.headers.location).toBe(`${PORTAL}/login?error=account_declined`);
+    expect(res.headers.location).toBe(`${PORTAL}/waiting`);
     // The note is not part of the redirect.
     expect(res.headers.location as string).not.toContain("private");
     expect((await requestsFor(user.id)).map((r) => r.status)).toEqual(["rejected"]);
@@ -331,7 +332,7 @@ describe("deciding", () => {
     await decide(ADMIN, request.id, "reject", { kinds: [ACCOUNT_ACTIVATE] });
     await db.run("UPDATE approval_requests SET decided_at = ? WHERE id = ?", [Math.floor(Date.now() / 1000) - 25 * 3600, request.id]);
     const res = await signInGoogle({ sub: "g-1", email: "new@example.com" });
-    expect(res.headers.location).toBe(`${PORTAL}/login?error=account_pending`);
+    expect(res.headers.location).toBe(`${PORTAL}/waiting`);
     expect((await requestsFor(user.id)).map((r) => r.status).sort()).toEqual(["pending", "rejected"]);
   });
 
@@ -368,5 +369,94 @@ describe("deciding", () => {
       ["APPROVAL_APPROVE", user.id, ADMIN.userId],
     ]);
     expect(JSON.stringify(rows)).not.toContain("secret-note");
+  });
+});
+
+describe("waiting room cookie and state endpoint", () => {
+  function waitingCookie(res: { headers: Record<string, unknown> }): string {
+    const raw = ([] as string[]).concat(res.headers["set-cookie"] as string | string[]).find((c) => c.startsWith("awb_waiting="));
+    expect(raw).toBeTruthy();
+    return raw as string;
+  }
+  async function poll(cookie?: string) {
+    return app.inject({ method: "GET", url: "/api/auth/waiting", headers: cookie ? { cookie } : {} });
+  }
+  const pair = (setCookie: string) => setCookie.split(";")[0];
+
+  beforeEach(() => _resetWaitingRateForTest());
+
+  it("sets a signed, httpOnly, Lax, path-scoped 7 day cookie on the pending redirect (google)", async () => {
+    const res = await signInGoogle({ sub: "g-1", email: "new@example.com" });
+    const c = waitingCookie(res);
+    expect(c).toContain("HttpOnly");
+    expect(c).toContain("SameSite=Lax");
+    expect(c).toContain("Path=/api/auth");
+    expect(c).toContain(`Max-Age=${7 * 24 * 3600}`);
+    expect(c).not.toContain("new@example.com");
+  });
+
+  it("sets the cookie for keycloak and reports that provider", async () => {
+    const res = await signInKeycloak({ sub: "kc-1", email: "kc@example.com" });
+    const out = await poll(pair(waitingCookie(res)));
+    expect(out.json()).toEqual({ state: "pending", provider: "keycloak" });
+  });
+
+  it("reports pending, then active after approval, then declined after rejection", async () => {
+    const res = await signInGoogle({ sub: "g-1", email: "new@example.com" });
+    const cookie = pair(waitingCookie(res));
+    const out = await poll(cookie);
+    expect(out.statusCode).toBe(200);
+    expect(out.headers["cache-control"]).toBe("no-store");
+    expect(out.json()).toEqual({ state: "pending", provider: "google" });
+    const user = (await userByEmail("new@example.com"))!;
+    const [req] = await requestsFor(user.id);
+    await decide(ADMIN, req.id, "approve", { kinds: [ACCOUNT_ACTIVATE] });
+    expect((await poll(cookie)).json()).toEqual({ state: "active", provider: "google" });
+  });
+
+  it("reports declined (never the note) and opens no new request", async () => {
+    const res = await signInGoogle({ sub: "g-1", email: "new@example.com" });
+    const user = (await userByEmail("new@example.com"))!;
+    const [req] = await requestsFor(user.id);
+    await decide(ADMIN, req.id, "reject", { kinds: [ACCOUNT_ACTIVATE], note: "private reason" });
+    const out = await poll(pair(waitingCookie(res)));
+    expect(out.json()).toEqual({ state: "declined", provider: "google" });
+    expect(out.body).not.toContain("private");
+    expect((await requestsFor(user.id)).map((r) => r.status)).toEqual(["rejected"]);
+  });
+
+  it("returns none for a missing, tampered, forged-for-another-secret or expired cookie", async () => {
+    const res = await signInGoogle({ sub: "g-1", email: "new@example.com" });
+    const good = pair(waitingCookie(res));
+    expect((await poll()).json()).toEqual({ state: "none", provider: null });
+    const [body, sig] = good.slice("awb_waiting=".length).split(".");
+    const other = Buffer.from(JSON.stringify({ u: "someone-else", p: "google", e: 9999999999 })).toString("base64url");
+    expect((await poll(`awb_waiting=${other}.${sig}`)).json().state).toBe("none");
+    expect((await poll(`awb_waiting=${body}.${sig.slice(0, -2)}xx`)).json().state).toBe("none");
+    expect((await poll("awb_waiting=garbage")).json().state).toBe("none");
+    const user = (await userByEmail("new@example.com"))!;
+    const expired = mintWaitingValue(user.id, "google", Date.now() - 8 * 24 * 3600 * 1000);
+    expect((await poll(`awb_waiting=${expired}`)).json().state).toBe("none");
+  });
+
+  it("returns none for a disabled or missing user, and leaks nothing but state and provider", async () => {
+    const res = await signInGoogle({ sub: "g-1", email: "new@example.com" });
+    const cookie = pair(waitingCookie(res));
+    const user = (await userByEmail("new@example.com"))!;
+    const pending = await poll(cookie);
+    expect(Object.keys(pending.json()).sort()).toEqual(["provider", "state"]);
+    expect(pending.body).not.toContain(user.id);
+    expect(pending.body).not.toContain("example.com");
+    await db.run("UPDATE users SET status = 'disabled' WHERE id = ?", [user.id]);
+    expect((await poll(cookie)).json()).toEqual({ state: "none", provider: null });
+    await db.run("DELETE FROM approval_requests");
+    await db.run("DELETE FROM users WHERE id = ?", [user.id]);
+    expect((await poll(cookie)).json()).toEqual({ state: "none", provider: null });
+  });
+
+  it("rate limits a flood from one address", async () => {
+    let last = 200;
+    for (let i = 0; i < 70; i++) last = (await poll()).statusCode;
+    expect(last).toBe(429);
   });
 });

@@ -2162,3 +2162,48 @@ button.wb-app-cell-link:focus-visible { outline: none; }
 .wb-user-actions .ui-row-action { white-space: nowrap; padding: var(--s-4) var(--s-4); }
 .ui-table th { white-space: nowrap; }
 .app-quick-modal .space-detail-tool-summary.is-inset { padding-left: 0; padding-right: 0; }
+
+/* waiting room */
+.waiting-steps {
+  list-style: none;
+  display: grid;
+  gap: var(--s-16);
+  margin: var(--s-8) 0;
+}
+.waiting-step {
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  column-gap: var(--s-12);
+  align-items: start;
+  color: var(--text-2);
+  font-family: var(--sans);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.waiting-marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.waiting-step[data-status="done"] .waiting-marker { border-color: var(--ok); color: var(--ok); }
+.waiting-step[aria-current="step"] { color: var(--text); }
+.waiting-step[aria-current="step"] .waiting-marker { border-color: var(--accent); color: var(--accent); }
+.waiting-step[data-status="declined"] .waiting-marker { border-color: var(--danger); color: var(--danger); }
+.waiting-label { font-weight: 600; color: var(--text); }
+.waiting-note { grid-column: 2; margin-top: var(--s-4); color: var(--text-2); }
+.waiting-loader {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--accent);
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: ui-spin 1.1s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) { .waiting-loader { animation: none; border-right-color: var(--accent); opacity: .6; } }
