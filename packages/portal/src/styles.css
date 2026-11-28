@@ -2106,6 +2106,10 @@ button.wb-app-cell-link:focus-visible { outline: none; }
 /* Dates stay on one line: a fixed width wide enough for "Nov 28, 2026" and "3 months ago". */
 .wb-col-date { width: 120px; white-space: nowrap; }
 /* The row actions stay on one line; they wrap only when the card is narrower than the content. */
-.wb-user-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0 var(--s-4); white-space: nowrap; }
+.wb-user-actions { display: flex; flex-wrap: nowrap; align-items: center; justify-content: flex-end; gap: 0 var(--s-4); white-space: nowrap; }
+/* The actions cell takes the width of its content so the email column gives way, not the actions. */
+.ui-table td:has(> .wb-user-actions) { width: 1%; white-space: nowrap; }
+.ui-table tbody tr td:first-child:has(~ td > .wb-user-actions) { overflow-wrap: anywhere; word-break: break-word; }
+@media (max-width: 900px) { .wb-user-actions { flex-wrap: wrap; } }
 .wb-user-actions .ui-row-action { white-space: nowrap; padding: var(--s-4) var(--s-4); }
 .ui-table th { white-space: nowrap; }
