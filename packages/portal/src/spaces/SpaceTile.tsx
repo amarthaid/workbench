@@ -23,23 +23,22 @@ const AUDIENCE: Record<SpaceVisibility, { icon: ReactNode; tip: string }> = {
 };
 
 /** The small square itself, tinted like the Badge of the same variant. Decorative: the caller names it. */
-function Glyph({ variant, label, dashed = false, children }: { variant: Variant; label?: string; dashed?: boolean; children: ReactNode }) {
+function Glyph({ variant, dashed = false, children }: { variant: Variant; dashed?: boolean; children: ReactNode }) {
   return (
-    <span className={`space-indicator ui-badge-${variant}${label ? " has-label" : ""}${dashed ? " is-paused" : ""}`}>
+    <span className={`space-indicator ui-badge-${variant}${dashed ? " is-paused" : ""}`}>
       {children}
-      {label && <span>{label}</span>}
     </span>
   );
 }
 
-/** Who can open the Space, as an icon with a tooltip. `showLabel` adds the short word beside it. */
-export function AudienceIndicator({ space, showLabel = false }: { space: SpaceSummary; showLabel?: boolean }) {
+/** Who can open the Space, as an icon with a tooltip. */
+export function AudienceIndicator({ space }: { space: SpaceSummary }) {
   const vis = VISIBILITY[space.visibility] ?? VISIBILITY.private;
   const aud = AUDIENCE[space.visibility] ?? AUDIENCE.private;
   return (
     <Tooltip label={aud.tip} placement="top">
       <span role="img" tabIndex={0} aria-label={`Audience: ${vis.label}`} title={aud.tip}>
-        <Glyph variant={vis.variant} label={showLabel ? vis.label : undefined}>
+        <Glyph variant={vis.variant}>
           {aud.icon}
         </Glyph>
       </span>

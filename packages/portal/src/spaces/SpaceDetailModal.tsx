@@ -56,29 +56,31 @@ export function SpaceDetailModal({ space, onClose, onToggleFavorite, onDetailsSa
                 </p>
                 <div className="space-detail-hero-side">
                   <span className="space-detail-chips">
-                    <AudienceIndicator space={space} showLabel />
+                    <AudienceIndicator space={space} />
                     <DelegatedIndicator space={space} />
                   </span>
-                  <Link className="ui-button ui-button-primary ui-button-md space-detail-open" to={`/s/${encodeURIComponent(space.name)}`}>
-                    <DoorOpenIcon />
-                    Open
-                  </Link>
                 </div>
               </div>
             </div>
           </div>
         }
         footer={
-          space.mine ? (
-            <>
-              <Button variant="outline" onClick={() => onEditSharing(space)}>
-                Edit sharing
-              </Button>
-              <Button variant="outline" className="space-detail-delete" onClick={() => setDeleting(true)}>
-                Delete Space
-              </Button>
-            </>
-          ) : undefined
+          <>
+            {space.mine && (
+              <>
+                <Button variant="outline" onClick={() => onEditSharing(space)}>
+                  Edit sharing
+                </Button>
+                <Button variant="outline" className="space-detail-delete" onClick={() => setDeleting(true)}>
+                  Delete Space
+                </Button>
+              </>
+            )}
+            <Link className="ui-button ui-button-primary ui-button-md space-detail-open" to={`/s/${encodeURIComponent(space.name)}`}>
+              <DoorOpenIcon />
+              Open
+            </Link>
+          </>
         }
       >
         <div className="space-detail-facts-line">

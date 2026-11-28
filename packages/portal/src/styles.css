@@ -300,7 +300,6 @@ body {
   white-space: nowrap;
 }
 .space-indicator svg { width: 14px; height: 14px; flex: none; }
-.space-indicator.has-label { padding: 0 var(--s-8) 0 var(--s-4); }
 .space-indicator.is-paused { border-style: dashed; border-color: var(--border-strong); opacity: .85; }
 [role="img"][tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
 
@@ -2059,7 +2058,7 @@ button.wb-app-cell-link:focus-visible { outline: none; }
 .space-detail-hero-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s-8) var(--s-12); }
 .space-detail-hero-side { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--s-8); margin-left: auto; }
 .space-detail-hero-side .space-detail-chips { margin-left: 0; }
-.space-detail-open { display: inline-flex; align-items: center; gap: var(--s-8); }
+.space-detail-open { display: inline-flex; align-items: center; gap: var(--s-8); margin-left: auto; }
 .space-detail-edit-target { position: relative; display: inline-flex; align-items: center; gap: var(--s-8); max-width: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; letter-spacing: inherit; text-align: left; cursor: text; }
 .space-detail-edit-target svg { width: 14px; height: 14px; flex: none; opacity: 0; }
 .space-detail-edit-target:hover svg, .space-detail-edit-target:focus-visible svg { opacity: .8; }
@@ -2075,9 +2074,7 @@ button.wb-app-cell-link:focus-visible { outline: none; }
 .space-detail-hint { margin: 0 0 var(--s-12); }
 .space-detail-modal .ui-form-error { margin: 0 0 var(--s-12); }
 .space-detail-open svg { width: 16px; height: 16px; flex: none; }
-@media (max-width: 520px) {
-  .space-detail-hero-side { justify-content: flex-start; margin-left: 0; width: 100%; }
-}
+
 .space-detail-hero-title { margin: 0; font-size: 26px; line-height: 1.15; font-weight: 700; letter-spacing: -.01em; color: #fff; overflow-wrap: anywhere; }
 .space-detail-desc { margin: 0 0 var(--s-16); color: var(--text-2); font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .space-detail-credit { display: flex; align-items: center; gap: var(--s-8); margin: 0; font-size: 13px; color: #fff; }

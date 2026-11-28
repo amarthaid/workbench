@@ -79,24 +79,26 @@ describe("SpaceDetailModal dialog name", () => {
 });
 
 describe("SpaceDetailModal hero row", () => {
-  it("puts the title first, then credit on the left and chips plus Open on the right", () => {
+  it("puts the title first, then credit on the left and the icon indicators on the right", () => {
     open(space({ delegate_access: true, mine: true }));
     const text = hero().querySelector(".space-detail-hero-text") as HTMLElement;
     expect(text.firstElementChild?.tagName).toBe("H2");
     const row = text.querySelector(".space-detail-hero-row") as HTMLElement;
     expect(row).toHaveTextContent("by you");
     const side = row.querySelector(".space-detail-hero-side") as HTMLElement;
-    expect(side).toHaveTextContent("Everyone signed in");
+    expect(within(side).getByRole("img", { name: "Audience: Everyone signed in" })).toBeInTheDocument();
     expect(within(side).getByRole("img", { name: "Delegated" })).toBeInTheDocument();
-    const link = within(side).getByRole("link", { name: "Open" });
-    expect(link).toHaveAttribute("href", "/s/pr-timeline");
-    expect(link.querySelector("svg")).not.toBeNull();
+    expect(side).not.toHaveTextContent("Everyone signed in");
+    expect(within(hero()).queryByRole("link", { name: "Open" })).toBeNull();
   });
 
-  it("keeps Open out of the footer, and gives a viewer no footer at all", () => {
+  it("gives a viewer a footer with just Open", () => {
     open(space());
-    expect(document.querySelector(".ui-modal-foot")).toBeNull();
-    expect(screen.getAllByRole("link", { name: "Open" })).toHaveLength(1);
+    const foot = document.querySelector(".ui-modal-foot") as HTMLElement;
+    const link = within(foot).getByRole("link", { name: "Open" });
+    expect(link).toHaveAttribute("href", "/s/pr-timeline");
+    expect(link.querySelector("svg")).not.toBeNull();
+    expect(within(foot).queryAllByRole("button")).toHaveLength(0);
   });
 
   it("keeps Edit sharing and Delete Space in the owner footer", () => {
@@ -105,7 +107,7 @@ describe("SpaceDetailModal hero row", () => {
     expect(within(foot).queryByRole("button", { name: "Edit details" })).toBeNull();
     expect(within(foot).getByRole("button", { name: "Edit sharing" })).toBeInTheDocument();
     expect(within(foot).getByRole("button", { name: "Delete Space" })).toBeInTheDocument();
-    expect(within(foot).queryByRole("link", { name: "Open" })).toBeNull();
+    expect(within(foot).getByRole("link", { name: "Open" })).toBe(foot.lastElementChild);
   });
 });
 
