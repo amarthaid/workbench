@@ -31,12 +31,30 @@ describe("ToolsAccordion", () => {
     expect(head).not.toHaveTextContent("write");
     expect(head.querySelector(".space-detail-chips")).toBeNull();
     expect(container.querySelector(".space-detail-tool-summary")).toHaveTextContent("1 read");
+    expect(container.querySelector(".space-detail-tool-summary")).toHaveTextContent("1 write");
   });
 
-  it("does not repeat them when singleApp is forced", () => {
-    render(<ToolsAccordion singleApp tools={[tool(1), tool(2, "Demo")]} />);
-    expect(screen.getByRole("button", { name: "Acme" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Demo" })).toBeInTheDocument();
+  it("renders no app header when singleApp is set, just the summary and the tool rows", () => {
+    const { container } = render(<ToolsAccordion singleApp tools={[tool(1), tool(2, "Acme", { effect: "write" })]} />);
+    expect(screen.queryByRole("button", { name: "Acme" })).toBeNull();
+    expect(container.querySelector(".space-detail-app-head")).toBeNull();
+    expect(screen.getByRole("button", { name: "tool_1, Reads" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "tool_2, Writes" })).toBeInTheDocument();
+    expect(container.querySelector(".space-detail-tool-summary")).not.toBeNull();
+  });
+
+  it("words the summary chips like the app header chips, singular and plural", () => {
+    const { container } = render(
+      <ToolsAccordion
+        singleApp
+        tools={[tool(1), tool(2), tool(3, "Acme", { effect: "write" }), tool(4, "Acme", { effect: "delete" })]}
+      />,
+    );
+    const summary = container.querySelector(".space-detail-tool-summary")!;
+    expect(summary).toHaveTextContent("2 reads");
+    expect(summary).toHaveTextContent("1 write");
+    expect(summary).toHaveTextContent("1 delete");
+    expect(summary).not.toHaveTextContent("1 deletes");
   });
 
   it("keeps the per-app chips with two or more apps", () => {

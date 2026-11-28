@@ -30,6 +30,33 @@ function Sep() {
   );
 }
 
+/** "2 reads", "1 write", "1 delete": one vocabulary for the summary and the app headers. */
+function EffectChips({ counts: c, accessible = false }: { counts: Counts; accessible?: boolean }) {
+  const sep = accessible ? <Sep /> : null;
+  return (
+    <span className="space-detail-chips">
+      {c.read > 0 && (
+        <>
+          {sep}
+          <Badge variant="blue">{c.read} {c.read === 1 ? "read" : "reads"}</Badge>
+        </>
+      )}
+      {c.write > 0 && (
+        <>
+          {sep}
+          <Badge variant="orange">{c.write} {c.write === 1 ? "write" : "writes"}</Badge>
+        </>
+      )}
+      {c.delete > 0 && (
+        <>
+          {sep}
+          <Badge variant="red">{c.delete} {c.delete === 1 ? "delete" : "deletes"}</Badge>
+        </>
+      )}
+    </span>
+  );
+}
+
 function countEffects(tools: SpaceTool[]): Counts {
   const c: Counts = { read: 0, write: 0, delete: 0 };
   for (const t of tools) {
@@ -91,28 +118,7 @@ function AppBox({ app, tools, defaultOpen, baseId, showChips }: { app: string; t
           <ChevronDownIcon />
         </span>
         <span className="space-detail-app-name">{app}</span>
-        {showChips && (
-          <span className="space-detail-chips">
-            {c.read > 0 && (
-              <>
-                <Sep />
-                <Badge variant="blue">{c.read} {c.read === 1 ? "read" : "reads"}</Badge>
-              </>
-            )}
-            {c.write > 0 && (
-              <>
-                <Sep />
-                <Badge variant="orange">{c.write} {c.write === 1 ? "write" : "writes"}</Badge>
-              </>
-            )}
-            {c.delete > 0 && (
-              <>
-                <Sep />
-                <Badge variant="red">{c.delete} {c.delete === 1 ? "delete" : "deletes"}</Badge>
-              </>
-            )}
-          </span>
-        )}
+        {showChips && <EffectChips counts={c} accessible />}
       </button>
       {open && (
         <ul id={bodyId} className="space-detail-tool-list">
@@ -142,8 +148,8 @@ export interface ToolsAccordionProps {
    */
   defaultOpen?: "auto" | "all" | "none";
   /**
-   * The list belongs to one app: the app headers do not repeat the summary
-   * chips. Derived from the tools when omitted.
+   * The list belongs to one app: no app header is drawn, just the summary and
+   * the tool rows. When omitted, a single group only drops the header chips.
    */
   singleApp?: boolean;
 }
@@ -158,13 +164,28 @@ export function ToolsAccordion({ tools, defaultOpen = "auto", singleApp }: Tools
   const totals = countEffects(tools);
   const single = singleApp ?? groups.length === 1;
   const openAt = (i: number) => (defaultOpen === "all" ? true : defaultOpen === "none" ? false : i === 0 || groups.length <= 2);
+  const summary = (inset: boolean) => (
+    <div className={`space-detail-tool-summary${inset ? " is-inset" : ""}`}>
+      <EffectChips counts={totals} />
+    </div>
+  );
+  if (singleApp) {
+    // One app: its name is already the page or dialog title, so the tools go
+    // straight under the summary with no app header.
+    return (
+      <>
+        {summary(true)}
+        <ul className="space-detail-tool-list">
+          {tools.map((t, i) => (
+            <ToolRow key={t.name} tool={t} panelId={`${baseId}-t${i}`} />
+          ))}
+        </ul>
+      </>
+    );
+  }
   return (
     <>
-      <div className="space-detail-tool-summary">
-        {totals.read > 0 && <Badge variant="blue">{totals.read} read</Badge>}
-        {totals.write > 0 && <Badge variant="orange">{totals.write} write</Badge>}
-        {totals.delete > 0 && <Badge variant="red">{totals.delete} delete</Badge>}
-      </div>
+      {summary(false)}
       {groups.map((g, i) => (
         <AppBox key={g.app} app={g.app} tools={g.tools} defaultOpen={openAt(i)} baseId={`${baseId}-a${i}`} showChips={!single} />
       ))}

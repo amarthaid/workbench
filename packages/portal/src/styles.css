@@ -2047,6 +2047,8 @@ button.wb-app-cell-link:focus-visible { outline: 2px solid var(--accent); outlin
 .space-detail-heart.is-on { color: var(--accent); }
 .space-detail-subhead { margin: 0 0 var(--s-8); font-size: 12px; font-weight: 600; color: var(--text-2); }
 .space-detail-tool-summary { display: flex; flex-wrap: wrap; gap: var(--s-8); margin: 0 0 var(--s-12); }
+.space-detail-tool-summary .space-detail-chips { margin-left: 0; justify-content: flex-start; gap: var(--s-8); }
+.space-detail-tool-summary.is-inset { margin: 0; padding: var(--s-8) var(--s-12); }
 .space-detail-app { margin-bottom: var(--s-8); }
 .space-detail-app-head { display: flex; align-items: center; gap: var(--s-8); width: 100%; padding: var(--s-8) var(--s-12); border: 0; background: var(--bg-sunk); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
 .space-detail-app-head:focus-visible, .space-detail-tool-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
