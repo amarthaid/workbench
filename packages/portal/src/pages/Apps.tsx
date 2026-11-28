@@ -12,6 +12,7 @@ import { AppQuickView } from "../components/AppQuickView";
 import { AppCell } from "../components/AppCell";
 import { useConnectFlow } from "../hooks/useConnectFlow";
 import { useAuth } from "../context/AuthContext";
+import { appTier, compareApps } from "../app-order";
 
 type Filter = "all" | "connected" | "available";
 
@@ -123,8 +124,8 @@ export default function Apps() {
     return Array.from(set).sort();
   }, [integrations]);
 
-  // Connected first, then anything connectable, then integrations whose auth
-  // this deployment has not configured.
+  // Within a tier: connected first, then anything connectable, then integrations
+  // whose auth this deployment has not configured.
   function rank(i: IntegrationSummary): number {
     if (connectionMap.get(i.name)) return 0;
     if (i.configured !== false) return 1;
@@ -146,7 +147,7 @@ export default function Apps() {
       }
       return true;
     })
-    .sort((a, b) => rank(a) - rank(b));
+    .sort((a, b) => appTier(a) - appTier(b) || rank(a) - rank(b) || compareApps(a, b));
 
   if (isLoading) {
     return (

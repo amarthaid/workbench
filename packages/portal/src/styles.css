@@ -284,6 +284,25 @@ body {
 .ui-button-danger { background: var(--danger); color: #fff; }
 .ui-button-danger:hover:not(:disabled) { filter: brightness(0.9); }
 
+/* A Space's audience and delegation as small icon squares, tinted by the Badge variants. */
+.space-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-4);
+  box-sizing: border-box;
+  min-width: 22px;
+  height: 22px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.space-indicator svg { width: 14px; height: 14px; flex: none; }
+.space-indicator.is-paused { border-style: dashed; border-color: var(--border-strong); opacity: .85; }
+[role="img"][tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+
 /* ui/Badge */
 .ui-badge {
   display: inline-flex;
@@ -468,8 +487,9 @@ body {
   line-height: 1.4;
   pointer-events: none;
 }
-.ui-tooltip-bottom { top: calc(100% + var(--s-4)); right: 0; }
-.ui-tooltip-top { bottom: calc(100% + var(--s-4)); right: 0; }
+.ui-tooltip-bottom, .ui-tooltip-top { left: 50%; transform: translateX(calc(-50% + var(--tip-shift, 0px))); }
+.ui-tooltip-bottom { top: calc(100% + var(--s-4)); }
+.ui-tooltip-top { bottom: calc(100% + var(--s-4)); }
 .ui-tooltip-left { top: 50%; right: calc(100% + var(--s-8)); transform: translateY(-50%); }
 
 /* ui/PopoverSelect — a ghost trigger with a small listbox floating under it.
@@ -1560,6 +1580,8 @@ button.wb-app-cell-link:focus-visible { outline: none; }
   flex: 1;
 }
 .space-tile-compact .space-tile-body { padding-right: 68px; }
+/* The 68px keeps the title clear of the heart at the top; the badge row is lower, so it (and the Open icon at its end) uses the full width. */
+.space-tile-compact .space-tile-badges { margin-right: calc(var(--s-12) - 68px); }
 .space-tile-link {
   /* A button, so reset the browser's own button look. */
   appearance: none;
@@ -1599,7 +1621,6 @@ button.wb-app-cell-link:focus-visible { outline: none; }
 .space-grid.is-two .space-tile-badges { flex-wrap: nowrap; }
 .space-grid.is-two .space-tile-badges > * { flex: none; white-space: nowrap; }
 .space-grid.is-two .space-tile-badges > .space-tile-badge-button { flex: 0 1 auto; min-width: 0; overflow: hidden; }
-.space-grid.is-two .space-tile-badge-button .ui-badge { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 
 .space-tile-actions {
   position: absolute;
@@ -1632,6 +1653,15 @@ button.wb-app-cell-link:focus-visible { outline: none; }
 .space-tile-heart.is-on { color: var(--accent); }
 .space-tile-large .space-tile-icon-button { color: #fff; background: rgba(0, 0, 0, .28); }
 .space-tile-large .space-tile-icon-button:hover { background: rgba(0, 0, 0, .46); color: #fff; }
+/* Bottom right, in the badge row, above the stretched title link. */
+.space-tile-open { position: relative; z-index: 2; margin-left: auto; min-width: 24px; height: 24px; padding: 0; text-decoration: none; opacity: 0; color: var(--text-2); background: transparent; }
+.space-tile-large .space-tile-open { color: var(--text-2); background: transparent; }
+.space-tile-large .space-tile-open:hover, .space-tile-open:hover { color: var(--text); background: var(--bg-sunk); }
+.space-tile-open svg { width: 15px; height: 15px; }
+.space-tile:hover .space-tile-open,
+.space-tile:focus-within .space-tile-open,
+.space-tile-open:focus-visible { opacity: 1; }
+@media (hover: none) { .space-tile-open { opacity: 1; } }
 .space-tile-count { font-variant-numeric: tabular-nums; }
 /* The audience badge as a control, on tiles the person owns. It sits above the
    stretched link so a click opens Sharing instead of the Space. */
@@ -1647,7 +1677,7 @@ button.wb-app-cell-link:focus-visible { outline: none; }
 }
 /* A line, not a shadow or a capsule: the stylesheet guard keeps both to the
    modal and the toggle. */
-.space-tile-badge-button:hover .ui-badge { outline: 1px solid currentColor; outline-offset: 1px; }
+.space-tile-badge-button:hover .space-indicator { outline: 1px solid currentColor; outline-offset: 1px; }
 .space-tile-badge-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .space-details-form { display: grid; gap: var(--s-12); }
@@ -1996,6 +2026,8 @@ button.wb-app-cell-link:focus-visible { outline: none; }
 /* The Space detail modal: the cover enlarged, then the facts a tile has no room for. */
 .space-detail-modal { padding: 0; }
 .space-detail-modal .ui-modal-body { padding: var(--s-16) var(--s-24) 0; }
+.space-apply-bar { display: flex; align-items: center; justify-content: flex-end; gap: var(--s-8); width: 100%; }
+.space-apply-label { margin-right: auto; font-size: 13px; color: var(--text-3); }
 .space-detail-modal .ui-modal-foot { margin-top: var(--s-16); padding: 0 var(--s-24) var(--s-24); }
 /* The art is the header: edge to edge, the name on it, Close laid over its corner. */
 .ui-modal-hero { position: relative; }
@@ -2029,7 +2061,27 @@ button.wb-app-cell-link:focus-visible { outline: none; }
 .space-detail-hero { position: relative; height: 200px; }
 .space-detail-hero .space-cover { position: absolute; inset: 0; }
 .space-detail-hero::after { content: ""; position: absolute; inset: 0; background: linear-gradient(to top, rgba(0, 0, 0, .6), rgba(0, 0, 0, 0) 65%); pointer-events: none; }
-.space-detail-hero-text { position: absolute; left: var(--s-24); right: var(--s-24); bottom: var(--s-16); z-index: 1; display: grid; gap: var(--s-8); justify-items: start; }
+.space-detail-hero-text { position: absolute; left: var(--s-24); right: var(--s-24); bottom: var(--s-16); z-index: 1; display: grid; gap: var(--s-8); }
+.space-detail-hero-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s-8) var(--s-12); }
+.space-detail-hero-side { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--s-8); margin-left: auto; }
+.space-detail-hero-side .space-detail-chips { margin-left: 0; }
+.space-detail-open { display: inline-flex; align-items: center; gap: var(--s-8); margin-left: auto; }
+.space-detail-edit-target { position: relative; display: inline-flex; align-items: center; gap: var(--s-8); max-width: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; letter-spacing: inherit; text-align: left; cursor: text; }
+.space-detail-edit-target svg { width: 14px; height: 14px; flex: none; opacity: 0; }
+.space-detail-edit-target:hover svg, .space-detail-edit-target:focus-visible svg { opacity: .8; }
+@media (hover: none) { .space-detail-edit-target svg { opacity: .6; } }
+.space-detail-edit-target:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.space-detail-edit-title { color: #fff; }
+.space-detail-edit-desc { display: flex; width: 100%; margin: 0 0 var(--s-8); align-items: flex-start; }
+.space-detail-edit-desc .space-detail-desc { margin: 0; }
+.space-detail-desc-text { color: var(--text-2); font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.space-detail-edit-desc.is-empty .space-detail-desc-text { color: var(--text-3); }
+.space-detail-title-input { width: 100%; font-size: 20px; font-weight: 700; }
+.space-detail-desc-edit { display: grid; gap: var(--s-4); margin: 0 0 var(--s-8); }
+.space-detail-hint { margin: 0 0 var(--s-12); }
+.space-detail-modal .ui-form-error { margin: 0 0 var(--s-12); }
+.space-detail-open svg { width: 16px; height: 16px; flex: none; }
+
 .space-detail-hero-title { margin: 0; font-size: 26px; line-height: 1.15; font-weight: 700; letter-spacing: -.01em; color: #fff; overflow-wrap: anywhere; }
 .space-detail-desc { margin: 0 0 var(--s-16); color: var(--text-2); font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .space-detail-credit { display: flex; align-items: center; gap: var(--s-8); margin: 0; font-size: 13px; color: #fff; }
@@ -2114,3 +2166,124 @@ button.wb-app-cell-link:focus-visible { outline: none; }
 .wb-user-actions .ui-row-action { white-space: nowrap; padding: var(--s-4) var(--s-4); }
 .ui-table th { white-space: nowrap; }
 .app-quick-modal .space-detail-tool-summary.is-inset { padding-left: 0; padding-right: 0; }
+
+/* waiting room: one centered card over the quiet login swarm */
+.waiting-shell {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--s-24) var(--s-16);
+  background: var(--bg);
+  overflow: hidden;
+}
+.waiting-canvas { position: fixed; inset: 0; width: 100%; height: 100%; opacity: .28; pointer-events: none; z-index: 0; }
+.waiting-card {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 480px;
+  display: grid;
+  gap: var(--s-16);
+  justify-items: center;
+  text-align: center;
+  padding: var(--s-32) var(--s-24);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-family: var(--sans);
+}
+.waiting-brand { display: flex; justify-content: center; color: var(--text); }
+.waiting-title { margin: 0; font-size: 22px; line-height: 1.2; font-weight: 700; color: var(--text); }
+.waiting-steps {
+  list-style: none;
+  display: flex;
+  width: 100%;
+  margin: var(--s-8) 0 0;
+  padding: 0;
+}
+.waiting-step {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-8);
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.3;
+}
+.waiting-marker {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  font-size: 12px;
+  color: var(--text-2);
+}
+.waiting-step[data-status="done"] .waiting-marker { border-color: var(--ok); color: var(--ok); }
+.waiting-step[aria-current="step"] .waiting-marker { border-color: var(--accent); color: var(--accent); }
+.waiting-step[data-status="declined"] .waiting-marker { border-color: var(--danger); color: var(--danger); }
+.waiting-label { font-weight: 600; color: var(--text-2); padding: 0 var(--s-4); }
+.waiting-step[aria-current="step"] .waiting-label, .waiting-step[data-status="done"] .waiting-label { color: var(--text); }
+.waiting-note { margin: 0; max-width: 40ch; color: var(--text-2); font-size: 13.5px; line-height: 1.6; }
+/* The connector from this step to the next: from the marker's edge to the next marker's edge. */
+.waiting-line {
+  position: absolute;
+  top: 13px;
+  left: calc(50% + 20px);
+  width: calc(100% - 40px);
+  height: 2px;
+  background: repeating-linear-gradient(90deg, var(--border-strong) 0 4px, transparent 4px 8px);
+}
+.waiting-step[data-status="done"] .waiting-line { background: var(--accent); }
+/* Leaving the step in progress: dashes that drift toward the next step. */
+.waiting-step[aria-current="step"]:not([data-status="declined"]) .waiting-line {
+  background: repeating-linear-gradient(90deg, var(--accent) 0 4px, transparent 4px 8px);
+  background-size: 8px 2px;
+  animation: waiting-drift 1s linear infinite;
+}
+.waiting-step[data-status="declined"] .waiting-line { background: repeating-linear-gradient(90deg, var(--border-strong) 0 4px, transparent 4px 8px); }
+@keyframes waiting-drift { to { background-position: 8px 0; } }
+.waiting-loader {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--accent);
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: ui-spin 1.1s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .waiting-loader { animation: none; border-right-color: var(--accent); opacity: .6; }
+  .waiting-step[aria-current="step"] .waiting-line { animation: none; }
+}
+@media (max-width: 520px) {
+  .waiting-card { padding: var(--s-24) var(--s-16); }
+  .waiting-steps { flex-direction: column; align-items: stretch; width: auto; gap: var(--s-24); }
+  .waiting-step { flex-direction: row; justify-content: flex-start; text-align: left; }
+  .waiting-line {
+    top: 28px;
+    left: 13px;
+    width: 2px;
+    height: var(--s-24);
+    background: repeating-linear-gradient(180deg, var(--border-strong) 0 4px, transparent 4px 8px);
+  }
+  .waiting-step[data-status="done"] .waiting-line { background: var(--accent); }
+  .waiting-step[aria-current="step"]:not([data-status="declined"]) .waiting-line {
+    background: repeating-linear-gradient(180deg, var(--accent) 0 4px, transparent 4px 8px);
+    background-size: 2px 8px;
+    animation-name: waiting-drift-v;
+  }
+  .waiting-step[data-status="declined"] .waiting-line { background: repeating-linear-gradient(180deg, var(--border-strong) 0 4px, transparent 4px 8px); }
+}
+@keyframes waiting-drift-v { to { background-position: 0 8px; } }

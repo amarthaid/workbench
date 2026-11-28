@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { Routes, Route, Navigate, useLocation, Outlet } from "react-router-dom";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import Login from "./pages/Login";
+import Waiting from "./pages/Waiting";
 import Connect from "./pages/Connect";
 import ConnectResult from "./pages/ConnectResult";
 import BrowserView from "./pages/BrowserView";
@@ -54,6 +55,8 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      {/* Public: a signed-out person whose account awaits admin approval. */}
+      <Route path="/waiting" element={<Waiting />} />
       {/* Public: handles both the signed-out (show a picker) and signed-in
           (silently resume) cases itself — RequireAuth's unconditional
           redirect-to-/login doesn't fit either branch. */}

@@ -1,4 +1,4 @@
-import { useId, useState, type ReactElement, type ReactNode } from "react";
+import { useId, useLayoutEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 
 export interface TooltipProps {
   /** The tip's text. Kept short — this is a label, not documentation. */
@@ -21,6 +21,22 @@ export interface TooltipProps {
 export function Tooltip({ label, placement = "bottom", children }: TooltipProps) {
   const [open, setOpen] = useState(false);
   const id = useId();
+  const bubble = useRef<HTMLSpanElement>(null);
+
+  // Centered on the trigger, then nudged back inside the viewport when it would
+  // spill past an edge.
+  useLayoutEffect(() => {
+    const el = bubble.current;
+    if (!open || !el || placement === "left") return;
+    el.style.setProperty("--tip-shift", "0px");
+    const r = el.getBoundingClientRect();
+    const margin = 8;
+    const max = document.documentElement.clientWidth || window.innerWidth;
+    let shift = 0;
+    if (r.left < margin) shift = margin - r.left;
+    else if (r.right > max - margin) shift = max - margin - r.right;
+    el.style.setProperty("--tip-shift", `${shift}px`);
+  }, [open, placement, label]);
 
   return (
     <span
@@ -35,7 +51,7 @@ export function Tooltip({ label, placement = "bottom", children }: TooltipProps)
     >
       <children.type {...children.props} aria-describedby={open ? id : undefined} />
       {open && (
-        <span role="tooltip" id={id} className={`ui-tooltip ui-tooltip-${placement}`}>
+        <span ref={bubble} role="tooltip" id={id} className={`ui-tooltip ui-tooltip-${placement}`}>
           {label}
         </span>
       )}
