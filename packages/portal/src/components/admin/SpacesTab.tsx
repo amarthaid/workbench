@@ -30,7 +30,7 @@ function SpaceCard({ space }: { space: AdminSpaceItem }) {
   return (
     <article className="admin-space">
       <div className="admin-space-cover">
-        <Cover space={space} showInitial={false} />
+        <Cover space={space} />
       </div>
       <div className="admin-space-body">
       <header className="admin-space-head">
