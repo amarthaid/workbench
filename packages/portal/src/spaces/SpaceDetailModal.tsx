@@ -89,9 +89,9 @@ function AppBox({ app, tools, defaultOpen, baseId }: { app: string; tools: Space
         </span>
         <span className="space-detail-app-name">{app}</span>
         <span className="space-detail-chips">
-          {c.read > 0 && <Badge variant="blue">{c.read} reads</Badge>}
-          {c.write > 0 && <Badge variant="orange">{c.write} writes</Badge>}
-          {c.delete > 0 && <Badge variant="red">{c.delete} deletes</Badge>}
+          {c.read > 0 && <Badge variant="blue">{c.read} {c.read === 1 ? "read" : "reads"}</Badge>}
+          {c.write > 0 && <Badge variant="orange">{c.write} {c.write === 1 ? "write" : "writes"}</Badge>}
+          {c.delete > 0 && <Badge variant="red">{c.delete} {c.delete === 1 ? "delete" : "deletes"}</Badge>}
         </span>
       </button>
       {open && (

@@ -422,8 +422,27 @@ describe("the Space detail modal", () => {
       const dialog = await openWith([tool(1), tool(2), tool(3, { effect: "write" }), tool(4, { effect: "delete" }), tool(5, { effect: "delete" })]);
       const head = await within(dialog).findByRole("button", { name: /Acme/ });
       expect(head).toHaveTextContent("2 reads");
-      expect(head).toHaveTextContent("1 writes");
+      expect(head).toHaveTextContent("1 write");
+      expect(head).not.toHaveTextContent("1 writes");
       expect(head).toHaveTextContent("2 deletes");
+    });
+
+    it("uses singular chip words for one and plural for more on the app header", async () => {
+      const one = await openWith([tool(1), tool(2, { effect: "write" }), tool(3, { effect: "delete" })]);
+      const oneHead = await within(one).findByRole("button", { name: /Acme/ });
+      expect(oneHead).toHaveTextContent("1 read");
+      expect(oneHead).not.toHaveTextContent("1 reads");
+      expect(oneHead).toHaveTextContent("1 write");
+      expect(oneHead).not.toHaveTextContent("1 writes");
+      expect(oneHead).toHaveTextContent("1 delete");
+      expect(oneHead).not.toHaveTextContent("1 deletes");
+    });
+
+    it("uses plural chip words for several on the app header", async () => {
+      const dialog = await openWith([tool(1), tool(2), tool(3, { effect: "write" }), tool(4, { effect: "write" }), tool(5, { effect: "write" })]);
+      const head = await within(dialog).findByRole("button", { name: /Acme/ });
+      expect(head).toHaveTextContent("2 reads");
+      expect(head).toHaveTextContent("3 writes");
     });
 
     it("opens the first app only when there are three apps", async () => {
