@@ -1,18 +1,16 @@
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchIntegrations, fetchConnections, createCustomApp, type HeaderRow, type IntegrationSummary } from "../api";
 import { PageHeader } from "../components/ui/PageHeader";
 import { Tabs } from "../components/ui/Tabs";
 import { EmptyState } from "../components/ui/EmptyState";
 import { Input, Select } from "../components/ui/Input";
-import { PlusIcon } from "../components/ui/Icons";
-import { Tooltip } from "../components/ui/Tooltip";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Modal } from "../components/ui/Modal";
 import { CustomAppHeadersEditor } from "../components/CustomAppHeadersEditor";
 import IntegrationLogo from "../components/IntegrationLogo";
+import { AppQuickView } from "../components/AppQuickView";
 import { useConnectFlow } from "../hooks/useConnectFlow";
 import { useAuth } from "../context/AuthContext";
 
@@ -106,6 +104,7 @@ export default function Apps() {
     setNewPhase("idle");
   }
 
+  const [quickView, setQuickView] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
   const [category, setCategory] = useState("all");
   const [search, setSearch] = useState("");
@@ -132,6 +131,8 @@ export default function Apps() {
     if (i.configured !== false) return 1;
     return 2;
   }
+
+  const quickViewApp = quickView ? integrations.find((i) => i.name === quickView) : undefined;
 
   const needle = search.trim().toLowerCase();
   const visible = integrations
@@ -161,6 +162,9 @@ export default function Apps() {
     <>
       <PageHeader
         title="Apps"
+        actions={
+          canCreateCustomApp ? <Button onClick={() => setShowNewApp(true)}>Add custom app</Button> : undefined
+        }
         toolbar={
           <>
             <Tabs
@@ -193,17 +197,6 @@ export default function Apps() {
                   </Select>
                 </>
               )}
-              {canCreateCustomApp && (
-                <Tooltip label="New custom app — point workbench at an MCP server" placement="bottom">
-                  <Button
-                    className="ui-button-icon"
-                    onClick={() => setShowNewApp(true)}
-                    aria-label="New custom app"
-                  >
-                    <PlusIcon />
-                  </Button>
-                </Tooltip>
-              )}
             </div>
           </>
         }
@@ -223,6 +216,7 @@ export default function Apps() {
               integration={i}
               connected={connectionMap.get(i.name) ?? false}
               busy={busy === i.name}
+              onOpen={() => setQuickView(i.name)}
               onConnect={() => connect(i)}
             />
           ))}
@@ -230,6 +224,21 @@ export default function Apps() {
       )}
 
       {dialogs}
+
+      {quickViewApp && (
+        <AppQuickView
+          key={quickViewApp.name}
+          integration={quickViewApp}
+          connected={connectionMap.get(quickViewApp.name) ?? false}
+          busy={busy === quickViewApp.name}
+          onClose={() => setQuickView(null)}
+          onConnect={() => {
+            // The connect flow draws its own dialogs on the page: get out of their way.
+            setQuickView(null);
+            void connect(quickViewApp);
+          }}
+        />
+      )}
 
       <Modal
         open={showNewApp}
@@ -288,19 +297,22 @@ function AppCell({
   integration: i,
   connected,
   busy,
+  onOpen,
   onConnect,
 }: {
   integration: IntegrationSummary;
   connected: boolean;
   busy: boolean;
+  onOpen: () => void;
   onConnect: () => void;
 }) {
   const label = i.displayName || i.name;
   const configured = i.configured !== false;
 
-  // The navigable half and the action half are siblings, never nested: a
-  // <button> inside an <a> is invalid HTML, and every workaround for the
-  // resulting click ambiguity is worse than not creating it.
+  // The body that opens the quick view and the action half are sibling
+  // buttons, never nested: a <button> inside a <button> is invalid HTML, and
+  // every workaround for the resulting click ambiguity is worse than not
+  // creating it.
   const lead = (
     <>
       <IntegrationLogo name={i.name} displayName={i.displayName} logo={i.logo} size={24} />
@@ -328,13 +340,9 @@ function AppCell({
 
   return (
     <div className={`wb-app-cell${configured ? "" : " wb-app-cell-inert"}`}>
-      {configured ? (
-        <Link className="wb-app-cell-link" to={`/apps/${i.name}`}>
-          {lead}
-        </Link>
-      ) : (
-        <span className="wb-app-cell-link">{lead}</span>
-      )}
+      <button type="button" className="wb-app-cell-link" onClick={onOpen}>
+        {lead}
+      </button>
       <span className="wb-app-cell-action">{action}</span>
     </div>
   );
