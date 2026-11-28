@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
-import { FastifyInstance } from "fastify";
+import { FastifyInstance, FastifyReply } from "fastify";
 import { Integration, effectOf } from "@a-workbench/shared";
 import { registry } from "../plugins/registry";
 import { createAuthState, makeBinding } from "../auth/oauth";
@@ -57,7 +57,9 @@ import { can } from "../permissions/store";
 import { evictSession } from "../custom-apps/client";
 import { markConnected, startReaper, redeemPending, getPending, createPending } from "../auth/connections";
 import { resumeAuthorize } from "../auth/oauth-server/resume";
-import { AccountPendingError } from "../approvals/signup";
+import { AccountPendingError, isRecentlyDeclined } from "../approvals/signup";
+import { getUserStatus } from "../auth/user-status";
+import { setWaitingCookie, readWaitingCookie, verifyWaitingValue, waitingRateOk, type WaitingProvider } from "../auth/waiting-cookie";
 import { listAgents, revokeAgent } from "../auth/oauth-server/agents";
 import { ensureSession, defaultTab, navigate, captureLiveCookies } from "../auth/browser-session";
 import {
@@ -196,8 +198,12 @@ function loginErrorUrl(code: "account_disabled" | "account_pending" | "account_d
 
 // A sign-in held for approval (or declined) goes to the login page with a fixed
 // code, like a disabled account. The decision note is never put in the URL.
-function pendingRedirectUrl(err: AccountPendingError): string {
-  return loginErrorUrl(err.declined ? "account_declined" : "account_pending");
+// With a known user the person goes to the portal waiting room, carrying only
+// the signed awb_waiting cookie; with none (pending cap reached) the login page.
+function pendingRedirect(reply: FastifyReply, err: AccountPendingError, provider: WaitingProvider): FastifyReply {
+  if (!err.userId) return reply.redirect(loginErrorUrl(err.declined ? "account_declined" : "account_pending"));
+  setWaitingCookie(reply, err.userId, provider);
+  return reply.redirect(new URL("/waiting", config.PORTAL_URL).toString());
 }
 
 export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
@@ -268,7 +274,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       // A person turned away because an admin disabled their account is in a
       // browser tab, not an API client: send them to the login page with a
       // reason instead of a bare JSON error.
-      if (err instanceof AccountPendingError) return reply.redirect(pendingRedirectUrl(err));
+      if (err instanceof AccountPendingError) return pendingRedirect(reply, err, "keycloak");
       if (message === "Account disabled") return reply.redirect(accountDisabledUrl());
       return reply.status(400).send({ error: message });
     }
@@ -313,10 +319,24 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       // A person turned away because an admin disabled their account is in a
       // browser tab, not an API client: send them to the login page with a
       // reason instead of a bare JSON error.
-      if (err instanceof AccountPendingError) return reply.redirect(pendingRedirectUrl(err));
+      if (err instanceof AccountPendingError) return pendingRedirect(reply, err, "google");
       if (message === "Account disabled") return reply.redirect(accountDisabledUrl());
       return reply.status(400).send({ error: message });
     }
+  });
+
+  // The waiting room's poll. No bearer: the signed awb_waiting cookie is the
+  // only input. Answers a coarse state and the provider, nothing else.
+  app.get("/api/auth/waiting", async (request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    if (!waitingRateOk(request.ip)) return reply.status(429).send({ error: "Too many requests" });
+    const none = { state: "none" as const, provider: null };
+    const who = verifyWaitingValue(readWaitingCookie(request));
+    if (!who) return none;
+    const status = await getUserStatus(who.userId);
+    if (status === "missing" || status === "disabled") return none;
+    if (status === "active") return { state: "active" as const, provider: who.provider };
+    return { state: ((await isRecentlyDeclined(who.userId)) ? "declined" : "pending") as "declined" | "pending", provider: who.provider };
   });
 
   app.get("/api/auth/me", async (request, reply) => {
