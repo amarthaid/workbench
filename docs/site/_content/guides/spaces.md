@@ -16,9 +16,11 @@ A Space is a static site with one extra: a small SDK that lets the page call wor
 
 ## The Space card and its detail
 
-In the portal gallery, clicking a Space card opens a detail modal instead of the Space. It shows the cover, the full title and description, the owner, when it was last updated, the tool names grouped by app, and the like count (the heart on the card still toggles your favorite without opening anything). **Open** goes to the Space.
+In the portal gallery, clicking a Space card opens a detail modal instead of the Space. The cover is the header, with the Space's name and its owner on it. Right under it is one line with the like count (the heart toggles your favorite, as on the card) and when the Space was last updated, followed by the full description. **Open** goes to the Space.
 
-If you own the Space, the modal also shows how many people opened it in the last 30 days (only for an org-wide Space or from 5 people) and three actions: **Edit details**, **Edit sharing** and **Delete Space**. A pending access request badge stays on the card.
+The modal's Tools section starts with totals by effect (for example "4 read, 3 write, 1 delete") and one collapsible box per app. Click an app to see its tools, and click a tool to read its full description, which is shown as markdown, with a short note on what its effect means. The first app starts open, or all of them when the Space uses two apps or fewer.
+
+If you own the Space, the facts line also shows how many people opened it in the last 30 days (only for an org-wide Space or from 5 people) and three actions: **Edit details**, **Edit sharing** and **Delete Space**.
 
 **Delete Space** asks you to type the Space's name before the red button works. The dialog names the audience and the opener count, and says that files and data stored in the Space go with it and that people who have it open will lose it. Deleting cannot be undone. It also closes any open access requests for the Space. An agent can still delete one with `delete_space`.
 
