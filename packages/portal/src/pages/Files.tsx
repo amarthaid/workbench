@@ -142,14 +142,19 @@ export default function Files() {
     onError: (e: Error) => setError(e.message),
   });
 
-  const remove = useMutation({
-    mutationFn: deleteWorkspaceFile,
-    onSuccess: () => void invalidate(),
-    onError: (e: Error) => setError(e.message),
-  });
-
   // A single delete is recoverable for a few seconds instead of asking first.
-  const undoable = useUndoableAction<string>({ run: (name) => remove.mutate(name) });
+  // The file stays hidden until the request has settled: on success the list
+  // is refetched before it is shown again, on failure it comes back with the error.
+  const undoable = useUndoableAction<string>({
+    run: async (name) => {
+      try {
+        await deleteWorkspaceFile(name);
+        await invalidate();
+      } catch (e) {
+        setError((e as Error).message);
+      }
+    },
+  });
 
   async function download(name: string) {
     setBusy(name);
@@ -163,7 +168,13 @@ export default function Files() {
     }
   }
 
-  const files: WorkspaceFile[] = data?.files ?? [];
+  // A file whose delete can still be undone (or is in flight) is not shown,
+  // selected, counted, sorted or acted on.
+  const pendingDeletes = undoable.pendingKeys;
+  const files: WorkspaceFile[] = useMemo(
+    () => (data?.files ?? []).filter((f) => !pendingDeletes.has(f.name)),
+    [data, pendingDeletes]
+  );
   const showTools = files.length > LIST_TOOLS_THRESHOLD;
 
   const visible = useMemo(() => {

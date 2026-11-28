@@ -111,4 +111,77 @@ describe("useUndoableAction", () => {
     expect(run).toHaveBeenCalledTimes(1);
     expect(run).toHaveBeenCalledWith("b");
   });
+
+  describe("pending keys", () => {
+    function Tracked({ run }: { run: (id: string) => void | Promise<unknown> }) {
+      const undoable = useUndoableAction<string>({ run });
+      return (
+        <>
+          <button onClick={() => undoable.schedule("report.csv", "f1", "key-1")}>delete</button>
+          <button onClick={() => undoable.schedule("plain", "f2")}>plain</button>
+          <span data-testid="pending">{[...undoable.pendingKeys].join(",")}</span>
+          <span data-testid="is">{String(undoable.isPending("key-1"))}</span>
+        </>
+      );
+    }
+    const wrap = (run: (id: string) => void | Promise<unknown>) =>
+      render(
+        <ToastProvider>
+          <Tracked run={run} />
+        </ToastProvider>
+      );
+
+    it("marks the key pending at once and clears it on Undo", () => {
+      wrap(vi.fn());
+      fireEvent.click(screen.getByText("delete"));
+      expect(screen.getByTestId("is")).toHaveTextContent("true");
+      expect(screen.getByTestId("pending")).toHaveTextContent("key-1");
+      fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+      expect(screen.getByTestId("is")).toHaveTextContent("false");
+      expect(screen.getByTestId("pending")).toHaveTextContent("");
+    });
+
+    it("defaults the key to the label", () => {
+      wrap(vi.fn());
+      fireEvent.click(screen.getByText("plain"));
+      expect(screen.getByTestId("pending")).toHaveTextContent("plain");
+    });
+
+    it("keeps the key pending while run is in flight and clears it once run settles", async () => {
+      let finish!: () => void;
+      const run = vi.fn(() => new Promise<void>((r) => (finish = r)));
+      wrap(run);
+      fireEvent.click(screen.getByText("delete"));
+      await act(async () => {
+        vi.advanceTimersByTime(5001);
+      });
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId("is")).toHaveTextContent("true");
+      await act(async () => {
+        finish();
+      });
+      expect(screen.getByTestId("is")).toHaveTextContent("false");
+    });
+
+    it("clears the key when run rejects", async () => {
+      wrap(vi.fn(async () => Promise.reject(new Error("nope"))));
+      fireEvent.click(screen.getByText("delete"));
+      await act(async () => {
+        vi.advanceTimersByTime(5001);
+      });
+      expect(screen.getByTestId("is")).toHaveTextContent("false");
+    });
+
+    it("ignores a second schedule for a key that is already pending", () => {
+      const run = vi.fn();
+      wrap(run);
+      fireEvent.click(screen.getByText("delete"));
+      fireEvent.click(screen.getByText("delete"));
+      expect(screen.getAllByRole("button", { name: "Undo" })).toHaveLength(1);
+      act(() => {
+        vi.advanceTimersByTime(5001);
+      });
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+  });
 });

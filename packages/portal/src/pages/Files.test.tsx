@@ -311,6 +311,81 @@ describe("Files page", () => {
     });
   });
 
+  describe("a file awaiting its delete", () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("leaves the list at once and comes back on Undo", async () => {
+      vi.mocked(fetchWorkspaceFiles).mockResolvedValue(listing() as never);
+      renderPage();
+      await screen.findByText("statement.csv");
+
+      fireEvent.click(screen.getByRole("button", { name: "Delete statement.csv" }));
+      expect(screen.queryByRole("button", { name: "Delete statement.csv" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("checkbox", { name: "Select statement.csv" })).not.toBeInTheDocument();
+      expect(screen.getByText("nearly-gone.csv")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+      expect(screen.getByRole("button", { name: "Delete statement.csv" })).toBeInTheDocument();
+    });
+
+    it("cannot be scheduled a second time and is sent once", async () => {
+      vi.mocked(fetchWorkspaceFiles).mockResolvedValue(listing() as never);
+      renderPage();
+      await screen.findByText("statement.csv");
+
+      fireEvent.click(screen.getByRole("button", { name: "Delete statement.csv" }));
+      expect(screen.queryByRole("button", { name: "Delete statement.csv" })).not.toBeInTheDocument();
+      await act(async () => {
+        vi.advanceTimersByTime(5100);
+      });
+      await waitFor(() => expect(deleteWorkspaceFile).toHaveBeenCalledTimes(1));
+    });
+
+    it("drops out of selection and the selected count", async () => {
+      vi.mocked(fetchWorkspaceFiles).mockResolvedValue(listing() as never);
+      renderPage();
+      await screen.findByText("statement.csv");
+
+      fireEvent.click(screen.getByRole("checkbox", { name: "Select statement.csv" }));
+      expect(screen.getByText("1 selected")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Delete statement.csv" }));
+      expect(screen.queryByText("1 selected")).not.toBeInTheDocument();
+    });
+
+    it("comes back with the error when the request fails", async () => {
+      vi.mocked(fetchWorkspaceFiles).mockResolvedValue(listing() as never);
+      vi.mocked(deleteWorkspaceFile).mockRejectedValue(new Error("Delete failed"));
+      renderPage();
+      await screen.findByText("statement.csv");
+
+      fireEvent.click(screen.getByRole("button", { name: "Delete statement.csv" }));
+      await act(async () => {
+        vi.advanceTimersByTime(5100);
+      });
+
+      expect(await screen.findByText("Delete failed")).toBeInTheDocument();
+      expect(await screen.findByRole("button", { name: "Delete statement.csv" })).toBeInTheDocument();
+    });
+
+    it("leaving the page cancels without sending", async () => {
+      vi.mocked(fetchWorkspaceFiles).mockResolvedValue(listing() as never);
+      const { unmount } = renderPage();
+      await screen.findByText("statement.csv");
+
+      fireEvent.click(screen.getByRole("button", { name: "Delete statement.csv" }));
+      unmount();
+      await act(async () => {
+        vi.advanceTimersByTime(10_000);
+      });
+      expect(deleteWorkspaceFile).not.toHaveBeenCalled();
+    });
+  });
+
   describe("selection and bulk actions", () => {
     it("shows the bulk bar in the header band once something is selected", async () => {
       vi.mocked(fetchWorkspaceFiles).mockResolvedValue(listing() as never);

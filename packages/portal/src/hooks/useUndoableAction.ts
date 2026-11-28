@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useToast } from "../components/ui/Toast";
 
 export interface UndoableActionOptions<T> {
@@ -15,17 +15,33 @@ export interface UndoableActionOptions<T> {
  * `run` is only called after the delay. Undo cancels it. Leaving the page
  * (unmounting the component that uses this hook) cancels pending actions too,
  * without running them, as does closing the tab. Needs a ToastProvider above it.
+ *
+ * It also tracks which items are pending, so a list can hide a row while its
+ * delete can still be undone: `schedule(label, arg, key)` (the key defaults to
+ * the label) marks the key pending until Undo, or until `run` has settled when
+ * it returns a promise. A key that is already pending is not scheduled twice.
  */
 export function useUndoableAction<T = void>({ run, delayMs = 5000, verb = "deleted" }: UndoableActionOptions<T>) {
   const toast = useToast();
   const runRef = useRef(run);
   runRef.current = run;
-  const pending = useRef(new Map<number, { timer: ReturnType<typeof setTimeout>; toastId: number }>());
-  const next = useRef(1);
+  // Keys waiting out their delay, with the handles needed to cancel them.
+  const waiting = useRef(new Map<string, { timer: ReturnType<typeof setTimeout>; toastId: number }>());
+  // Keys whose run has started but not settled yet. Still pending for display.
+  const running = useRef(new Set<string>());
+  const mounted = useRef(true);
+  const [pendingKeys, setPendingKeys] = useState<ReadonlySet<string>>(() => new Set());
+
+  const publish = useCallback(() => {
+    if (!mounted.current) return;
+    setPendingKeys(new Set([...waiting.current.keys(), ...running.current]));
+  }, []);
 
   useEffect(() => {
-    const map = pending.current;
+    mounted.current = true;
+    const map = waiting.current;
     return () => {
+      mounted.current = false;
       for (const { timer, toastId } of map.values()) {
         clearTimeout(timer);
         toast.dismiss(toastId);
@@ -35,13 +51,14 @@ export function useUndoableAction<T = void>({ run, delayMs = 5000, verb = "delet
   }, [toast]);
 
   const schedule = useCallback(
-    (label: string, arg: T) => {
-      const key = next.current++;
+    (label: string, arg: T, key: string = label) => {
+      if (waiting.current.has(key) || running.current.has(key)) return;
       const cancel = () => {
-        const entry = pending.current.get(key);
+        const entry = waiting.current.get(key);
         if (!entry) return;
         clearTimeout(entry.timer);
-        pending.current.delete(key);
+        waiting.current.delete(key);
+        publish();
       };
       const toastId = toast.show({
         message: `${label} ${verb}.`,
@@ -49,14 +66,26 @@ export function useUndoableAction<T = void>({ run, delayMs = 5000, verb = "delet
         onAction: cancel,
       });
       const timer = setTimeout(() => {
-        pending.current.delete(key);
+        waiting.current.delete(key);
+        running.current.add(key);
         toast.dismiss(toastId);
-        void runRef.current(arg);
+        const settle = () => {
+          running.current.delete(key);
+          publish();
+        };
+        try {
+          Promise.resolve(runRef.current(arg)).then(settle, settle);
+        } catch {
+          settle();
+        }
       }, delayMs);
-      pending.current.set(key, { timer, toastId });
+      waiting.current.set(key, { timer, toastId });
+      publish();
     },
-    [toast, delayMs, verb]
+    [toast, delayMs, verb, publish]
   );
 
-  return { schedule };
+  const isPending = useCallback((key: string) => pendingKeys.has(key), [pendingKeys]);
+
+  return { schedule, isPending, pendingKeys };
 }
