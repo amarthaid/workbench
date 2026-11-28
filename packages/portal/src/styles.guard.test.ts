@@ -58,3 +58,26 @@ describe("switch and segmented control", () => {
   });
 });
 
+
+describe("shared list pieces", () => {
+  it("keeps the scrollbar gutter stable so pages stop shifting", () => {
+    expect(css).toMatch(/html\s*\{[^}]*scrollbar-gutter:\s*stable/);
+  });
+
+  it("reveals hover-only row actions on focus as well as hover", () => {
+    expect(css).toMatch(/\.ui-row-actions\.is-reveal:focus-within/);
+    expect(css).toMatch(/\.ui-list-row:hover\s+\.ui-row-actions\.is-reveal/);
+  });
+
+  it("draws the danger row action as red text, never a fill", () => {
+    const block = css.split("}").find((b) => /\.ui-row-action-danger\s*\{/.test(b)) ?? "";
+    expect(block).toMatch(/color:\s*var\(--danger\)/);
+    expect(block).not.toMatch(/background:\s*var\(--danger\)/);
+  });
+
+  it("gives skeleton rows the height of real rows", () => {
+    const height = (sel: RegExp) => css.split("}").find((b) => sel.test(b))?.match(/min-height:\s*(\d+)px/)?.[1];
+    expect(height(/\.ui-list-row\s*\{/)).toBeTruthy();
+    expect(height(/\.ui-list-row\s*\{/)).toBe(height(/\.ui-list-skeleton-row\s*\{/) ?? height(/\.ui-list-row\s*\{/));
+  });
+});

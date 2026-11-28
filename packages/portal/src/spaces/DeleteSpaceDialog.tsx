@@ -1,7 +1,5 @@
-import { useId, useState } from "react";
-import { Modal } from "../components/ui/Modal";
-import { Button } from "../components/ui/Button";
-import { Input } from "../components/ui/Input";
+import { useState } from "react";
+import { TypedNameConfirm } from "../components/dialogs/TypedNameConfirm";
 import { SpaceApiError, deleteSpace, type SpaceVisibility } from "../spaces-api";
 
 interface Props {
@@ -28,14 +26,12 @@ export function openersLine(openers: number | undefined): string | null {
 
 /** Owner only. The red button stays off until the Space's name is typed exactly. */
 export function DeleteSpaceDialog({ space, sharedWith, openers, onClose, onDeleted }: Props) {
-  const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const inputId = useId();
   const opened = openersLine(openers);
 
   async function confirm() {
-    if (typed !== space.name || busy) return;
+    if (busy) return;
     setBusy(true);
     setError(null);
     try {
@@ -48,45 +44,28 @@ export function DeleteSpaceDialog({ space, sharedWith, openers, onClose, onDelet
   }
 
   return (
-    <Modal
-      open
-      onClose={busy ? () => {} : onClose}
+    <TypedNameConfirm
       title={`Delete ${space.title}?`}
-      footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          <Button variant="danger" onClick={confirm} disabled={typed !== space.name || busy}>
-            {busy ? "Deleting..." : "Delete Space"}
-          </Button>
-        </>
-      }
-    >
-      <form
-        className="space-details-form"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void confirm();
-        }}
-      >
-        <p>
-          This deletes <strong>{space.title}</strong> and cannot be undone.
-        </p>
+      name={space.name}
+      nameLabel="Space name"
+      confirmLabel="Delete Space"
+      busyLabel="Deleting..."
+      busy={busy}
+      error={error}
+      onConfirm={() => void confirm()}
+      onCancel={onClose}
+      impact={
         <ul className="space-delete-impact">
           <li>Who can open it now: {audienceLabel(space.visibility, sharedWith)}</li>
           {opened && <li>{opened}</li>}
           <li>All files and data stored in the Space go with it.</li>
           <li>People who have it open will lose it.</li>
         </ul>
-        <div className="space-details-field">
-          <label className="space-details-label" htmlFor={inputId}>
-            Type the Space name <code>{space.name}</code> to confirm
-          </label>
-          <Input id={inputId} value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" autoFocus />
-        </div>
-        {error && <p className="ui-form-error">{error}</p>}
-      </form>
-    </Modal>
+      }
+    >
+      <p>
+        This deletes <strong>{space.title}</strong> and cannot be undone.
+      </p>
+    </TypedNameConfirm>
   );
 }

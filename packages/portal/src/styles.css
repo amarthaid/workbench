@@ -19,6 +19,8 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body, #root { height: 100%; }
+/* The page scrolls on the root: keep its gutter so content does not shift between short and long pages. */
+html { scrollbar-gutter: stable; }
 
 body {
   background: var(--bg);
@@ -628,6 +630,121 @@ body {
 }
 
 .ui-box-row + .ui-box-row { border-top: 1px solid var(--border); }
+
+/* --- List row: icon tile, title, subtitle, chips, actions --- */
+.ui-list-row { min-height: 56px; }
+.ui-list-row-leading { display: flex; align-items: center; flex: none; }
+.ui-list-row-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-sunk);
+  color: var(--text-2);
+}
+.ui-list-row-tile svg { width: 16px; height: 16px; }
+.ui-list-row-main { display: flex; flex-direction: column; flex: 1; gap: 2px; min-width: 0; }
+.ui-list-row-line { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-4) var(--s-8); min-width: 0; }
+.ui-list-row-title { min-width: 0; overflow-wrap: anywhere; font-weight: 500; color: var(--text); }
+.ui-list-row-title-button { border: 0; background: transparent; font: inherit; font-weight: 500; text-align: left; cursor: pointer; }
+.ui-list-row-title-button:hover { color: var(--accent); }
+.ui-list-row-title-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+.ui-list-row-chips { display: inline-flex; flex-wrap: wrap; gap: var(--s-4); }
+.ui-list-row-subtitle { font-size: 12px; color: var(--text-3); overflow-wrap: anywhere; }
+.ui-list-row-actions { display: flex; align-items: center; flex: none; gap: var(--s-8); margin-left: auto; }
+@media (max-width: 520px) {
+  .ui-list-row { flex-wrap: wrap; }
+  .ui-list-row-actions { flex-basis: 100%; margin-left: 0; }
+}
+
+/* --- Row actions: text buttons, destructive ones in red text --- */
+.ui-row-actions { display: inline-flex; align-items: center; gap: var(--s-4); }
+.ui-row-action {
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 13px;
+  padding: var(--s-4) var(--s-8);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.ui-row-action:hover:not(:disabled) { background: var(--bg-sunk); color: var(--text); }
+.ui-row-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ui-row-action:disabled { opacity: 0.5; cursor: default; }
+.ui-row-action-danger { color: var(--danger); }
+.ui-row-action-danger:hover:not(:disabled) { background: var(--danger-soft); color: var(--danger); }
+/* Hover-revealed actions: hidden by opacity (never display), so they stay in
+   the tab order, and shown again on row hover, row focus and their own focus. */
+.ui-row-actions.is-reveal { opacity: 0; }
+.ui-list-row:hover .ui-row-actions.is-reveal,
+.ui-list-row:focus-within .ui-row-actions.is-reveal,
+.ui-row-actions.is-reveal:focus-within { opacity: 1; }
+@media (hover: none) { .ui-row-actions.is-reveal { opacity: 1; } }
+
+/* --- List skeleton: same height as a real row --- */
+.ui-list-skeleton-row { min-height: 56px; }
+.ui-list-skeleton-bar { display: block; background: var(--bg-sunk); border-radius: var(--radius-sm); animation: ui-list-pulse 1.4s ease-in-out infinite; }
+.ui-list-row-tile.ui-list-skeleton-bar { border-color: transparent; }
+.ui-list-skeleton-title { width: 40%; height: 12px; }
+.ui-list-skeleton-sub { width: 24%; height: 10px; margin-top: var(--s-4); }
+@keyframes ui-list-pulse { 50% { opacity: 0.5; } }
+@media (prefers-reduced-motion: reduce) { .ui-list-skeleton-bar { animation: none; } }
+
+/* --- Copy chip --- */
+.ui-copy-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-8);
+  max-width: 100%;
+  padding: 2px var(--s-8);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunk);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ui-copy-chip:hover { color: var(--text); border-color: var(--accent-line); }
+.ui-copy-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ui-copy-chip.is-copied { color: var(--accent); }
+.ui-copy-chip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: all; }
+.ui-copy-chip svg { flex: none; width: 14px; height: 14px; }
+
+/* --- Toast --- */
+.ui-toast-region {
+  position: fixed;
+  left: 50%;
+  bottom: var(--s-24);
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-8);
+  width: max-content;
+  max-width: calc(100vw - var(--s-32));
+  pointer-events: none;
+}
+.ui-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s-16);
+  padding: var(--s-8) var(--s-16);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+}
+.ui-toast-action { border: 0; background: transparent; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; padding: var(--s-4); border-radius: var(--radius-sm); }
+.ui-toast-action:hover { text-decoration: underline; }
+.ui-toast-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* Visually hidden but read by assistive technology. */
 .ui-sr-only {
