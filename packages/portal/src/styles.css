@@ -2113,3 +2113,4 @@ button.wb-app-cell-link:focus-visible { outline: none; }
 @media (max-width: 900px) { .wb-user-actions { flex-wrap: wrap; } }
 .wb-user-actions .ui-row-action { white-space: nowrap; padding: var(--s-4) var(--s-4); }
 .ui-table th { white-space: nowrap; }
+.app-quick-modal .space-detail-tool-summary.is-inset { padding-left: 0; padding-right: 0; }
