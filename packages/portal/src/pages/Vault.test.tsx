@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import Vault, { relativeTime } from "./Vault";
+import { within } from "@testing-library/react";
 
 vi.mock("../api", () => ({
   fetchVaultSecrets: vi.fn(),
@@ -46,36 +47,114 @@ describe("relativeTime", () => {
   });
 });
 
+function rowOf(name: string): HTMLElement {
+  return screen.getByText(name).closest(".ui-list-row") as HTMLElement;
+}
+
 describe("Vault page", () => {
-  it("lists secrets with their reference and never a value column", async () => {
+  it("lists secrets with name, description, reference and updated and last used", async () => {
     renderPage();
     expect(await screen.findByText("site_pw")).toBeInTheDocument();
+    const row = rowOf("site_pw");
+    expect(row).toHaveTextContent("login");
+    expect(row).toHaveTextContent("Updated 1h ago");
+    expect(row).toHaveTextContent("last used 1m ago");
+    expect(rowOf("api_key")).toHaveTextContent("last used never");
     expect(screen.getByText("{{vault:site_pw}}")).toBeInTheDocument();
-    expect(screen.getByText("never")).toBeInTheDocument();
+    expect(row.querySelector(".ui-list-row-tile svg")).not.toBeNull();
     expect(screen.queryByText(/reveal|show value|copy value/i)).not.toBeInTheDocument();
   });
 
-  it("navigates to the add page and to a secret's replace page", async () => {
+  it("shows skeleton rows while loading", () => {
+    vi.mocked(fetchVaultSecrets).mockReturnValue(new Promise(() => {}) as never);
+    renderPage();
+    expect(screen.getByRole("status", { name: "Loading" })).toBeInTheDocument();
+  });
+
+  it("shows an empty state with the primary action", async () => {
+    vi.mocked(fetchVaultSecrets).mockResolvedValue([]);
+    renderPage();
+    expect(await screen.findByText(/No secrets yet/)).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /add secret/i }).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("puts Add secret and One-time link in the header band", async () => {
+    renderPage();
+    await screen.findByText("site_pw");
+    const band = document.querySelector(".ui-box-head") as HTMLElement;
+    expect(within(band).getByRole("button", { name: /add secret/i })).toBeInTheDocument();
+    expect(within(band).getByRole("button", { name: /one-time link/i })).toBeInTheDocument();
+  });
+
+  it("navigates to the add page", async () => {
     renderPage();
     await screen.findByText("site_pw");
     fireEvent.click(screen.getByRole("button", { name: /add secret/i }));
     expect(await screen.findByText("ADD PAGE")).toBeInTheDocument();
   });
 
-  it("replace goes to the secret's own page", async () => {
+  it("copies exactly the reference, never a value, and says so in the tooltip", async () => {
+    const writeText = vi.fn(async () => {});
+    Object.assign(navigator, { clipboard: { writeText } });
     renderPage();
     await screen.findByText("site_pw");
-    fireEvent.click(screen.getAllByRole("button", { name: /replace/i })[0]);
+
+    const chip = within(rowOf("site_pw")).getByRole("button", { name: /copy reference/i });
+    fireEvent.click(chip);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("{{vault:site_pw}}"));
+    expect(writeText).toHaveBeenCalledTimes(1);
+    fireEvent.focus(chip);
+    expect(await screen.findByText("Copies the reference, never the value")).toBeInTheDocument();
+  });
+
+  it("replace links to the secret's own replace route", async () => {
+    renderPage();
+    await screen.findByText("site_pw");
+    const link = within(rowOf("site_pw")).getByRole("link", { name: /replace/i });
+    expect(link).toHaveAttribute("href", "/vault/site_pw/replace");
+    fireEvent.click(link);
     expect(await screen.findByText("REPLACE PAGE")).toBeInTheDocument();
   });
 
-  it("deletes after confirmation", async () => {
+  it("delete asks for the exact secret name and warns references will stop working", async () => {
     renderPage();
     await screen.findByText("site_pw");
-    fireEvent.click(screen.getAllByRole("button", { name: /^delete$/i })[0]);
-    expect(await screen.findByText(/delete this secret/i)).toBeInTheDocument();
-    const deleteButtons = screen.getAllByRole("button", { name: /^delete$/i });
-    fireEvent.click(deleteButtons[deleteButtons.length - 1]);
+    fireEvent.click(within(rowOf("site_pw")).getByRole("button", { name: /delete site_pw/i }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent(/references to .* will stop working/i);
+    const confirm = within(dialog).getByRole("button", { name: "Delete secret" });
+    expect(confirm).toBeDisabled();
+
+    const input = within(dialog).getByLabelText(/type the secret/i);
+    fireEvent.change(input, { target: { value: "SITE_PW" } });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(input, { target: { value: "site_pw" } });
+    expect(confirm).toBeEnabled();
+    expect(deleteVaultSecret).not.toHaveBeenCalled();
+
+    fireEvent.click(confirm);
     await waitFor(() => expect(deleteVaultSecret).toHaveBeenCalledWith("site_pw"));
+  });
+
+  it("cancelling the delete leaves the secret alone", async () => {
+    renderPage();
+    await screen.findByText("site_pw");
+    fireEvent.click(within(rowOf("site_pw")).getByRole("button", { name: /delete site_pw/i }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(deleteVaultSecret).not.toHaveBeenCalled();
+  });
+
+  it("keeps a failed delete on screen", async () => {
+    vi.mocked(deleteVaultSecret).mockRejectedValue(new Error("Delete failed"));
+    renderPage();
+    await screen.findByText("site_pw");
+    fireEvent.click(within(rowOf("site_pw")).getByRole("button", { name: /delete site_pw/i }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText(/type the secret/i), { target: { value: "site_pw" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete secret" }));
+    expect(await screen.findByText("Delete failed")).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 });
