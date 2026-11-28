@@ -2,9 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   fetchAdminConfig,
-  fetchAdminUsers,
   setAdminBrowserBlockedDomains,
-  setAdminCustomAppsPolicy,
   setAdminIntegrationEnabled,
   type AdminConfig,
 } from "../../api";
@@ -13,11 +11,9 @@ import { Box, BoxRow } from "../ui/Box";
 import { Button } from "../ui/Button";
 import { DataTable } from "../ui/DataTable";
 import { EmptyState } from "../ui/EmptyState";
-import { Select } from "../ui/Input";
 import { Modal } from "../ui/Modal";
 import { ADMIN_STALE_MS, CardBody } from "./CardBody";
 
-type Policy = AdminConfig["custom_apps_policy"];
 type Row = AdminConfig["integrations"][number];
 
 export default function ConfigTab() {
@@ -102,8 +98,6 @@ export default function ConfigTab() {
         </CardBody>
       </Box>
 
-      {data && <CustomAppsPolicy policy={data.custom_apps_policy} onSaved={refresh} onError={onError} />}
-
       {data && (
         <BrowserBlocklist
           domains={data.browser_blocked_domains ?? []}
@@ -140,98 +134,6 @@ export default function ConfigTab() {
         </p>
       </Modal>
     </div>
-  );
-}
-
-function CustomAppsPolicy({
-  policy,
-  onSaved,
-  onError,
-}: {
-  policy: Policy;
-  onSaved: () => void;
-  onError: (e: unknown) => void;
-}) {
-  const [mode, setMode] = useState<Policy["mode"]>(policy.mode);
-  const [userIds, setUserIds] = useState<string[]>(policy.user_ids);
-  const [saved, setSaved] = useState(false);
-
-  // Follow the server's copy after a save or a refetch.
-  useEffect(() => {
-    setMode(policy.mode);
-    setUserIds(policy.user_ids);
-  }, [policy.mode, policy.user_ids]);
-
-  const { data: users } = useQuery({
-    queryKey: ["admin", "users"],
-    queryFn: fetchAdminUsers,
-    staleTime: ADMIN_STALE_MS,
-    enabled: mode === "allowlist",
-  });
-
-  const save = useMutation({
-    mutationFn: (p: Policy) => setAdminCustomAppsPolicy(p),
-    onSuccess: () => {
-      setSaved(true);
-      onSaved();
-    },
-    onError,
-  });
-
-  const next: Policy = { mode, user_ids: mode === "allowlist" ? userIds : [] };
-  const changed =
-    next.mode !== policy.mode ||
-    next.user_ids.length !== policy.user_ids.length ||
-    next.user_ids.some((id) => !policy.user_ids.includes(id));
-
-  function toggleUser(id: string) {
-    setSaved(false);
-    setUserIds((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
-  }
-
-  return (
-    <Box title="Custom apps">
-      <BoxRow>
-        <label htmlFor="admin-custom-apps-mode">Who can add custom apps</label>
-        <Select
-          id="admin-custom-apps-mode"
-          value={mode}
-          onChange={(e) => {
-            setSaved(false);
-            setMode(e.target.value as Policy["mode"]);
-          }}
-        >
-          <option value="all">Everyone</option>
-          <option value="none">No one</option>
-          <option value="allowlist">Only selected users</option>
-        </Select>
-      </BoxRow>
-
-      {mode === "allowlist" && (
-        <BoxRow>
-          <fieldset>
-            <legend className="ui-sr-only">Users who can add custom apps</legend>
-            {(users?.users ?? []).map((u) => (
-              <label key={u.id} className="wb-toolbar-form">
-                <input type="checkbox" checked={userIds.includes(u.id)} onChange={() => toggleUser(u.id)} />
-                {u.email ?? u.id}
-              </label>
-            ))}
-          </fieldset>
-        </BoxRow>
-      )}
-
-      <BoxRow>
-        <Button disabled={!changed || save.isPending} onClick={() => save.mutate(next)}>
-          Save policy
-        </Button>
-        {saved && !changed && <span role="status">Saved.</span>}
-        <p className="ui-stat-note">
-          Excluded users keep their existing apps but agents stop seeing their tools. Other workers pick the change up
-          within a few seconds.
-        </p>
-      </BoxRow>
-    </Box>
   );
 }
 

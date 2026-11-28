@@ -246,6 +246,48 @@ describe("UsersTab permissions", () => {
     expect(screen.getByText("Default follows the instance setting")).toBeInTheDocument();
   });
 
+  it("lists the custom apps capability next to delegation, Default off, and sets Allow without the delegate confirm", async () => {
+    api.getUserPermissions.mockResolvedValue({
+      permissions: [
+        perm(),
+        perm({
+          capability: "custom_apps.create",
+          label: "Add and use custom apps",
+          description: "Lets this user connect their own MCP servers as custom apps.",
+        }),
+      ],
+      delegatedSpaces: 2,
+    });
+    renderWithClient(<UsersTab />);
+    await screen.findByText("dev@example.com");
+    fireEvent.click(screen.getByRole("button", { name: "Permissions for dev@example.com" }));
+    const group = await screen.findByRole("group", { name: "Add and use custom apps for dev@example.com" });
+    const row = group.closest(".wb-perm-row") as HTMLElement;
+    expect(row).toHaveTextContent("Lets this user connect their own MCP servers as custom apps.");
+    expect(row).toHaveTextContent("Default: off");
+    expect(within(group).getByRole("button", { name: "Default" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("group", { name: "Delegate access in Spaces for dev@example.com" })).toBeInTheDocument();
+    fireEvent.click(within(group).getByRole("button", { name: "Allow" }));
+    await waitFor(() => expect(api.setUserPermission).toHaveBeenCalledWith("u1", "custom_apps.create", "allow"));
+  });
+
+  it("resetting custom apps to Default never shows the delegated Spaces warning", async () => {
+    api.getUserPermissions.mockResolvedValue({
+      permissions: [
+        perm(),
+        perm({ capability: "custom_apps.create", label: "Add and use custom apps", description: "x", ...GRANTED }),
+      ],
+      delegatedSpaces: 3,
+    });
+    renderWithClient(<UsersTab />);
+    await screen.findByText("dev@example.com");
+    fireEvent.click(screen.getByRole("button", { name: "Permissions for dev@example.com" }));
+    const group = await screen.findByRole("group", { name: "Add and use custom apps for dev@example.com" });
+    fireEvent.click(within(group).getByRole("button", { name: "Default" }));
+    await waitFor(() => expect(api.clearUserPermission).toHaveBeenCalledWith("u1", "custom_apps.create"));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
   it("collapses again", async () => {
     await openPanel();
     fireEvent.click(screen.getByRole("button", { name: "Permissions for dev@example.com" }));

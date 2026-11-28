@@ -8,6 +8,7 @@ import ConnectionsCard from "../components/admin/ConnectionsCard";
 import CustomAppsCard from "../components/admin/CustomAppsCard";
 import FilesTab from "../components/admin/FilesTab";
 import OverviewTab from "../components/admin/OverviewTab";
+import SpacesTab from "../components/admin/SpacesTab";
 import ProfilesCard from "../components/admin/ProfilesCard";
 import UsersTab from "../components/admin/UsersTab";
 import VaultTab from "../components/admin/VaultTab";
@@ -24,6 +25,7 @@ const TABS = [
   { id: "profiles", label: "Browser profiles", path: "/admin/profiles", Body: ProfilesCard },
   { id: "vault", label: "Vault", path: "/admin/vault", Body: VaultTab },
   { id: "files", label: "Files", path: "/admin/files", Body: FilesTab },
+  { id: "spaces", label: "Spaces", path: "/admin/spaces", Body: SpacesTab },
   { id: "approvals", label: "Approvals", path: "/admin/approvals", Body: ApprovalsTab },
   { id: "users", label: "Users", path: "/admin/users", Body: UsersTab },
   { id: "config", label: "Config", path: "/admin/config", Body: ConfigTab },
