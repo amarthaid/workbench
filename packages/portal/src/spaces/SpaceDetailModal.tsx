@@ -6,9 +6,10 @@ import { relativeTime } from "../format";
 import { Modal } from "../components/ui/Modal";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
-import { HeartIcon } from "../components/ui/Icons";
+import { ClockIcon, EyeIcon, HeartIcon } from "../components/ui/Icons";
 import { Cover, VISIBILITY } from "./SpaceTile";
-import { DeleteSpaceDialog, openersLine } from "./DeleteSpaceDialog";
+import { DeleteSpaceDialog } from "./DeleteSpaceDialog";
+import { effectLabel } from "./ToolList";
 
 interface Props {
   space: SpaceSummary;
@@ -19,13 +20,15 @@ interface Props {
   onDeleted: (name: string) => void;
 }
 
-function groupByApp(tools: SpaceTool[]): { app: string; names: string[] }[] {
-  const groups = new Map<string, string[]>();
+const COLLAPSED_TOOLS = 5;
+
+function groupByApp(tools: SpaceTool[]): { app: string; tools: SpaceTool[] }[] {
+  const groups = new Map<string, SpaceTool[]>();
   for (const t of tools) {
     const app = t.integrationName || t.integration;
-    groups.set(app, [...(groups.get(app) ?? []), t.name]);
+    groups.set(app, [...(groups.get(app) ?? []), t]);
   }
-  return [...groups].map(([app, names]) => ({ app, names }));
+  return [...groups].map(([app, list]) => ({ app, tools: list }));
 }
 
 /**
@@ -37,8 +40,13 @@ export function SpaceDetailModal({ space, onClose, onToggleFavorite, onEditDetai
   const [deleting, setDeleting] = useState(false);
   const vis = VISIBILITY[space.visibility] ?? VISIBILITY.private;
   const detail = useQuery({ queryKey: ["space", space.name], queryFn: () => fetchSpace(space.name) });
-  const groups = detail.data ? groupByApp(detail.data.tools ?? []) : [];
-  const opened = space.mine ? openersLine(space.viewers_30d) : null;
+  const [showAll, setShowAll] = useState(false);
+  const allTools = detail.data?.tools ?? [];
+  // Group first so "the first five" follows the order the groups are shown in.
+  const ordered = groupByApp(allTools).flatMap((g) => g.tools);
+  const visible = new Set(showAll ? ordered : ordered.slice(0, COLLAPSED_TOOLS));
+  const groups = groupByApp(ordered.filter((t) => visible.has(t)));
+  const opened = space.mine && space.viewers_30d !== undefined ? space.viewers_30d : null;
 
   return (
     <>
@@ -54,6 +62,12 @@ export function SpaceDetailModal({ space, onClose, onToggleFavorite, onEditDetai
             <div className="space-detail-hero-text">
               <Badge variant={vis.variant}>{vis.label}</Badge>
               <h2 className="space-detail-hero-title">{space.title}</h2>
+              <p className="space-detail-credit">
+                <span className="space-detail-avatar" aria-hidden="true">
+                  {(space.mine ? "Y" : space.ownerEmail.trim().charAt(0) || "?").toUpperCase()}
+                </span>
+                <span>{space.mine ? "by you" : `by ${space.ownerEmail}`}</span>
+              </p>
             </div>
           </div>
         }
@@ -79,51 +93,68 @@ export function SpaceDetailModal({ space, onClose, onToggleFavorite, onEditDetai
         }
       >
         {space.description && <p className="space-detail-desc">{space.description}</p>}
-        <dl className="space-detail-facts">
-          <dt>Owner</dt>
-          <dd>{space.mine ? "You" : space.ownerEmail}</dd>
-          <dt>Updated</dt>
-          <dd>{relativeTime(Math.floor(space.updatedAt / 1000))}</dd>
-          <dt>Likes</dt>
-          <dd>
-            <button
-              type="button"
-              className={`space-detail-heart${space.favorited ? " is-on" : ""}`}
-              aria-pressed={space.favorited}
-              aria-label={`Favorite ${space.title}`}
-              title={space.favorited ? "Remove from favorites" : "Add to favorites"}
-              onClick={() => onToggleFavorite(space)}
-            >
-              <HeartIcon filled={space.favorited} />
-              <span>{space.favorite_count}</span>
-            </button>
-          </dd>
-          {opened && (
-            <>
-              <dt>Opened</dt>
-              <dd>{opened}</dd>
-            </>
+        <div className="space-detail-facts-line">
+          <button
+            type="button"
+            className={`space-detail-heart${space.favorited ? " is-on" : ""}`}
+            aria-pressed={space.favorited}
+            aria-label={`Favorite ${space.title}`}
+            title={space.favorited ? "Remove from favorites" : "Add to favorites"}
+            onClick={() => onToggleFavorite(space)}
+          >
+            <HeartIcon filled={space.favorited} />
+            <span>
+              {space.favorite_count} {space.favorite_count === 1 ? "like" : "likes"}
+            </span>
+          </button>
+          {opened !== null && (
+            <span className="space-detail-fact">
+              <EyeIcon />
+              {opened} opened it in 30 days
+            </span>
           )}
-        </dl>
+          <span className="space-detail-fact">
+            <ClockIcon />
+            Updated {relativeTime(Math.floor(space.updatedAt / 1000))}
+          </span>
+        </div>
         <section className="space-detail-tools" aria-label="Tools">
           <h3 className="space-detail-subhead">Tools</h3>
           {detail.isLoading ? (
             <p className="space-muted">Loading tools...</p>
           ) : detail.isError ? (
             <p className="space-muted">Could not load the tools.</p>
-          ) : groups.length === 0 ? (
+          ) : allTools.length === 0 ? (
             <p className="space-muted">This Space uses no tools.</p>
           ) : (
-            groups.map((g) => (
-              <div key={g.app} className="space-detail-app">
-                <span className="space-detail-app-name">{g.app}</span>
-                <ul className="space-detail-tool-names">
-                  {g.names.map((n) => (
-                    <li key={n}>{n}</li>
-                  ))}
-                </ul>
-              </div>
-            ))
+            <>
+              {groups.map((g) => (
+                <div key={g.app} className="space-detail-app">
+                  <span className="space-detail-app-name">{g.app}</span>
+                  <ul className="space-detail-tool-rows">
+                    {g.tools.map((t) => {
+                      const effect = effectLabel(t);
+                      return (
+                        <li key={t.name} className="space-detail-tool-row">
+                          <span className="wb-mono space-detail-tool-name">{t.name}</span>
+                          {t.missing ? <Badge variant="neutral">Missing</Badge> : <Badge variant={effect.variant}>{effect.label}</Badge>}
+                          {t.description && (
+                            <span className="space-detail-tool-desc" title={t.description}>
+                              {t.description}
+                            </span>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              ))}
+              {ordered.length > COLLAPSED_TOOLS && (
+                <Button variant="outline" size="sm" aria-expanded={showAll} onClick={() => setShowAll((v) => !v)}>
+                  {showAll ? "Show fewer" : `Show all ${ordered.length} tools`}
+                </Button>
+              )}
+            </>
           )}
         </section>
       </Modal>

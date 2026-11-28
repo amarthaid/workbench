@@ -324,17 +324,113 @@ describe("the Space detail modal", () => {
     expect(within(dialog).getAllByText(/^(list_prs|create_issue|list_files)$/)).toHaveLength(3);
   });
 
-  it("shows the openers line to the owner only when the count is present", async () => {
+  it("shows the opened text to the owner only when the count is present", async () => {
     vi.mocked(fetchSpaces).mockResolvedValue([
       space({ name: "a", title: "With count", mine: true, viewers_30d: 12 }),
       space({ name: "b", title: "No count", mine: true }),
+      space({ name: "c", title: "Not mine", viewers_30d: 5 }),
     ]);
     renderPage();
     const first = await openDetail("With count");
-    expect(first).toHaveTextContent("12 people opened it in the last 30 days");
+    expect(first).toHaveTextContent("12 opened it in 30 days");
     fireEvent.click(within(first).getByRole("button", { name: "Close" }));
     const second = await openDetail("No count");
-    expect(second).not.toHaveTextContent("opened it in the last");
+    expect(second).not.toHaveTextContent("opened it in");
+    fireEvent.click(within(second).getByRole("button", { name: "Close" }));
+    const third = await openDetail("Not mine");
+    expect(third).not.toHaveTextContent("opened it in");
+  });
+
+  it("credits the owner on the hero, before the description", async () => {
+    vi.mocked(fetchSpaces).mockResolvedValue([
+      space({ name: "a", title: "Theirs", description: "Some words", ownerEmail: "owner@example.com" }),
+      space({ name: "b", title: "Owned by me", description: "My words", ownerEmail: "me@example.com", mine: true }),
+    ]);
+    renderPage();
+    const theirs = await openDetail("Theirs");
+    const credit = within(theirs).getByText("by owner@example.com");
+    expect(credit.closest(".space-detail-hero-text")).not.toBeNull();
+    expect(credit.compareDocumentPosition(within(theirs).getByText("Some words")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(theirs).queryByText("Owner")).not.toBeInTheDocument();
+    fireEvent.click(within(theirs).getByRole("button", { name: "Close" }));
+    const mine = await openDetail("Owned by me");
+    expect(within(mine).getByText("by you")).toBeInTheDocument();
+    expect(mine).not.toHaveTextContent("me@example.com");
+  });
+
+  it("shows likes with their word, and Updated, on one line of facts", async () => {
+    vi.mocked(fetchSpaces).mockResolvedValue([
+      space({ name: "a", title: "Many", favorite_count: 4, updatedAt: Date.now() - 2 * 3600 * 1000 }),
+      space({ name: "b", title: "One", favorite_count: 1 }),
+    ]);
+    renderPage();
+    const many = await openDetail("Many");
+    const heart = within(many).getByRole("button", { name: "Favorite Many" });
+    expect(heart).toHaveTextContent("4 likes");
+    expect(many).toHaveTextContent(/Updated 2h ago/);
+    expect(heart.closest(".space-detail-facts-line")).toBe(within(many).getByText(/Updated/).closest(".space-detail-facts-line"));
+    fireEvent.click(within(many).getByRole("button", { name: "Close" }));
+    const one = await openDetail("One");
+    expect(within(one).getByRole("button", { name: "Favorite One" })).toHaveTextContent("1 like");
+    expect(within(one).getByRole("button", { name: "Favorite One" })).not.toHaveTextContent("1 likes");
+  });
+
+  describe("tools in the detail", () => {
+    const tool = (i: number, over: Record<string, unknown> = {}) => ({
+      name: `tool_${i}`,
+      integration: "acme",
+      integrationName: "Acme",
+      effect: "read",
+      description: `Does thing ${i}`,
+      ...over,
+    });
+    const openWith = async (tools: unknown[]) => {
+      vi.mocked(fetchSpaces).mockResolvedValue([space({ name: "a", title: "Board" })]);
+      vi.mocked(fetchSpace).mockResolvedValue({ tools } as never);
+      renderPage();
+      return openDetail("Board");
+    };
+
+    it("shows each tool with its effect badge and description", async () => {
+      const dialog = await openWith([
+        tool(1),
+        tool(2, { effect: "write", description: "Creates a record" }),
+        tool(3, { effect: "delete", description: "Removes a record" }),
+      ]);
+      const row = (await within(dialog).findByText("tool_2")).closest("li") as HTMLElement;
+      expect(within(row).getByText("Writes")).toBeInTheDocument();
+      expect(within(row).getByText("Creates a record")).toHaveAttribute("title", "Creates a record");
+      expect(within(dialog).getByText("Reads")).toBeInTheDocument();
+      expect(within(dialog).getByText("Deletes or changes")).toBeInTheDocument();
+    });
+
+    it("shows a missing tool as Missing", async () => {
+      const dialog = await openWith([tool(1, { missing: true, effect: undefined })]);
+      const row = (await within(dialog).findByText("tool_1")).closest("li") as HTMLElement;
+      expect(within(row).getByText("Missing")).toBeInTheDocument();
+      expect(within(row).queryByText("Deletes or changes")).not.toBeInTheDocument();
+    });
+
+    it("shows the first five of seven, then all on request, then fewer", async () => {
+      const dialog = await openWith([1, 2, 3, 4, 5, 6, 7].map((i) => tool(i)));
+      await within(dialog).findByText("tool_1");
+      expect(within(dialog).getAllByText(/^tool_\d$/)).toHaveLength(5);
+      expect(within(dialog).queryByText("tool_6")).not.toBeInTheDocument();
+      const more = within(dialog).getByRole("button", { name: "Show all 7 tools" });
+      expect(more).toHaveAttribute("aria-expanded", "false");
+      fireEvent.click(more);
+      expect(within(dialog).getAllByText(/^tool_\d$/)).toHaveLength(7);
+      const fewer = within(dialog).getByRole("button", { name: "Show fewer" });
+      expect(fewer).toHaveAttribute("aria-expanded", "true");
+      fireEvent.click(fewer);
+      expect(within(dialog).getAllByText(/^tool_\d$/)).toHaveLength(5);
+    });
+
+    it("has no toggle for five tools", async () => {
+      const dialog = await openWith([1, 2, 3, 4, 5].map((i) => tool(i)));
+      await within(dialog).findByText("tool_5");
+      expect(within(dialog).queryByRole("button", { name: /Show/ })).not.toBeInTheDocument();
+    });
   });
 
   it("the heart in the modal updates the count and the tile", async () => {
@@ -344,7 +440,7 @@ describe("the Space detail modal", () => {
     const dialog = await openDetail("Board");
     fireEvent.click(within(dialog).getByRole("button", { name: "Favorite Board" }));
     await waitFor(() => expect(within(dialog).getByRole("button", { name: "Favorite Board" })).toHaveAttribute("aria-pressed", "true"));
-    expect(within(dialog).getByRole("button", { name: "Favorite Board" })).toHaveTextContent("3");
+    expect(within(dialog).getByRole("button", { name: "Favorite Board" })).toHaveTextContent("3 likes");
     expect(setSpaceFavorite).toHaveBeenCalledWith("a", true);
   });
 
