@@ -64,7 +64,7 @@ export function SpaceDetailModal({ space, onClose, onToggleFavorite, onEditDetai
               <h2 className="space-detail-hero-title">{space.title}</h2>
               <p className="space-detail-credit">
                 <span className="space-detail-avatar" aria-hidden="true">
-                  {(space.mine ? "Y" : space.ownerEmail.trim().charAt(0) || "?").toUpperCase()}
+                  {(space.ownerEmail.trim().charAt(0) || "?").toUpperCase()}
                 </span>
                 <span>{space.mine ? "by you" : `by ${space.ownerEmail}`}</span>
               </p>

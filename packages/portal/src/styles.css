@@ -1883,10 +1883,11 @@ body {
 .space-detail-subhead { margin: 0 0 var(--s-8); font-size: 12px; font-weight: 600; color: var(--text-2); }
 .space-detail-app { margin-bottom: var(--s-8); }
 .space-detail-app-name { font-size: 13px; font-weight: 600; color: var(--text); }
-.space-detail-tool-rows { display: grid; gap: var(--s-4); margin: var(--s-4) 0 0; padding: 0; list-style: none; }
-.space-detail-tool-row { display: flex; align-items: center; gap: var(--s-8); min-width: 0; font-size: 12px; }
+/* Three columns shared by every row of an app, so the descriptions line up. */
+.space-detail-tool-rows { display: grid; grid-template-columns: max-content max-content minmax(0, 1fr); align-items: center; gap: var(--s-4) var(--s-8); margin: var(--s-4) 0 0; padding: 0; list-style: none; }
+.space-detail-tool-row { display: contents; font-size: 12px; }
 .space-detail-tool-name { flex: none; }
-.space-detail-tool-row .ui-badge { flex: none; }
+.space-detail-tool-row .ui-badge { justify-self: start; }
 .space-detail-tool-desc { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-3); }
 .space-detail-tools > .ui-button { margin-top: var(--s-4); }
 .space-detail-delete { color: var(--danger); margin-right: auto; }
