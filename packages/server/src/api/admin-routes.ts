@@ -5,7 +5,7 @@ import { activeProfiles, profileDirName, profilesBaseDir } from "../auth/profile
 import { adminScope, adminActor } from "./admin-scope";
 import { registerAdminApprovalRoutes } from "../approvals/routes";
 import { listUsers, disableUser, enableUser, revokeUserKey } from "../admin/users";
-import { searchAdminSpaces } from "../admin/spaces";
+import { searchAdminSpaces, listAdminSpaces } from "../admin/spaces";
 import { getUserPermissions, grantPermission, resetPermission } from "../admin/permissions";
 import { getConfigView, setIntegrationEnabled, setBrowserBlockedDomains } from "../admin/config";
 import { getInstanceInfo } from "../admin/instance";
@@ -33,6 +33,12 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
       return result.payload;
     });
     scope.get("/spaces", async (request, reply) => {
+      const result = await listAdminSpaces(request.query as Record<string, string | string[] | undefined>);
+      if (!result.ok) return reply.status(result.status).send({ error: result.error });
+      return { spaces: result.spaces, has_more: result.has_more, next_cursor: result.next_cursor };
+    });
+    // The picker's search, by name prefix or title substring.
+    scope.get("/spaces/search", async (request, reply) => {
       const result = await searchAdminSpaces(request.query as Record<string, string | string[] | undefined>);
       if (!result.ok) return reply.status(result.status).send({ error: result.error });
       return { spaces: result.spaces, has_more: result.has_more };

@@ -702,14 +702,16 @@ const STILL_COUNTS = `(
  * who can still open it. A private Space is left out: the only person who can
  * have favorited it is its owner. Pass `name` for one Space.
  */
-export async function favoriteCounts(name?: string): Promise<Map<string, number>> {
+export async function favoriteCounts(name?: string | string[]): Promise<Map<string, number>> {
+  const names = name === undefined ? null : Array.isArray(name) ? name : [name];
+  if (names !== null && names.length === 0) return new Map();
   const rows = await db.all<{ space_name: string; n: number | string }>(
     `SELECT st.space_name AS space_name, COUNT(*) AS n
        FROM space_user_state st JOIN spaces s ON s.name = st.space_name
       WHERE st.favorited_at IS NOT NULL AND s.visibility <> 'private' AND ${STILL_COUNTS}
-        ${name === undefined ? "" : "AND st.space_name = ?"}
+        ${names === null ? "" : `AND st.space_name IN (${names.map(() => "?").join(",")})`}
       GROUP BY st.space_name`,
-    name === undefined ? [] : [name]
+    names ?? []
   );
   return new Map(rows.map((r) => [r.space_name, Number(r.n)]));
 }
@@ -728,6 +730,39 @@ export async function distinctOpeners(ownerId: string, sinceMs: number): Promise
     [ownerId, sinceMs]
   );
   return new Map(rows.map((r) => [r.space_name, Number(r.n)]));
+}
+
+export interface SpaceOpener {
+  email: string;
+  /** Epoch ms. */
+  lastOpenedAt: number;
+}
+
+/**
+ * Who opened each of `names` since `sinceMs`: people other than the owner who
+ * can still open it, newest first. A private Space has none. For an admin
+ * view, where the people are shown; owners only ever see a count.
+ */
+export async function openersOf(names: string[], sinceMs: number): Promise<Map<string, SpaceOpener[]>> {
+  const out = new Map<string, SpaceOpener[]>();
+  if (names.length === 0) return out;
+  const rows = await db.all<{ space_name: string; email: string | null; last_opened_at: number | string }>(
+    `SELECT st.space_name AS space_name, u.email AS email, st.last_opened_at AS last_opened_at
+       FROM space_user_state st
+       JOIN spaces s ON s.name = st.space_name
+       JOIN users u ON u.id = st.user_id
+      WHERE st.space_name IN (${names.map(() => "?").join(",")})
+        AND s.visibility <> 'private' AND st.user_id <> s.owner_id
+        AND st.last_opened_at >= ? AND ${STILL_COUNTS}
+      ORDER BY st.last_opened_at DESC, u.email ASC`,
+    [...names, sinceMs]
+  );
+  for (const r of rows) {
+    const list = out.get(r.space_name) ?? [];
+    list.push({ email: r.email ?? "", lastOpenedAt: Number(r.last_opened_at) });
+    out.set(r.space_name, list);
+  }
+  return out;
 }
 
 /**
