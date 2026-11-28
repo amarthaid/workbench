@@ -2007,14 +2007,14 @@ button.wb-app-cell-link:focus-visible { outline: none; }
   padding: var(--s-4) var(--s-12);
   border: 0;
   border-radius: var(--radius);
-  background: rgba(0, 0, 0, .35);
+  background: rgba(0, 0, 0, .5);
   color: #fff;
   font: inherit;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
 }
-.ui-modal-hero-close:hover { background: rgba(0, 0, 0, .5); }
+.ui-modal-hero-close:hover { background: rgba(0, 0, 0, .7); }
 .ui-modal-hero-close:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 /* The app quick view: a plain band instead of cover art, so Close takes the normal text colors. */
 .app-quick-modal { padding: 0; }
