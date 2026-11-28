@@ -249,10 +249,10 @@ export default function UsersTab() {
                   <tr>
                     <td>{label(u)}</td>
                     <td className="wb-col-date">{dayLabel(u.created_at)}</td>
-                    <td className="wb-col-date">{u.last_activity ? relativeTime(u.last_activity) : "—"}</td>
+                    <td className="wb-col-date">{u.last_activity ? relativeTime(u.last_activity) : "Never"}</td>
                     <td className="ui-num">{u.connection_count}</td>
                     <td className="ui-num">{u.custom_app_count}</td>
-                    <td>{u.has_api_key ? "Yes" : "—"}</td>
+                    <td>{u.has_api_key ? "Yes" : "No"}</td>
                     <td>
                       <Badge variant={pending ? "orange" : disabled ? "red" : "green"}>
                         {pending ? "Pending" : disabled ? "Disabled" : "Active"}

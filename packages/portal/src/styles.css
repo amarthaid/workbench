@@ -2077,6 +2077,7 @@ button.wb-app-cell-link:focus-visible { outline: 2px solid var(--accent); outlin
 @media (prefers-reduced-motion: reduce) { .ui-stat-skeleton { animation: none; } }
 /* Dates stay on one line: a fixed width wide enough for "Nov 28, 2026" and "3 months ago". */
 .wb-col-date { width: 120px; white-space: nowrap; }
-/* The row actions wrap inside the card instead of pushing the table wider. */
-.wb-user-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--s-4); }
-.ui-table td:has(> .wb-user-actions) { min-width: 0; }
+/* The row actions stay on one line; they wrap only when the card is narrower than the content. */
+.wb-user-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0 var(--s-4); white-space: nowrap; }
+.wb-user-actions .ui-row-action { white-space: nowrap; padding: var(--s-4) var(--s-4); }
+.ui-table th { white-space: nowrap; }
