@@ -1580,6 +1580,8 @@ button.wb-app-cell-link:focus-visible { outline: none; }
   flex: 1;
 }
 .space-tile-compact .space-tile-body { padding-right: 68px; }
+/* The 68px keeps the title clear of the heart at the top; the badge row is lower, so it (and the Open icon at its end) uses the full width. */
+.space-tile-compact .space-tile-badges { margin-right: calc(var(--s-12) - 68px); }
 .space-tile-link {
   /* A button, so reset the browser's own button look. */
   appearance: none;
