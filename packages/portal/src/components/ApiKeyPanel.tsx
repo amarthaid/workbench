@@ -107,7 +107,7 @@ export default function ApiKeyPanel() {
 
       {/* Config snippet — always visible once a key exists or was just minted. */}
       {(revealed || hasKey) && (
-        <div className="apikey-reveal" style={{ marginTop: 10 }}>
+        <div className="apikey-reveal">
           <pre className="wb-code"><code>{mcpConfigFor(snippetKey)}</code></pre>
           <div className="wb-inline-row">
             <Button variant="outline" onClick={() => copy(mcpConfigFor(copyKey), "cfg")}>
@@ -122,7 +122,7 @@ export default function ApiKeyPanel() {
         </div>
       )}
 
-      <div className="apikey-actions" style={{ marginTop: 14 }}>
+      <div className="apikey-actions">
         {hasKey || revealed ? (
           <RowActions>
             <RowAction onClick={handleMint} disabled={busy}>

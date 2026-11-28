@@ -162,7 +162,7 @@ body {
 .apikey-blurb {
   color: var(--text-3);
   font-size: 12px;
-  margin-bottom: var(--s-16);
+  margin: 0;
   font-family: var(--sans);
 }
 .apikey-blurb code {
@@ -174,6 +174,8 @@ body {
 }
 .apikey-panel { width: 100%; }
 .apikey-actions { display: flex; gap: var(--s-8); }
+/* Text actions: pull the first one left by its padding so its text lines up with the buttons above. */
+.apikey-actions .ui-row-actions { margin-left: calc(-1 * var(--s-8)); }
 /* The panel sits in a `justify-items: start` grid, which sizes items to their
    content — without this the code block inside collapses to its longest line
    instead of spanning the row, as it does on Agents. */
