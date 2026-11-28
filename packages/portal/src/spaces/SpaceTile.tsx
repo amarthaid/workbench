@@ -1,15 +1,51 @@
 import { Link } from "react-router-dom";
+import type { ReactNode } from "react";
 import type { SpaceSummary, SpaceVisibility } from "../spaces-api";
 import { relativeTime } from "../format";
 import { Badge } from "../components/ui/Badge";
-import { DoorOpenIcon, HeartIcon } from "../components/ui/Icons";
+import { Tooltip } from "../components/ui/Tooltip";
+import { DelegateIcon, DelegatePausedIcon, DoorOpenIcon, GlobeIcon, HeartIcon, LockIcon, UsersIcon } from "../components/ui/Icons";
 import { coverFor, coverInitial } from "./cover";
+
+type Variant = "neutral" | "blue" | "primary" | "orange";
 
 export const VISIBILITY: Record<SpaceVisibility, { label: string; variant: "neutral" | "blue" | "primary" }> = {
   private: { label: "Private", variant: "neutral" },
   org: { label: "Everyone signed in", variant: "blue" },
   users: { label: "Shared", variant: "primary" },
 };
+
+// What each audience looks like as an icon, and what it means in full.
+const AUDIENCE: Record<SpaceVisibility, { icon: ReactNode; tip: string }> = {
+  private: { icon: <LockIcon />, tip: "Only you can open this" },
+  users: { icon: <UsersIcon />, tip: "Shared with specific people" },
+  org: { icon: <GlobeIcon />, tip: "Everyone signed in to this workbench can open it" },
+};
+
+/** The small square itself, tinted like the Badge of the same variant. Decorative: the caller names it. */
+function Glyph({ variant, label, dashed = false, children }: { variant: Variant; label?: string; dashed?: boolean; children: ReactNode }) {
+  return (
+    <span className={`space-indicator ui-badge-${variant}${label ? " has-label" : ""}${dashed ? " is-paused" : ""}`}>
+      {children}
+      {label && <span>{label}</span>}
+    </span>
+  );
+}
+
+/** Who can open the Space, as an icon with a tooltip. `showLabel` adds the short word beside it. */
+export function AudienceIndicator({ space, showLabel = false }: { space: SpaceSummary; showLabel?: boolean }) {
+  const vis = VISIBILITY[space.visibility] ?? VISIBILITY.private;
+  const aud = AUDIENCE[space.visibility] ?? AUDIENCE.private;
+  return (
+    <Tooltip label={aud.tip} placement="top">
+      <span role="img" tabIndex={0} aria-label={`Audience: ${vis.label}`} title={aud.tip}>
+        <Glyph variant={vis.variant} label={showLabel ? vis.label : undefined}>
+          {aud.icon}
+        </Glyph>
+      </span>
+    </Tooltip>
+  );
+}
 
 export type TileSize = "large" | "compact";
 
@@ -37,14 +73,27 @@ export function Cover({ space, showInitial = true }: { space: Pick<SpaceSummary,
   );
 }
 
-/** "Delegated" while the Space runs with its owner's connections, "Delegated, paused" while it waits for the owner to confirm. Nothing otherwise. */
-export function DelegatedBadge({ space }: { space: SpaceSummary }) {
-  if (space.delegation_suspended) return <Badge variant="neutral">Delegated, paused</Badge>;
-  return space.delegate_access ? <Badge variant="orange">Delegated</Badge> : null;
+/** Delegated while the Space runs with its owner's connections; paused while it waits for the owner to confirm. Nothing otherwise. */
+export function DelegatedIndicator({ space }: { space: SpaceSummary }) {
+  const paused = !!space.delegation_suspended;
+  if (!paused && !space.delegate_access) return null;
+  const tip = paused
+    ? "Delegation is paused until the owner confirms"
+    : "Runs with the owner's connections, so viewers need no accounts of their own";
+  return (
+    <Tooltip label={tip} placement="top">
+      <span role="img" tabIndex={0} aria-label={paused ? "Delegated, paused" : "Delegated"} title={tip}>
+        <Glyph variant={paused ? "neutral" : "orange"} dashed={paused}>
+          {paused ? <DelegatePausedIcon /> : <DelegateIcon />}
+        </Glyph>
+      </span>
+    </Tooltip>
+  );
 }
 
 export function SpaceTile({ space, size, isNew, onToggleFavorite, onOpen, onEditSharing }: Props) {
   const vis = VISIBILITY[space.visibility] ?? VISIBILITY.private;
+  const aud = AUDIENCE[space.visibility] ?? AUDIENCE.private;
   // A private Space has no audience to count, and nobody wants "0".
   const showCount = space.favorite_count > 0;
   const used = space.viewers_30d;
@@ -106,12 +155,12 @@ export function SpaceTile({ space, size, isNew, onToggleFavorite, onOpen, onEdit
                 onEditSharing(space);
               }}
             >
-              <Badge variant={vis.variant}>{vis.label}</Badge>
+              <Glyph variant={vis.variant}>{aud.icon}</Glyph>
             </button>
           ) : (
-            <Badge variant={vis.variant}>{vis.label}</Badge>
+            <AudienceIndicator space={space} />
           )}
-          <DelegatedBadge space={space} />
+          <DelegatedIndicator space={space} />
         </span>
       </div>
     </article>

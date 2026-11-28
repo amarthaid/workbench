@@ -55,19 +55,19 @@ const hero = () => document.querySelector(".space-detail-hero") as HTMLElement;
 describe("SpaceDetailModal delegation chip", () => {
   it("shows Delegated beside the audience chip in the header band", () => {
     open(space({ delegate_access: true }));
-    expect(hero()).toHaveTextContent("Everyone signed in");
-    expect(hero()).toHaveTextContent("Delegated");
-    expect(hero()).not.toHaveTextContent("paused");
+    expect(within(hero()).getByRole("img", { name: "Audience: Everyone signed in" })).toBeInTheDocument();
+    expect(within(hero()).getByRole("img", { name: "Delegated" })).toBeInTheDocument();
+    expect(within(hero()).queryByRole("img", { name: "Delegated, paused" })).toBeNull();
   });
 
   it("shows Delegated, paused when the delegation is suspended", () => {
     open(space({ delegate_access: true, delegation_suspended: true }));
-    expect(hero()).toHaveTextContent("Delegated, paused");
+    expect(within(hero()).getByRole("img", { name: "Delegated, paused" })).toBeInTheDocument();
   });
 
   it("shows no chip for a Space without delegation", () => {
     open(space());
-    expect(hero()).not.toHaveTextContent("Delegated");
+    expect(within(hero()).queryByRole("img", { name: /Delegated/ })).toBeNull();
   });
 });
 
@@ -87,7 +87,7 @@ describe("SpaceDetailModal hero row", () => {
     expect(row).toHaveTextContent("by you");
     const side = row.querySelector(".space-detail-hero-side") as HTMLElement;
     expect(side).toHaveTextContent("Everyone signed in");
-    expect(side).toHaveTextContent("Delegated");
+    expect(within(side).getByRole("img", { name: "Delegated" })).toBeInTheDocument();
     const link = within(side).getByRole("link", { name: "Open" });
     expect(link).toHaveAttribute("href", "/s/pr-timeline");
     expect(link.querySelector("svg")).not.toBeNull();
@@ -241,5 +241,22 @@ describe("SpaceDetailModal inline edit", () => {
     fireEvent.keyDown(area, { key: "Enter", metaKey: true });
     expect(updateSpaceDetails).not.toHaveBeenCalled();
     expect(screen.getByRole("alert")).toHaveTextContent("at most 1000");
+  });
+});
+
+describe("audience and delegation indicators", () => {
+  it("is focusable and opens a tooltip with the full meaning on focus", () => {
+    open(space({ visibility: "private", delegate_access: true }));
+    const aud = screen.getByRole("img", { name: "Audience: Private" });
+    expect(aud).toHaveAttribute("tabindex", "0");
+    fireEvent.focus(aud);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Only you can open this");
+  });
+
+  it("explains delegation and its pause", () => {
+    open(space({ delegate_access: true, delegation_suspended: true }));
+    const d = screen.getByRole("img", { name: "Delegated, paused" });
+    fireEvent.mouseEnter(d.parentElement!);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Delegation is paused until the owner confirms");
   });
 });

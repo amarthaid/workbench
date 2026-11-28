@@ -162,3 +162,47 @@ export function PencilIcon() {
     </svg>
   );
 }
+
+export function LockIcon() {
+  return (
+    <svg {...svgProps}>
+      <rect x="3.5" y="7" width="9" height="6.5" rx="1.2" />
+      <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" />
+    </svg>
+  );
+}
+
+export function UsersIcon() {
+  return (
+    <svg {...svgProps}>
+      <circle cx="6" cy="5.5" r="2.2" />
+      <path d="M1.8 13c.2-2.3 1.9-3.5 4.2-3.5s4 1.2 4.2 3.5" />
+      <path d="M10.4 3.6a2.1 2.1 0 0 1 0 3.8M11.5 9.7c1.5.3 2.5 1.4 2.7 3.3" />
+    </svg>
+  );
+}
+
+export function GlobeIcon() {
+  return (
+    <svg {...svgProps}>
+      <circle cx="8" cy="8" r="6" />
+      <path d="M2 8h12M8 2c1.8 1.7 2.6 3.7 2.6 6S9.8 12.3 8 14M8 2C6.2 3.7 5.4 5.7 5.4 8S6.2 12.3 8 14" />
+    </svg>
+  );
+}
+
+/** Delegated: the key the owner lends. */
+export function DelegateIcon() {
+  return <KeyIcon />;
+}
+
+/** Delegated but waiting: the key, with a pause mark. */
+export function DelegatePausedIcon() {
+  return (
+    <svg {...svgProps}>
+      <circle cx="4.5" cy="11.5" r="2.2" />
+      <path d="M6.2 9.8L11 5M9 7l1.6 1.6" />
+      <path d="M12.2 1.8v3.4M14.4 1.8v3.4" />
+    </svg>
+  );
+}

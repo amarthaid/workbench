@@ -75,8 +75,9 @@ describe("Spaces gallery", () => {
     expect(tileOf("Drive upload")).toHaveTextContent("teammate@example.com · updated 3d ago");
 
     expect(screen.getAllByText("Yours")).toHaveLength(1);
-    expect(screen.getByText("Everyone signed in")).toBeInTheDocument();
-    expect(screen.getByText("Shared")).toBeInTheDocument();
+    // Own tile: the audience icon is the button that opens sharing. Someone else's: a labelled icon.
+    expect(within(tileOf("PR timeline")).getByRole("button", { name: "Change who can open PR timeline. Now: Everyone signed in" })).toBeInTheDocument();
+    expect(within(tileOf("Drive upload")).getByRole("img", { name: "Audience: Shared" })).toBeInTheDocument();
   });
 
   it("tags delegated Spaces, and paused ones, in the badge row", async () => {
@@ -90,10 +91,12 @@ describe("Spaces gallery", () => {
     renderPage();
     await screen.findByRole("button", { name: "Sprint Board" });
     const badges = (t: string) => tileOf(t).querySelector(".space-tile-badges")!;
-    expect(badges("Sprint Board")).toHaveTextContent(/^YoursEveryone signed inDelegated$/);
-    expect(badges("Release Checklist")).toHaveTextContent("Delegated, paused");
-    expect(badges("Viewer view")).toHaveTextContent("Delegated, paused");
-    expect(badges("PR Timeline")).not.toHaveTextContent("Delegated");
+    const names = (t: string) => within(tileOf(t)).queryAllByRole("img").map((e) => e.getAttribute("aria-label"));
+    expect(badges("Sprint Board")).toHaveTextContent(/^Yours/);
+    expect(names("Sprint Board")).toEqual(["Delegated"]);
+    expect(names("Release Checklist")).toEqual(["Delegated, paused"]);
+    expect(names("Viewer view")).toEqual(["Audience: Everyone signed in", "Delegated, paused"]);
+    expect(names("PR Timeline")).toEqual([]);
   });
 
   it("explains how to create one when there are none, and shows no search", async () => {

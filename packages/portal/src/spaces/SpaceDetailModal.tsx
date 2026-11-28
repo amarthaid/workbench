@@ -4,10 +4,9 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchSpace, type SpaceSummary } from "../spaces-api";
 import { relativeTime } from "../format";
 import { Modal } from "../components/ui/Modal";
-import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { ClockIcon, DoorOpenIcon, EyeIcon, HeartIcon } from "../components/ui/Icons";
-import { Cover, DelegatedBadge, VISIBILITY } from "./SpaceTile";
+import { AudienceIndicator, Cover, DelegatedIndicator } from "./SpaceTile";
 import { DeleteSpaceDialog } from "./DeleteSpaceDialog";
 import { EditableDescription, EditableTitle, useDetailsSave, type DetailsSaved } from "./InlineDetails";
 import { ToolsAccordion } from "../components/ToolsAccordion";
@@ -30,7 +29,6 @@ interface Props {
 export function SpaceDetailModal({ space, onClose, onToggleFavorite, onDetailsSaved, onEditSharing, onDeleted }: Props) {
   const [deleting, setDeleting] = useState(false);
   const details = useDetailsSave(space, (saved) => onDetailsSaved(space.name, saved));
-  const vis = VISIBILITY[space.visibility] ?? VISIBILITY.private;
   const detail = useQuery({ queryKey: ["space", space.name], queryFn: () => fetchSpace(space.name) });
   const allTools = detail.data?.tools ?? [];
   const opened = space.mine && space.viewers_30d !== undefined ? space.viewers_30d : null;
@@ -58,8 +56,8 @@ export function SpaceDetailModal({ space, onClose, onToggleFavorite, onDetailsSa
                 </p>
                 <div className="space-detail-hero-side">
                   <span className="space-detail-chips">
-                    <Badge variant={vis.variant}>{vis.label}</Badge>
-                    <DelegatedBadge space={space} />
+                    <AudienceIndicator space={space} showLabel />
+                    <DelegatedIndicator space={space} />
                   </span>
                   <Link className="ui-button ui-button-primary ui-button-md space-detail-open" to={`/s/${encodeURIComponent(space.name)}`}>
                     <DoorOpenIcon />
