@@ -7,7 +7,7 @@ import { registerAdminApprovalRoutes } from "../approvals/routes";
 import { listUsers, disableUser, enableUser, revokeUserKey } from "../admin/users";
 import { searchAdminSpaces } from "../admin/spaces";
 import { getUserPermissions, grantPermission, resetPermission } from "../admin/permissions";
-import { getConfigView, setIntegrationEnabled, setCustomAppsPolicy, setBrowserBlockedDomains } from "../admin/config";
+import { getConfigView, setIntegrationEnabled, setBrowserBlockedDomains } from "../admin/config";
 import { getInstanceInfo } from "../admin/instance";
 import { adminActivity, adminActivityPayload } from "../admin/activity";
 import { getConnectionStats } from "../admin/connections";
@@ -80,11 +80,6 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
     scope.get("/config", async () => getConfigView());
     scope.put<{ Params: { name: string }; Body: unknown }>("/config/integrations/:name", async (request, reply) => {
       const result = await setIntegrationEnabled(adminActor(request), request.params.name, request.body);
-      if (!result.ok) return reply.status(result.status).send({ error: result.error });
-      return { ok: true };
-    });
-    scope.put<{ Body: unknown }>("/config/custom-apps", async (request, reply) => {
-      const result = await setCustomAppsPolicy(adminActor(request), request.body);
       if (!result.ok) return reply.status(result.status).send({ error: result.error });
       return { ok: true };
     });

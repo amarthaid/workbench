@@ -27,6 +27,7 @@ import { startUploadReaper } from "./jots/pending";
 import { loadPlugins } from "./plugins/loader";
 import { registry } from "./plugins/registry";
 import { isIntegrationDisabled, loadSettings, startSettingsPoll } from "./settings/instance-settings";
+import { migrateCustomAppsPolicy } from "./permissions/custom-apps-migration";
 import { startBrowserReaper } from "./auth/browser-session";
 import { registerCdpBridgeRoutes, startChannelReaper } from "./auth/cdp-bridge";
 import cluster from "node:cluster";
@@ -54,6 +55,9 @@ async function main() {
 
   const { initDb } = await import("./db.js");
   await initDb();
+  // Custom apps moved from an instance policy to a per-user permission. Once,
+  // arbitrated by a marker row, so it is safe on every worker and replica.
+  await migrateCustomAppsPolicy();
   // Load instance settings before any request can be served, and keep them fresh
   // against changes made through other workers or pods.
   await loadSettings();

@@ -79,7 +79,6 @@ beforeEach(async () => {
 const WRITES = [
   ["GET", "/api/admin/config", undefined],
   ["PUT", "/api/admin/config/integrations/acme-cfg", { enabled: false }],
-  ["PUT", "/api/admin/config/custom-apps", { mode: "none" }],
 ] as const;
 
 describe.each(WRITES)("%s %s gate", (method, url, payload) => {
@@ -92,11 +91,11 @@ describe.each(WRITES)("%s %s gate", (method, url, payload) => {
 });
 
 describe("GET /api/admin/config", () => {
-  it("lists every integration with its enabled flag, plus the custom-app policy", async () => {
+  it("lists every integration with its enabled flag, and no custom-app policy", async () => {
     const body = JSON.parse((await call("GET", "/api/admin/config")).body);
     const acme = body.integrations.find((i: { name: string }) => i.name === "acme-cfg");
     expect(acme).toEqual({ name: "acme-cfg", display_name: "Acme Cfg", enabled: true });
-    expect(body.custom_apps_policy).toEqual({ mode: "all", user_ids: [] });
+    expect(body).not.toHaveProperty("custom_apps_policy");
   });
 });
 
@@ -155,41 +154,12 @@ describe("PUT /api/admin/config/integrations/:name", () => {
   });
 });
 
-describe("PUT /api/admin/config/custom-apps", () => {
-  it("sets the mode and audits it", async () => {
+describe("the retired custom apps policy", () => {
+  it("the old PUT route is gone", async () => {
     const res = await call("PUT", "/api/admin/config/custom-apps", { mode: "none" });
-    expect(res.statusCode).toBe(200);
-    expect(getSettings().custom_apps_policy).toEqual({ mode: "none", user_ids: [] });
-    const audit = await db.all<{ action: string; tool: string }>("SELECT action, tool FROM audit_log");
-    expect(audit).toEqual([{ action: "ADMIN_CUSTOM_APPS_POLICY", tool: "admin.config.custom-apps=none" }]);
-  });
-
-  it("accepts an allowlist of users that exist", async () => {
-    const res = await call("PUT", "/api/admin/config/custom-apps", { mode: "allowlist", user_ids: ["user-dev"] });
-    expect(res.statusCode).toBe(200);
-    expect(getSettings().custom_apps_policy).toEqual({ mode: "allowlist", user_ids: ["user-dev"] });
-  });
-
-  it("drops user_ids when the mode is not allowlist", async () => {
-    await call("PUT", "/api/admin/config/custom-apps", { mode: "all", user_ids: ["user-dev"] });
-    expect(getSettings().custom_apps_policy).toEqual({ mode: "all", user_ids: [] });
-  });
-
-  it("400 unknown_user when an id does not exist, and saves nothing", async () => {
-    const res = await call("PUT", "/api/admin/config/custom-apps", { mode: "allowlist", user_ids: ["user-dev", "ghost"] });
-    expect(res.statusCode).toBe(400);
-    expect(JSON.parse(res.body)).toEqual({ error: "unknown_user" });
+    expect(res.statusCode).toBe(404);
     expect(await db.all("SELECT 1 FROM instance_settings")).toHaveLength(0);
   });
-
-  it.each([[{ mode: "everyone" }], [{}], [{ mode: "allowlist", user_ids: "user-dev" }], [{ mode: "allowlist", user_ids: [7] }], [null]])(
-    "400 invalid_policy for %j",
-    async (body) => {
-      const res = await call("PUT", "/api/admin/config/custom-apps", body);
-      expect(res.statusCode).toBe(400);
-      expect(JSON.parse(res.body)).toEqual({ error: "invalid_policy" });
-    }
-  );
 });
 
 describe("PUT /api/admin/config/browser-blocked-domains", () => {

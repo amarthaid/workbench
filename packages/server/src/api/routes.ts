@@ -12,7 +12,6 @@ import { buildAuthUrl, handleCallback } from "../auth/google";
 import { buildAuthUrl as buildKeycloakAuthUrl, handleCallback as handleKeycloakCallback, isKeycloakConfigured } from "../auth/keycloak";
 import { signSession, verifySession } from "../auth/session";
 import { isAdminEmail } from "../auth/admin";
-import { customAppsAllowedFor } from "../settings/instance-settings";
 import { config } from "../config";
 import { getToken, deleteToken, storeToken } from "../auth/tokens";
 import {
@@ -54,6 +53,7 @@ import {
 } from "../custom-apps/oauth";
 import { normalizeBaseUrl } from "../custom-apps/ssrf";
 import { invalidateIndex, ensureIndex } from "../custom-apps/index";
+import { can } from "../permissions/store";
 import { evictSession } from "../custom-apps/client";
 import { markConnected, startReaper, redeemPending, getPending, createPending } from "../auth/connections";
 import { resumeAuthorize } from "../auth/oauth-server/resume";
@@ -332,7 +332,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       id: profile.id,
       email: profile.email,
       isAdmin: isAdminEmail(profile.email),
-      canCreateCustomApps: customAppsAllowedFor(profile.id),
+      canCreateCustomApps: await can(profile.id, "custom_apps.create"),
     };
   });
 
@@ -1094,7 +1094,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Body: { name?: string; baseUrl?: string; authType?: "oauth" | "headers"; headers?: unknown } }>("/api/custom-apps", async (request, reply) => {
     const user = await authenticate(request);
     if (!user) return reply.status(401).send({ error: "Unauthorized" });
-    if (!customAppsAllowedFor(user.userId)) {
+    if (!(await can(user.userId, "custom_apps.create"))) {
       return reply.status(403).send({ error: "custom_apps_disabled" });
     }
 
@@ -1169,7 +1169,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
   app.put<{ Params: { id: string }; Body: { headers?: unknown } }>("/api/custom-apps/:id", async (request, reply) => {
     const user = await authenticate(request);
     if (!user) return reply.status(401).send({ error: "Unauthorized" });
-    if (!customAppsAllowedFor(user.userId)) {
+    if (!(await can(user.userId, "custom_apps.create"))) {
       return reply.status(403).send({ error: "custom_apps_disabled" });
     }
     try {

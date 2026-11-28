@@ -118,7 +118,30 @@ describe("GET /api/admin/users/:id/permissions", () => {
         grantedByEmail: null,
         grantedAt: null,
       },
+      {
+        capability: "custom_apps.create",
+        label: "Add and use custom apps",
+        description: "Lets this user connect their own MCP servers as custom apps.",
+        default: "deny",
+        effect: "deny",
+        source: "default",
+        grantedBy: null,
+        grantedByEmail: null,
+        grantedAt: null,
+      },
     ]);
+  });
+});
+
+describe("custom_apps.create over the admin API", () => {
+  const URL = `${BASE}/custom_apps.create`;
+  it("accepts only allow, and the allow row grants it", async () => {
+    expect((await call("PUT", URL, ADMIN, { effect: "deny" })).statusCode).toBe(400);
+    expect(await can("user-dev", "custom_apps.create")).toBe(false);
+    expect((await call("PUT", URL, ADMIN, { effect: "allow" })).statusCode).toBe(200);
+    expect(await can("user-dev", "custom_apps.create")).toBe(true);
+    expect((await call("DELETE", URL)).statusCode).toBe(200);
+    expect(await can("user-dev", "custom_apps.create")).toBe(false);
   });
 });
 

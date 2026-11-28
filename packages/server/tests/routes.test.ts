@@ -155,10 +155,15 @@ async function seedOAuthAuthorizeTicket(ticket: string, binding: string) {
 }
 
 describe("API routes", () => {
-  beforeEach(() => {
-    db.exec("DELETE FROM users");
-    db.exec("DELETE FROM pending_auth");
+  beforeEach(async () => {
+    await db.exec("DELETE FROM users");
+    await db.exec("DELETE FROM pending_auth");
+    await db.exec("DELETE FROM user_permissions");
     vi.clearAllMocks();
+  });
+
+  afterEach(async () => {
+    await db.exec("DELETE FROM user_permissions");
   });
 
   afterAll(() => {
@@ -434,7 +439,7 @@ describe("API routes", () => {
         id: "user-1",
         email: "test@example.com",
         isAdmin: false,
-        canCreateCustomApps: true,
+        canCreateCustomApps: false,
       });
     });
 
@@ -480,21 +485,16 @@ describe("API routes", () => {
       expect(res.statusCode).toBe(401);
     });
 
-    it("reports canCreateCustomApps false when the policy excludes the user", async () => {
-      const { saveSetting, resetSettingsForTest } = await import("../src/settings/instance-settings");
-      await saveSetting("custom_apps_policy", { mode: "none", user_ids: [] }, "u-admin");
-      try {
-        const app = await buildApp();
-        const res = await app.inject({
-          method: "GET",
-          url: "/api/auth/me",
-          headers: { authorization: "Bearer valid-jwt" },
-        });
-        expect(JSON.parse(res.body).canCreateCustomApps).toBe(false);
-      } finally {
-        await db.exec("DELETE FROM instance_settings");
-        resetSettingsForTest();
-      }
+    it("reports canCreateCustomApps true once the capability is allowed, false again when cleared", async () => {
+      const { setPermission, clearPermission } = await import("../src/permissions/store");
+      const me = async () =>
+        JSON.parse(
+          (await (await buildApp()).inject({ method: "GET", url: "/api/auth/me", headers: { authorization: "Bearer valid-jwt" } })).body
+        ).canCreateCustomApps;
+      await setPermission({ userId: "user-1", capability: "custom_apps.create", effect: "allow", grantedBy: "u-admin" });
+      expect(await me()).toBe(true);
+      await clearPermission("user-1", "custom_apps.create");
+      expect(await me()).toBe(false);
     });
 
     it("returns 404 for unknown user", async () => {
@@ -1830,18 +1830,7 @@ describe("API routes", () => {
     });
   });
 
-  describe("POST /api/custom-apps and the custom-app policy", () => {
-    async function withPolicy(policy: unknown, run: () => Promise<void>) {
-      const { saveSetting, resetSettingsForTest } = await import("../src/settings/instance-settings");
-      await saveSetting("custom_apps_policy", policy, "u-admin");
-      try {
-        await run();
-      } finally {
-        await db.exec("DELETE FROM instance_settings");
-        resetSettingsForTest();
-      }
-    }
-
+  describe("POST /api/custom-apps and the custom_apps.create capability", () => {
     const create = (app: Awaited<ReturnType<typeof buildApp>>) =>
       app.inject({
         method: "POST",
@@ -1850,25 +1839,23 @@ describe("API routes", () => {
         payload: {},
       });
 
-    it("403 custom_apps_disabled when the policy is none, before any validation or discovery", async () => {
-      await withPolicy({ mode: "none", user_ids: [] }, async () => {
-        const res = await create(await buildApp());
-        expect(res.statusCode).toBe(403);
-        expect(JSON.parse(res.body)).toEqual({ error: "custom_apps_disabled" });
-      });
+    it("403 custom_apps_disabled by default, before any validation or discovery", async () => {
+      const res = await create(await buildApp());
+      expect(res.statusCode).toBe(403);
+      expect(JSON.parse(res.body)).toEqual({ error: "custom_apps_disabled" });
     });
 
-    it("403 for a user not on the allowlist", async () => {
-      await withPolicy({ mode: "allowlist", user_ids: ["someone-else"] }, async () => {
-        expect((await create(await buildApp())).statusCode).toBe(403);
-      });
+    it("403 for a user without the capability even when another user has it", async () => {
+      const { setPermission } = await import("../src/permissions/store");
+      await setPermission({ userId: "someone-else", capability: "custom_apps.create", effect: "allow", grantedBy: "u-admin" });
+      expect((await create(await buildApp())).statusCode).toBe(403);
     });
 
-    it("lets a listed user through to normal validation", async () => {
-      await withPolicy({ mode: "allowlist", user_ids: ["user-1"] }, async () => {
-        const res = await create(await buildApp());
-        expect(res.statusCode).toBe(400); // missing name and baseUrl, not 403
-      });
+    it("lets an allowed user through to normal validation", async () => {
+      const { setPermission } = await import("../src/permissions/store");
+      await setPermission({ userId: "user-1", capability: "custom_apps.create", effect: "allow", grantedBy: "u-admin" });
+      const res = await create(await buildApp());
+      expect(res.statusCode).toBe(400); // missing name and baseUrl, not 403
     });
   });
 
@@ -1886,6 +1873,11 @@ describe("API routes", () => {
       return { h, o };
     }
     const auth = { authorization: "Bearer valid-jwt" };
+
+    beforeEach(async () => {
+      const { setPermission } = await import("../src/permissions/store");
+      await setPermission({ userId: "user-1", capability: "custom_apps.create", effect: "allow", grantedBy: "u-admin" });
+    });
 
     // All test files share one SQLite DB: leave no custom_apps rows for others.
     afterEach(async () => {
@@ -1977,25 +1969,22 @@ describe("API routes", () => {
         expect(JSON.parse(res.body).app).toEqual({ id: h.id, name: "keyed", headerNames: ["X-Api-Key"] });
       });
 
-      it("PUT is 403 custom_apps_disabled when the policy is none", async () => {
+      it("PUT is 403 custom_apps_disabled when the capability is cleared", async () => {
         const { h } = await seed();
-        const { saveSetting, resetSettingsForTest } = await import("../src/settings/instance-settings");
-        await saveSetting("custom_apps_policy", { mode: "none", user_ids: [] }, "u-admin");
-        try {
-          const res = await (await buildApp()).inject({
-            method: "PUT", url: `/api/custom-apps/${h.id}`, headers: auth,
-            payload: { headers: [{ name: "X-Api-Key", value: "x" }] },
-          });
-          expect(res.statusCode).toBe(403);
-          expect(JSON.parse(res.body)).toEqual({ error: "custom_apps_disabled" });
-        } finally {
-          await db.exec("DELETE FROM instance_settings");
-          resetSettingsForTest();
-        }
+        const { clearPermission } = await import("../src/permissions/store");
+        await clearPermission("user-1", "custom_apps.create");
+        const res = await (await buildApp()).inject({
+          method: "PUT", url: `/api/custom-apps/${h.id}`, headers: auth,
+          payload: { headers: [{ name: "X-Api-Key", value: "x" }] },
+        });
+        expect(res.statusCode).toBe(403);
+        expect(JSON.parse(res.body)).toEqual({ error: "custom_apps_disabled" });
       });
 
       it("PUT on another user's app is 404", async () => {
         const { h } = await seed();
+        const { setPermission } = await import("../src/permissions/store");
+        await setPermission({ userId: "user-2", capability: "custom_apps.create", effect: "allow", grantedBy: "u-admin" });
         const res = await (await buildApp()).inject({
           method: "PUT", url: `/api/custom-apps/${h.id}`, headers: { authorization: "Bearer other-jwt" },
           payload: { headers: [{ name: "X-Api-Key", value: "x" }] },
