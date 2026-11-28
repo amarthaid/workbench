@@ -384,51 +384,133 @@ describe("the Space detail modal", () => {
       description: `Does thing ${i}`,
       ...over,
     });
+    const inApp = (app: string, i: number, over: Record<string, unknown> = {}) =>
+      tool(i, { integration: app.toLowerCase(), integrationName: app, ...over });
     const openWith = async (tools: unknown[]) => {
       vi.mocked(fetchSpaces).mockResolvedValue([space({ name: "a", title: "Board" })]);
       vi.mocked(fetchSpace).mockResolvedValue({ tools } as never);
       renderPage();
       return openDetail("Board");
     };
+    const threeApps = () => [inApp("Acme", 1), inApp("Acme", 2, { effect: "write" }), inApp("Demo", 3), inApp("Other", 4, { effect: "delete" })];
 
-    it("shows each tool with its effect badge and description", async () => {
+    it("summarises the totals by effect and leaves out zero counts and missing tools", async () => {
       const dialog = await openWith([
         tool(1),
-        tool(2, { effect: "write", description: "Creates a record" }),
-        tool(3, { effect: "delete", description: "Removes a record" }),
+        tool(2),
+        tool(3, { effect: "write" }),
+        tool(4, { effect: "delete" }),
+        tool(5, { missing: true, effect: undefined }),
       ]);
-      const row = (await within(dialog).findByText("tool_2")).closest("li") as HTMLElement;
+      await within(dialog).findByText("Acme");
+      const summary = dialog.querySelector(".space-detail-tool-summary") as HTMLElement;
+      expect(summary).toHaveTextContent("2 read");
+      expect(summary).toHaveTextContent("1 write");
+      expect(summary).toHaveTextContent("1 delete");
+    });
+
+    it("shows only the non-zero summary chips", async () => {
+      const dialog = await openWith([tool(1), tool(2)]);
+      await within(dialog).findByText("Acme");
+      const summary = dialog.querySelector(".space-detail-tool-summary") as HTMLElement;
+      expect(summary).toHaveTextContent("2 read");
+      expect(summary).not.toHaveTextContent("write");
+      expect(summary).not.toHaveTextContent("delete");
+    });
+
+    it("counts per app on the app header", async () => {
+      const dialog = await openWith([tool(1), tool(2), tool(3, { effect: "write" }), tool(4, { effect: "delete" }), tool(5, { effect: "delete" })]);
+      const head = await within(dialog).findByRole("button", { name: /Acme/ });
+      expect(head).toHaveTextContent("2 reads");
+      expect(head).toHaveTextContent("1 writes");
+      expect(head).toHaveTextContent("2 deletes");
+    });
+
+    it("opens the first app only when there are three apps", async () => {
+      const dialog = await openWith(threeApps());
+      const acme = await within(dialog).findByRole("button", { name: /Acme/ });
+      expect(acme).toHaveAttribute("aria-expanded", "true");
+      expect(within(dialog).getByRole("button", { name: /Demo/ })).toHaveAttribute("aria-expanded", "false");
+      expect(within(dialog).getByRole("button", { name: /Other/ })).toHaveAttribute("aria-expanded", "false");
+      expect(within(dialog).getByText("tool_1")).toBeInTheDocument();
+      expect(within(dialog).queryByText("tool_3")).not.toBeInTheDocument();
+      expect(within(dialog).queryByText("tool_4")).not.toBeInTheDocument();
+    });
+
+    it("opens every app when there are two or fewer", async () => {
+      const dialog = await openWith([inApp("Acme", 1), inApp("Demo", 2)]);
+      expect(await within(dialog).findByRole("button", { name: /Acme/ })).toHaveAttribute("aria-expanded", "true");
+      expect(within(dialog).getByRole("button", { name: /Demo/ })).toHaveAttribute("aria-expanded", "true");
+      expect(within(dialog).getByText("tool_2")).toBeInTheDocument();
+    });
+
+    it("toggles an app from its header", async () => {
+      const dialog = await openWith(threeApps());
+      const demo = await within(dialog).findByRole("button", { name: /Demo/ });
+      expect(demo).toHaveAttribute("aria-controls");
+      fireEvent.click(demo);
+      expect(demo).toHaveAttribute("aria-expanded", "true");
+      expect(within(dialog).getByText("tool_3")).toBeInTheDocument();
+      fireEvent.click(demo);
+      expect(demo).toHaveAttribute("aria-expanded", "false");
+      expect(within(dialog).queryByText("tool_3")).not.toBeInTheDocument();
+    });
+
+    it("shows each tool with its effect badge", async () => {
+      const dialog = await openWith([tool(1), tool(2, { effect: "write" }), tool(3, { effect: "delete" })]);
+      const row = (await within(dialog).findByText("tool_2")).closest("button") as HTMLElement;
       expect(within(row).getByText("Writes")).toBeInTheDocument();
-      expect(within(row).getByText("Creates a record")).toHaveAttribute("title", "Creates a record");
-      expect(within(dialog).getByText("Reads")).toBeInTheDocument();
-      expect(within(dialog).getByText("Deletes or changes")).toBeInTheDocument();
+      expect(within(dialog).getByRole("button", { name: /tool_1/ })).toHaveTextContent("Reads");
+      expect(within(dialog).getByRole("button", { name: /tool_3/ })).toHaveTextContent("Deletes or changes");
     });
 
-    it("shows a missing tool as Missing", async () => {
-      const dialog = await openWith([tool(1, { missing: true, effect: undefined })]);
-      const row = (await within(dialog).findByText("tool_1")).closest("li") as HTMLElement;
-      expect(within(row).getByText("Missing")).toBeInTheDocument();
-      expect(within(row).queryByText("Deletes or changes")).not.toBeInTheDocument();
+    it("reveals the description and the effect sentence on a click, and hides them on a second", async () => {
+      const dialog = await openWith([tool(1), tool(2, { effect: "write", description: "Creates a record" }), tool(3, { effect: "delete" })]);
+      const row = await within(dialog).findByRole("button", { name: /tool_2/ });
+      expect(row).toHaveAttribute("aria-expanded", "false");
+      expect(within(dialog).queryByText("Creates a record")).not.toBeInTheDocument();
+      fireEvent.click(row);
+      expect(row).toHaveAttribute("aria-expanded", "true");
+      expect(within(dialog).getByText("Creates a record")).toBeInTheDocument();
+      expect(within(dialog).getByText("Changes data in the connected app.")).toBeInTheDocument();
+      fireEvent.click(row);
+      expect(within(dialog).queryByText("Creates a record")).not.toBeInTheDocument();
+      expect(within(dialog).queryByText("Changes data in the connected app.")).not.toBeInTheDocument();
     });
 
-    it("shows the first five of seven, then all on request, then fewer", async () => {
+    it("has an effect sentence for each kind and lets several rows stay open", async () => {
+      const dialog = await openWith([tool(1), tool(2, { effect: "delete" })]);
+      fireEvent.click(await within(dialog).findByRole("button", { name: /tool_1/ }));
+      fireEvent.click(within(dialog).getByRole("button", { name: /tool_2/ }));
+      expect(within(dialog).getByText("Only reads data. Never changes anything.")).toBeInTheDocument();
+      expect(within(dialog).getByText("Can delete or overwrite data.")).toBeInTheDocument();
+    });
+
+    it("shows a long description in full", async () => {
+      const long = "word ".repeat(80).trim();
+      const dialog = await openWith([tool(1, { description: long })]);
+      fireEvent.click(await within(dialog).findByRole("button", { name: /tool_1/ }));
+      expect(within(dialog).getByText(long)).toBeInTheDocument();
+    });
+
+    it("shows only the effect sentence for a tool with no description", async () => {
+      const dialog = await openWith([tool(1, { description: undefined })]);
+      fireEvent.click(await within(dialog).findByRole("button", { name: /tool_1/ }));
+      expect(within(dialog).getByText("Only reads data. Never changes anything.")).toBeInTheDocument();
+    });
+
+    it("shows a missing tool as Missing, with nothing to expand", async () => {
+      const dialog = await openWith([tool(1, { missing: true, effect: undefined, description: undefined })]);
+      const name = await within(dialog).findByText("tool_1");
+      expect(within(dialog).getByText("Missing")).toBeInTheDocument();
+      expect(name.closest("button")).toBeNull();
+      expect(within(dialog).queryByText("Deletes or changes")).not.toBeInTheDocument();
+    });
+
+    it("no longer has a Show all button", async () => {
       const dialog = await openWith([1, 2, 3, 4, 5, 6, 7].map((i) => tool(i)));
       await within(dialog).findByText("tool_1");
-      expect(within(dialog).getAllByText(/^tool_\d$/)).toHaveLength(5);
-      expect(within(dialog).queryByText("tool_6")).not.toBeInTheDocument();
-      const more = within(dialog).getByRole("button", { name: "Show all 7 tools" });
-      expect(more).toHaveAttribute("aria-expanded", "false");
-      fireEvent.click(more);
       expect(within(dialog).getAllByText(/^tool_\d$/)).toHaveLength(7);
-      const fewer = within(dialog).getByRole("button", { name: "Show fewer" });
-      expect(fewer).toHaveAttribute("aria-expanded", "true");
-      fireEvent.click(fewer);
-      expect(within(dialog).getAllByText(/^tool_\d$/)).toHaveLength(5);
-    });
-
-    it("has no toggle for five tools", async () => {
-      const dialog = await openWith([1, 2, 3, 4, 5].map((i) => tool(i)));
-      await within(dialog).findByText("tool_5");
       expect(within(dialog).queryByRole("button", { name: /Show/ })).not.toBeInTheDocument();
     });
   });

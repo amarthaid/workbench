@@ -1881,14 +1881,25 @@ body {
 .space-detail-heart:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .space-detail-heart.is-on { color: var(--accent); }
 .space-detail-subhead { margin: 0 0 var(--s-8); font-size: 12px; font-weight: 600; color: var(--text-2); }
+.space-detail-tool-summary { display: flex; flex-wrap: wrap; gap: var(--s-8); margin: 0 0 var(--s-12); }
 .space-detail-app { margin-bottom: var(--s-8); }
+.space-detail-app-head { display: flex; align-items: center; gap: var(--s-8); width: 100%; padding: var(--s-8) var(--s-12); border: 0; background: var(--bg-sunk); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.space-detail-app-head:focus-visible, .space-detail-tool-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .space-detail-app-name { font-size: 13px; font-weight: 600; color: var(--text); }
-/* Three columns shared by every row of an app, so the descriptions line up. */
-.space-detail-tool-rows { display: grid; grid-template-columns: max-content max-content minmax(0, 1fr); align-items: center; gap: var(--s-4) var(--s-8); margin: var(--s-4) 0 0; padding: 0; list-style: none; }
-.space-detail-tool-row { display: contents; font-size: 12px; }
-.space-detail-tool-name { flex: none; }
-.space-detail-tool-row .ui-badge { justify-self: start; }
-.space-detail-tool-desc { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-3); }
-.space-detail-tools > .ui-button { margin-top: var(--s-4); }
+.space-detail-chips { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--s-4); margin-left: auto; }
+.space-detail-tool-chevron { display: inline-flex; flex: none; width: 16px; height: 16px; color: var(--text-3); transform: rotate(-90deg); transition: transform .12s; }
+.space-detail-tool-chevron.is-open { transform: none; }
+.space-detail-tool-chevron svg { width: 16px; height: 16px; }
+.space-detail-tool-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--border); }
+.space-detail-tool + .space-detail-tool { border-top: 1px solid var(--border); }
+.space-detail-tool-head { display: flex; align-items: center; gap: var(--s-8); width: 100%; padding: 8px 12px; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.space-detail-tool-head:hover { background: var(--bg-sunk); }
+.space-detail-tool-head.is-static { cursor: default; }
+.space-detail-tool-head.is-static:hover { background: transparent; }
+.space-detail-tool-name { min-width: 0; overflow-wrap: anywhere; }
+.space-detail-tool-head .ui-badge { margin-left: auto; flex: none; }
+.space-detail-tool-panel { display: grid; gap: var(--s-4); padding: 0 12px 12px 36px; }
+.space-detail-tool-text { margin: 0; font-size: 13px; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.space-detail-tool-effect { margin: 0; font-size: 12px; color: var(--text-3); }
 .space-detail-delete { color: var(--danger); margin-right: auto; }
 .space-delete-impact { margin: 0; padding-left: var(--s-16); font-size: 13px; color: var(--text-2); }

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { fetchSpace, type SpaceSummary, type SpaceTool } from "../spaces-api";
@@ -6,7 +6,7 @@ import { relativeTime } from "../format";
 import { Modal } from "../components/ui/Modal";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
-import { ClockIcon, EyeIcon, HeartIcon } from "../components/ui/Icons";
+import { ChevronDownIcon, ClockIcon, EyeIcon, HeartIcon } from "../components/ui/Icons";
 import { Cover, VISIBILITY } from "./SpaceTile";
 import { DeleteSpaceDialog } from "./DeleteSpaceDialog";
 import { effectLabel } from "./ToolList";
@@ -20,7 +20,90 @@ interface Props {
   onDeleted: (name: string) => void;
 }
 
-const COLLAPSED_TOOLS = 5;
+const EFFECT_SENTENCE: Record<string, string> = {
+  Reads: "Only reads data. Never changes anything.",
+  Writes: "Changes data in the connected app.",
+  "Deletes or changes": "Can delete or overwrite data.",
+};
+
+interface Counts {
+  read: number;
+  write: number;
+  delete: number;
+}
+
+function countEffects(tools: SpaceTool[]): Counts {
+  const c: Counts = { read: 0, write: 0, delete: 0 };
+  for (const t of tools) {
+    if (t.missing) continue;
+    const label = effectLabel(t).label;
+    if (label === "Reads") c.read++;
+    else if (label === "Writes") c.write++;
+    else c.delete++;
+  }
+  return c;
+}
+
+function ToolRow({ tool, panelId }: { tool: SpaceTool; panelId: string }) {
+  const [open, setOpen] = useState(false);
+  const effect = effectLabel(tool);
+  if (tool.missing) {
+    return (
+      <li className="space-detail-tool">
+        <div className="space-detail-tool-head is-static">
+          <span className="space-detail-tool-chevron" aria-hidden="true" />
+          <span className="wb-mono space-detail-tool-name">{tool.name}</span>
+          <Badge variant="neutral">Missing</Badge>
+        </div>
+      </li>
+    );
+  }
+  return (
+    <li className="space-detail-tool">
+      <button type="button" className="space-detail-tool-head" aria-expanded={open} aria-controls={panelId} onClick={() => setOpen((v) => !v)}>
+        <span className={`space-detail-tool-chevron${open ? " is-open" : ""}`} aria-hidden="true">
+          <ChevronDownIcon />
+        </span>
+        <span className="wb-mono space-detail-tool-name">{tool.name}</span>
+        <Badge variant={effect.variant}>{effect.label}</Badge>
+      </button>
+      {open && (
+        <div id={panelId} className="space-detail-tool-panel">
+          {tool.description && <p className="space-detail-tool-text">{tool.description}</p>}
+          <p className="space-detail-tool-effect">{EFFECT_SENTENCE[effect.label]}</p>
+        </div>
+      )}
+    </li>
+  );
+}
+
+function AppBox({ app, tools, defaultOpen, baseId }: { app: string; tools: SpaceTool[]; defaultOpen: boolean; baseId: string }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const c = countEffects(tools);
+  const bodyId = `${baseId}-body`;
+  return (
+    <div className="ui-box space-detail-app">
+      <button type="button" className="space-detail-app-head" aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen((v) => !v)}>
+        <span className={`space-detail-tool-chevron${open ? " is-open" : ""}`} aria-hidden="true">
+          <ChevronDownIcon />
+        </span>
+        <span className="space-detail-app-name">{app}</span>
+        <span className="space-detail-chips">
+          {c.read > 0 && <Badge variant="blue">{c.read} reads</Badge>}
+          {c.write > 0 && <Badge variant="orange">{c.write} writes</Badge>}
+          {c.delete > 0 && <Badge variant="red">{c.delete} deletes</Badge>}
+        </span>
+      </button>
+      {open && (
+        <ul id={bodyId} className="space-detail-tool-list">
+          {tools.map((t, i) => (
+            <ToolRow key={t.name} tool={t} panelId={`${baseId}-t${i}`} />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 function groupByApp(tools: SpaceTool[]): { app: string; tools: SpaceTool[] }[] {
   const groups = new Map<string, SpaceTool[]>();
@@ -40,12 +123,10 @@ export function SpaceDetailModal({ space, onClose, onToggleFavorite, onEditDetai
   const [deleting, setDeleting] = useState(false);
   const vis = VISIBILITY[space.visibility] ?? VISIBILITY.private;
   const detail = useQuery({ queryKey: ["space", space.name], queryFn: () => fetchSpace(space.name) });
-  const [showAll, setShowAll] = useState(false);
+  const baseId = useId();
   const allTools = detail.data?.tools ?? [];
-  // Group first so "the first five" follows the order the groups are shown in.
-  const ordered = groupByApp(allTools).flatMap((g) => g.tools);
-  const visible = new Set(showAll ? ordered : ordered.slice(0, COLLAPSED_TOOLS));
-  const groups = groupByApp(ordered.filter((t) => visible.has(t)));
+  const groups = groupByApp(allTools);
+  const totals = countEffects(allTools);
   const opened = space.mine && space.viewers_30d !== undefined ? space.viewers_30d : null;
 
   return (
@@ -128,32 +209,14 @@ export function SpaceDetailModal({ space, onClose, onToggleFavorite, onEditDetai
             <p className="space-muted">This Space uses no tools.</p>
           ) : (
             <>
-              {groups.map((g) => (
-                <div key={g.app} className="space-detail-app">
-                  <span className="space-detail-app-name">{g.app}</span>
-                  <ul className="space-detail-tool-rows">
-                    {g.tools.map((t) => {
-                      const effect = effectLabel(t);
-                      return (
-                        <li key={t.name} className="space-detail-tool-row">
-                          <span className="wb-mono space-detail-tool-name">{t.name}</span>
-                          {t.missing ? <Badge variant="neutral">Missing</Badge> : <Badge variant={effect.variant}>{effect.label}</Badge>}
-                          {t.description && (
-                            <span className="space-detail-tool-desc" title={t.description}>
-                              {t.description}
-                            </span>
-                          )}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
+              <div className="space-detail-tool-summary">
+                {totals.read > 0 && <Badge variant="blue">{totals.read} read</Badge>}
+                {totals.write > 0 && <Badge variant="orange">{totals.write} write</Badge>}
+                {totals.delete > 0 && <Badge variant="red">{totals.delete} delete</Badge>}
+              </div>
+              {groups.map((g, i) => (
+                <AppBox key={g.app} app={g.app} tools={g.tools} defaultOpen={i === 0 || groups.length <= 2} baseId={`${baseId}-a${i}`} />
               ))}
-              {ordered.length > COLLAPSED_TOOLS && (
-                <Button variant="outline" size="sm" aria-expanded={showAll} onClick={() => setShowAll((v) => !v)}>
-                  {showAll ? "Show fewer" : `Show all ${ordered.length} tools`}
-                </Button>
-              )}
             </>
           )}
         </section>
