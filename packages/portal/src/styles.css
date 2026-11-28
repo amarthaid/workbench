@@ -2001,6 +2001,8 @@ button.wb-app-cell-link:focus-visible { outline: none; }
 /* The Space detail modal: the cover enlarged, then the facts a tile has no room for. */
 .space-detail-modal { padding: 0; }
 .space-detail-modal .ui-modal-body { padding: var(--s-16) var(--s-24) 0; }
+.space-apply-bar { display: flex; align-items: center; justify-content: flex-end; gap: var(--s-8); width: 100%; }
+.space-apply-label { margin-right: auto; font-size: 13px; color: var(--text-3); }
 .space-detail-modal .ui-modal-foot { margin-top: var(--s-16); padding: 0 var(--s-24) var(--s-24); }
 /* The art is the header: edge to edge, the name on it, Close laid over its corner. */
 .ui-modal-hero { position: relative; }

@@ -457,58 +457,85 @@ describe("SpaceShell", () => {
     });
 
     describe("View tools", () => {
-      it("saves a change at once and the bridge uses the saved mode on the next call", async () => {
-        vi.mocked(setToolApprovals).mockResolvedValue({ tools: withModes(space().tools, { github_merge_pr: "auto" }) });
+      it("a toggle alone sends nothing and shows the Apply bar", async () => {
+        renderShell();
+        const dialog = await openTools();
+        expect(within(dialog).queryByRole("button", { name: "Apply" })).not.toBeInTheDocument();
+        choose("github_merge_pr", "Always allow");
+        expect(setToolApprovals).not.toHaveBeenCalled();
+        expect(within(dialog).getByText("Unsaved changes")).toBeInTheDocument();
+        expect(within(dialog).getByRole("button", { name: "Apply" })).toBeInTheDocument();
+        expect(within(dialog).getByRole("button", { name: "Discard" })).toBeInTheDocument();
+        expect(within(within(dialog).getByRole("group", { name: "Approval for github_merge_pr" })).getByRole("button", { name: "Always allow" })).toHaveAttribute("aria-pressed", "true");
+      });
+
+      it("Apply sends one request with every change, and the bridge uses the saved mode on the next call", async () => {
+        vi.mocked(setToolApprovals).mockResolvedValue({ tools: withModes(space().tools, { github_merge_pr: "auto", github_comment: "ask" }) });
         renderShell();
         const { send } = await handshake();
         const dialog = await openTools();
         choose("github_merge_pr", "Always allow");
-        await waitFor(() => expect(setToolApprovals).toHaveBeenCalledWith("pr-timeline", { github_merge_pr: "auto" }));
-        await waitFor(() =>
-          expect(within(within(dialog).getByRole("group", { name: "Approval for github_merge_pr" })).getByRole("button", { name: "Always allow" })).toHaveAttribute("aria-pressed", "true")
-        );
+        choose("github_comment", "Ask first");
+        fireEvent.click(within(dialog).getByRole("button", { name: "Apply" }));
+        await waitFor(() => expect(setToolApprovals).toHaveBeenCalledTimes(1));
+        expect(setToolApprovals).toHaveBeenCalledWith("pr-timeline", { github_merge_pr: "auto", github_comment: "ask" });
+        await waitFor(() => expect(within(dialog).queryByRole("button", { name: "Apply" })).not.toBeInTheDocument());
+        expect(within(within(dialog).getByRole("group", { name: "Approval for github_merge_pr" })).getByRole("button", { name: "Always allow" })).toHaveAttribute("aria-pressed", "true");
         fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
         await send("call", { integration: "github", tool: "merge_pr" });
         expect(callSpaceTool).toHaveBeenCalledWith("pr-timeline", { tool: "github_merge_pr" });
       });
 
-      it("two quick toggles end with the server's last answer, even if the answers arrive out of order", async () => {
-        const answers: Array<(v: { tools: SpaceDetail["tools"] }) => void> = [];
-        vi.mocked(setToolApprovals).mockImplementation(() => new Promise((resolve) => answers.push(resolve)));
+      it("a change that is undone is not unsaved", async () => {
         renderShell();
         const dialog = await openTools();
         choose("github_merge_pr", "Always allow");
         choose("github_merge_pr", "Ask first");
-        const pressed = (label: string) =>
-          within(within(dialog).getByRole("group", { name: "Approval for github_merge_pr" })).getByRole("button", { name: label });
-        // Whether the second request waits for the first or is already out, the
-        // later answer must be the one that stays.
-        const first = withModes(space().tools, { github_merge_pr: "auto" });
-        const last = withModes(space().tools, { github_merge_pr: "ask" });
-        await new Promise((r) => setTimeout(r, 0));
-        if (answers.length === 2) {
-          answers[1]({ tools: last });
-          answers[0]({ tools: first });
-        } else {
-          answers[0]({ tools: first });
-          await waitFor(() => expect(answers).toHaveLength(2));
-          answers[1]({ tools: last });
-        }
-        await waitFor(() => expect(setToolApprovals).toHaveBeenLastCalledWith("pr-timeline", { github_merge_pr: "ask" }));
-        await waitFor(() => expect(pressed("Ask first")).toHaveAttribute("aria-pressed", "true"));
-        // Nothing is left pending: the control follows the cache again.
-        await new Promise((r) => setTimeout(r, 20));
-        expect(pressed("Ask first")).toHaveAttribute("aria-pressed", "true");
-        expect(pressed("Always allow")).toHaveAttribute("aria-pressed", "false");
+        expect(within(dialog).queryByRole("button", { name: "Apply" })).not.toBeInTheDocument();
       });
 
-      it("shows a failed save's message", async () => {
+      it("Discard restores the saved choices and sends nothing", async () => {
+        renderShell();
+        const dialog = await openTools();
+        choose("github_merge_pr", "Always allow");
+        fireEvent.click(within(dialog).getByRole("button", { name: "Discard" }));
+        expect(setToolApprovals).not.toHaveBeenCalled();
+        expect(within(dialog).queryByRole("button", { name: "Apply" })).not.toBeInTheDocument();
+        expect(within(control("github_merge_pr")).getByRole("button", { name: "Ask first" })).toHaveAttribute("aria-pressed", "true");
+      });
+
+      it("closing the panel discards the draft", async () => {
+        renderShell();
+        const dialog = await openTools();
+        choose("github_merge_pr", "Always allow");
+        fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+        expect(setToolApprovals).not.toHaveBeenCalled();
+        fireEvent.click(screen.getByRole("button", { name: "Menu" }));
+        fireEvent.click(screen.getByRole("menuitem", { name: "View tools" }));
+        const again = await screen.findByRole("dialog");
+        expect(within(again).queryByRole("button", { name: "Apply" })).not.toBeInTheDocument();
+        expect(within(control("github_merge_pr")).getByRole("button", { name: "Ask first" })).toHaveAttribute("aria-pressed", "true");
+      });
+
+      it("Allow all is a draft too: nothing is sent until Apply", async () => {
+        vi.mocked(setToolApprovals).mockResolvedValue({ tools: space().tools });
+        renderShell();
+        const dialog = await openTools();
+        fireEvent.click(within(dialog).getByRole("switch", { name: "Allow all for GitHub" }));
+        expect(setToolApprovals).not.toHaveBeenCalled();
+        fireEvent.click(within(dialog).getByRole("button", { name: "Apply" }));
+        await waitFor(() => expect(setToolApprovals).toHaveBeenCalledTimes(1));
+      });
+
+      it("shows a failed apply's message and keeps the draft", async () => {
         vi.mocked(setToolApprovals).mockRejectedValue(new SpaceApiError(500, { code: "UPSTREAM_ERROR", message: "Could not save." }));
         renderShell();
         const dialog = await openTools();
         choose("github_merge_pr", "Always allow");
+        fireEvent.click(within(dialog).getByRole("button", { name: "Apply" }));
         expect(await within(dialog).findByText("Could not save.")).toBeInTheDocument();
-        expect(within(control("github_merge_pr")).getByRole("button", { name: "Ask first" })).toHaveAttribute("aria-pressed", "true");
+        expect(within(dialog).getByRole("button", { name: "Apply" })).toBeInTheDocument();
+        expect(within(control("github_merge_pr")).getByRole("button", { name: "Always allow" })).toHaveAttribute("aria-pressed", "true");
       });
 
       it("a delegated viewer sees badges only", async () => {

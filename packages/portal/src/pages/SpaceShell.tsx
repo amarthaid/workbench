@@ -167,31 +167,30 @@ function SpaceRunner({
 }) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
-  // Choices being saved, shown until the server's answer replaces them.
-  const [saving, setSaving] = useState<Record<string, ApprovalMode>>({});
+  // Choices made in View tools but not applied yet. Nothing is sent until Apply.
+  const [draft, setDraft] = useState<Record<string, ApprovalMode>>({});
+  const [applying, setApplying] = useState(false);
   const [approvalError, setApprovalError] = useState<string | null>(null);
-  // Saves run one at a time, in the order they were made, so the last answer
-  // the server gives is the last one written to the cache.
-  const saveChain = useRef<Promise<void>>(Promise.resolve());
-  const pendingSaves = useRef(0);
-  const changeApprovals = (change: Record<string, ApprovalMode>) => {
+  const pendingChange = changedApprovals(space.tools, draft);
+  const dirty = Object.keys(pendingChange).length > 0;
+  const discardDraft = () => {
+    setDraft({});
     setApprovalError(null);
-    setSaving((prev) => ({ ...prev, ...change }));
-    pendingSaves.current += 1;
-    saveChain.current = saveChain.current.then(async () => {
-      try {
-        const saved = await setToolApprovals(space.name, change);
-        // The bridge reads the cached detail on its next call.
-        queryClient.setQueryData<SpaceDetail>(["space", space.name], (d) => (d ? { ...d, tools: saved.tools } : d));
-      } catch (e) {
-        setApprovalError(e instanceof Error ? e.message : "Could not save that change.");
-      } finally {
-        // The choices stay on screen until the last pending save has answered.
-        pendingSaves.current -= 1;
-        if (pendingSaves.current === 0) setSaving({});
-      }
-    });
-    return saveChain.current;
+  };
+  const applyDraft = async () => {
+    if (!dirty || applying) return;
+    setApprovalError(null);
+    setApplying(true);
+    try {
+      const saved = await setToolApprovals(space.name, pendingChange);
+      // The bridge reads the cached detail on its next call.
+      queryClient.setQueryData<SpaceDetail>(["space", space.name], (d) => (d ? { ...d, tools: saved.tools } : d));
+      setDraft({});
+    } catch (e) {
+      setApprovalError(e instanceof Error ? e.message : "Could not save that change.");
+    } finally {
+      setApplying(false);
+    }
   };
   const frameRef = useRef<HTMLIFrameElement>(null);
   // Fixed at mount: a refetch mints a new sig, and changing src would reload
@@ -377,7 +376,30 @@ function SpaceRunner({
 
       <ConfirmActionModal request={pending?.request ?? null} onAllow={() => settle(true)} onDeny={() => settle(false)} />
 
-      <Modal open={toolsOpen} onClose={() => setToolsOpen(false)} title="Tools this Space can use" size="lg">
+      <Modal
+        open={toolsOpen}
+        // Closing leaves the changes unsaved: the draft is dropped.
+        onClose={() => {
+          if (applying) return;
+          setToolsOpen(false);
+          discardDraft();
+        }}
+        title="Tools this Space can use"
+        size="lg"
+        footer={
+          dirty ? (
+            <div className="space-apply-bar" role="group" aria-label="Unsaved changes">
+              <span className="space-apply-label">Unsaved changes</span>
+              <Button variant="outline" onClick={discardDraft} disabled={applying}>
+                Discard
+              </Button>
+              <Button onClick={() => void applyDraft()} disabled={applying}>
+                {applying ? "Applying..." : "Apply"}
+              </Button>
+            </div>
+          ) : undefined
+        }
+      >
         {space.mine && space.delegate_access && (
           <p className="space-muted">
             Viewers follow these settings. Changing an action to Always allow asks each viewer to approve again.
@@ -387,8 +409,8 @@ function SpaceRunner({
         <SpaceToolList
           tools={space.tools}
           hideConnection={runsAsOwner(space)}
-          approvals={runsAsOwner(space) ? undefined : saving}
-          onApprovalChange={runsAsOwner(space) ? undefined : (change) => void changeApprovals(change)}
+          approvals={runsAsOwner(space) ? undefined : draft}
+          onApprovalChange={runsAsOwner(space) ? undefined : (change) => setDraft((prev) => ({ ...prev, ...change }))}
         />
       </Modal>
 
