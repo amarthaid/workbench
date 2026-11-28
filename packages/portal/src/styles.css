@@ -1462,8 +1462,6 @@ body {
 .space-tile-heart.is-on { color: var(--accent); }
 .space-tile-large .space-tile-icon-button { color: #fff; background: rgba(0, 0, 0, .28); }
 .space-tile-large .space-tile-icon-button:hover { background: rgba(0, 0, 0, .46); color: #fff; }
-.space-tile-menu { position: relative; }
-.space-tile-menu-list { right: 0; }
 .space-tile-count { font-variant-numeric: tabular-nums; }
 /* The audience badge as a control, on tiles the person owns. It sits above the
    stretched link so a click opens Sharing instead of the Space. */
@@ -1824,3 +1822,34 @@ body {
 .space-allow-all-row { display: inline-flex; align-items: center; gap: var(--s-8); font-size: 13px; }
 .space-allow-all-row-top { display: flex; justify-content: flex-end; }
 .space-tool-tags { align-items: center; }
+
+/* The Space detail modal: the cover enlarged, then the facts a tile has no room for. */
+.space-detail-modal .ui-modal-title { overflow-wrap: anywhere; }
+.space-detail-hero { height: 140px; margin-bottom: var(--s-12); border-radius: var(--radius); overflow: hidden; }
+.space-detail-hero .space-cover { justify-content: flex-start; padding-left: var(--s-24); }
+.space-detail-hero .space-cover-initial { font-size: 64px; }
+.space-detail-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-8); margin-bottom: var(--s-8); }
+.space-detail-desc { margin: 0 0 var(--s-12); color: var(--text-2); font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.space-detail-facts { display: grid; grid-template-columns: max-content 1fr; gap: var(--s-4) var(--s-16); margin: 0 0 var(--s-16); font-size: 13px; }
+.space-detail-facts dt { color: var(--text-3); }
+.space-detail-facts dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+.space-detail-heart {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-4);
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-3);
+  font: inherit;
+  cursor: pointer;
+}
+.space-detail-heart:hover { color: var(--text); }
+.space-detail-heart:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.space-detail-heart.is-on { color: var(--accent); }
+.space-detail-subhead { margin: 0 0 var(--s-8); font-size: 12px; font-weight: 600; color: var(--text-2); }
+.space-detail-app { margin-bottom: var(--s-8); }
+.space-detail-app-name { font-size: 13px; font-weight: 600; color: var(--text); }
+.space-detail-tool-names { display: flex; flex-wrap: wrap; gap: var(--s-4) var(--s-12); margin: var(--s-2) 0 0; padding: 0; list-style: none; font-size: 12px; color: var(--text-2); }
+.space-detail-delete { color: var(--danger); margin-right: auto; }
+.space-delete-impact { margin: 0; padding-left: var(--s-16); font-size: 13px; color: var(--text-2); }
