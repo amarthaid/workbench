@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { compareApps } from "../app-order";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -73,7 +74,8 @@ export default function Home() {
     return new Set(rows.filter((c) => c.connected).map((c) => c.name));
   }, [connectionsData]);
 
-  const connectedApps = integrations.filter((i) => connectedNames.has(i.name));
+  // Connectable apps lead, then custom apps, built-in tools last, so the few tiles shown are the useful ones.
+  const connectedApps = integrations.filter((i) => connectedNames.has(i.name)).sort(compareApps);
   const appsError = registryIsError || connectionsIsError;
   const appsLoading = registryLoading || connectionsLoading;
 
