@@ -22,7 +22,7 @@ interface Props {
 }
 
 /** The generated cover, with the Space's initial on it. Decorative: the title is the label. */
-export function Cover({ space, showInitial = true }: { space: SpaceSummary; showInitial?: boolean }) {
+export function Cover({ space, showInitial = true }: { space: Pick<SpaceSummary, "name" | "title">; showInitial?: boolean }) {
   const c = coverFor(space.name);
   return (
     <span
@@ -34,6 +34,12 @@ export function Cover({ space, showInitial = true }: { space: SpaceSummary; show
       {showInitial && <span className="space-cover-initial">{coverInitial(space.title)}</span>}
     </span>
   );
+}
+
+/** "Delegated" while the Space runs with its owner's connections, "Delegated, paused" while it waits for the owner to confirm. Nothing otherwise. */
+export function DelegatedBadge({ space }: { space: SpaceSummary }) {
+  if (space.delegation_suspended) return <Badge variant="neutral">Delegated, paused</Badge>;
+  return space.delegate_access ? <Badge variant="orange">Delegated</Badge> : null;
 }
 
 export function SpaceTile({ space, size, isNew, onToggleFavorite, onOpen, onEditSharing }: Props) {
@@ -94,11 +100,7 @@ export function SpaceTile({ space, size, isNew, onToggleFavorite, onOpen, onEdit
           ) : (
             <Badge variant={vis.variant}>{vis.label}</Badge>
           )}
-          {space.delegation_suspended ? (
-            <Badge variant="neutral">Delegated, paused</Badge>
-          ) : (
-            space.delegate_access && <Badge variant="orange">Delegated</Badge>
-          )}
+          <DelegatedBadge space={space} />
         </span>
       </div>
     </article>

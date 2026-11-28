@@ -21,6 +21,7 @@ import { DataTable } from "../ui/DataTable";
 import { EmptyState } from "../ui/EmptyState";
 import { Input } from "../ui/Input";
 import { Modal } from "../ui/Modal";
+import { RowAction } from "../ui/RowActions";
 import { Segmented } from "../ui/Segmented";
 import { ADMIN_STALE_MS, CardBody } from "./CardBody";
 
@@ -247,8 +248,8 @@ export default function UsersTab() {
                   <Fragment key={u.id}>
                   <tr>
                     <td>{label(u)}</td>
-                    <td>{dayLabel(u.created_at)}</td>
-                    <td>{u.last_activity ? relativeTime(u.last_activity) : "—"}</td>
+                    <td className="wb-col-date">{dayLabel(u.created_at)}</td>
+                    <td className="wb-col-date">{u.last_activity ? relativeTime(u.last_activity) : "—"}</td>
                     <td className="ui-num">{u.connection_count}</td>
                     <td className="ui-num">{u.custom_app_count}</td>
                     <td>{u.has_api_key ? "Yes" : "—"}</td>
@@ -258,47 +259,41 @@ export default function UsersTab() {
                       </Badge>
                     </td>
                     <td>
-                      <div className="wb-toolbar-form">
-                        <Button
-                          variant={open ? "secondary" : "outline"}
-                          size="sm"
+                      <div className="wb-user-actions">
+                        <RowAction
                           aria-expanded={open}
                           aria-controls={open ? `perm-${u.id}` : undefined}
                           aria-label={`Permissions for ${label(u)}`}
                           onClick={() => setExpanded(open ? null : u.id)}
                         >
                           Permissions
-                        </Button>
+                        </RowAction>
                         {u.has_api_key && (
-                          <Button
-                            variant="outline"
-                            size="sm"
+                          <RowAction
+                            danger
                             aria-label={`Revoke key for ${label(u)}`}
                             onClick={() => setConfirm({ kind: "revoke", user: u })}
                           >
                             Revoke key
-                          </Button>
+                          </RowAction>
                         )}
                         {(pending || disabled) && (
-                          <Button
-                            variant="outline"
-                            size="sm"
+                          <RowAction
                             aria-label={`${pending ? "Approve" : "Enable"} ${label(u)}`}
                             disabled={act.isPending}
                             onClick={() => act.mutate({ kind: "enable", id: u.id })}
                           >
                             {pending ? "Approve" : "Enable"}
-                          </Button>
+                          </RowAction>
                         )}
                         {!disabled && u.id !== me?.id && (
-                          <Button
-                            variant="danger"
-                            size="sm"
+                          <RowAction
+                            danger
                             aria-label={`Disable ${label(u)}`}
                             onClick={() => setConfirm({ kind: "disable", user: u })}
                           >
                             Disable
-                          </Button>
+                          </RowAction>
                         )}
                       </div>
                     </td>

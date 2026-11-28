@@ -3,6 +3,7 @@ import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import Home from "./Home";
+import type { SpaceSummary } from "../spaces-api";
 
 vi.mock("../api", () => ({
   fetchStats: vi.fn(),
@@ -13,6 +14,13 @@ vi.mock("../api", () => ({
   UNSTORED_MESSAGE: "This deployment sends audit events somewhere other than its database, so there is nothing to show here. Add db to AUDIT_LOG_DEST (the default) to record them.",
 }));
 
+vi.mock("../spaces-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../spaces-api")>()),
+  fetchSpaces: vi.fn(),
+  fetchSpace: vi.fn(),
+  setSpaceFavorite: vi.fn(),
+}));
+import { fetchSpaces, fetchSpace } from "../spaces-api";
 import { fetchStats, fetchActivity, fetchIntegrations, fetchConnections, fetchVaultSecrets } from "../api";
 
 const NOW = Math.floor(Date.now() / 1000);
@@ -21,6 +29,20 @@ const INTEGRATIONS = [
   { name: "acme", displayName: "Acme", version: "1.0.0", toolCount: 4, logo: "/logos/acme.svg" },
   { name: "demo-repo", displayName: "Demo Repo", version: "1.0.0", toolCount: 9 },
 ];
+
+function space(over: Partial<SpaceSummary> & { name: string; title: string }): SpaceSummary {
+  return {
+    description: null,
+    ownerEmail: "teammate@example.com",
+    visibility: "org",
+    updatedAt: Date.now() - 20 * 86_400_000,
+    mine: false,
+    favorited: false,
+    favorite_count: 0,
+    last_opened_at: null,
+    ...over,
+  };
+}
 
 function renderPage() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -39,6 +61,12 @@ function renderPage() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(fetchSpaces).mockResolvedValue([
+    space({ name: "pr-timeline", title: "PR timeline", favorited: true, mine: true, ownerEmail: "owner@example.com" }),
+    space({ name: "drive-upload", title: "Drive upload", last_opened_at: Date.now() - 3_600_000 }),
+    space({ name: "old-board", title: "Old board" }),
+  ]);
+  vi.mocked(fetchSpace).mockResolvedValue({ tools: [], users: [] } as never);
   vi.mocked(fetchIntegrations).mockResolvedValue({ integrations: INTEGRATIONS });
   vi.mocked(fetchConnections).mockResolvedValue({ connections: [{ name: "acme", connected: true }] });
   vi.mocked(fetchVaultSecrets).mockResolvedValue([
@@ -89,13 +117,13 @@ describe("Home", () => {
     // Wait for the connected app itself, not the always-present label — the
     // label renders before /api/connections and /api/integrations resolve,
     // so waiting on it would read the pre-load default instead of "1".
-    await screen.findByRole("link", { name: "Acme" });
+    await screen.findByRole("button", { name: /^Acme/ });
     expect(statValue("Connected apps")).toBe("1");
   });
 
   it("lists connected apps and links to the registry", async () => {
     renderPage();
-    expect(await screen.findByText("4 tools")).toBeInTheDocument();
+    expect(await screen.findByText(/4 tools/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Browse all" })).toHaveAttribute("href", "/apps");
   });
 
@@ -180,5 +208,53 @@ describe("Home", () => {
     vi.mocked(fetchVaultSecrets).mockRejectedValueOnce(new Error("Failed to load vault"));
     renderPage();
     expect(await screen.findByText("Couldn't load vault.")).toBeInTheDocument();
+  });
+
+  it("shows skeletons, never zeros or the empty message, while the data is on its way", async () => {
+    const never = new Promise<never>(() => {});
+    vi.mocked(fetchStats).mockReturnValue(never);
+    vi.mocked(fetchActivity).mockReturnValue(never);
+    vi.mocked(fetchIntegrations).mockReturnValue(never);
+    vi.mocked(fetchConnections).mockReturnValue(never);
+    vi.mocked(fetchSpaces).mockReturnValue(never);
+    renderPage();
+    expect(screen.queryByText("No apps connected yet.")).not.toBeInTheDocument();
+    expect(screen.queryByText("No tool calls recorded yet.")).not.toBeInTheDocument();
+    expect(screen.queryByText("No Spaces yet.")).not.toBeInTheDocument();
+    for (const label of ["Tool calls (30d)", "Success rate (30d)", "Most used app", "Connected apps"]) {
+      expect(statValue(label)).toBe("");
+      expect(screen.getByText(label).closest(".ui-stat")!.querySelector('[role="status"]')).not.toBeNull();
+    }
+    // One skeleton each for the apps, Spaces and activity lists.
+    expect(screen.getAllByRole("status", { name: "Loading" }).length).toBeGreaterThanOrEqual(3 + 4);
+  });
+
+  it("shows your apps as the same compact tiles as the Apps page", async () => {
+    renderPage();
+    const tile = (await screen.findByRole("button", { name: /^Acme/ })).closest(".wb-app-cell")!;
+    expect(tile).toHaveTextContent("4 tools");
+    expect(tile).toHaveTextContent("Connected");
+  });
+
+  it("shows a Your Spaces row with the first gallery tiles and opens the Space detail", async () => {
+    renderPage();
+    const heading = await screen.findByRole("heading", { name: "Your Spaces" });
+    const box = heading.closest("section")!;
+    await waitFor(() => expect(box.querySelectorAll(".space-tile-compact").length).toBe(3));
+    // As the gallery orders them: favorites, then recently opened, then the rest.
+    expect(Array.from(box.querySelectorAll(".space-tile-link")).map((a) => a.textContent)).toEqual([
+      "PR timeline",
+      "Drive upload",
+      "Old board",
+    ]);
+    expect(screen.getByRole("link", { name: "Browse all Spaces" })).toHaveAttribute("href", "/spaces");
+    fireEvent.click(screen.getByRole("button", { name: "Drive upload" }));
+    expect(await screen.findByRole("dialog")).toHaveTextContent("Drive upload");
+  });
+
+  it("says so when there are no Spaces, after loading", async () => {
+    vi.mocked(fetchSpaces).mockResolvedValue([]);
+    renderPage();
+    expect(await screen.findByText("No Spaces yet.")).toBeInTheDocument();
   });
 });

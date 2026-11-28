@@ -7,7 +7,7 @@ import { Modal } from "../components/ui/Modal";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { ClockIcon, EyeIcon, HeartIcon } from "../components/ui/Icons";
-import { Cover, VISIBILITY } from "./SpaceTile";
+import { Cover, DelegatedBadge, VISIBILITY } from "./SpaceTile";
 import { DeleteSpaceDialog } from "./DeleteSpaceDialog";
 import { ToolsAccordion } from "../components/ToolsAccordion";
 
@@ -44,7 +44,10 @@ export function SpaceDetailModal({ space, onClose, onToggleFavorite, onEditDetai
           <div className="space-detail-hero">
             <Cover space={space} showInitial={false} />
             <div className="space-detail-hero-text">
-              <Badge variant={vis.variant}>{vis.label}</Badge>
+              <span className="space-detail-chips">
+                <Badge variant={vis.variant}>{vis.label}</Badge>
+                <DelegatedBadge space={space} />
+              </span>
               <h2 className="space-detail-hero-title">{space.title}</h2>
               <p className="space-detail-credit">
                 <span className="space-detail-avatar" aria-hidden="true">

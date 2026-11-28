@@ -1,8 +1,8 @@
 /* Admin Spaces tab: mini cards built from the shared tokens. */
 .admin-spaces-bar { max-width: 360px; }
 .admin-spaces-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--s-16); align-items: start; }
-.admin-space { display: grid; gap: var(--s-8); padding: var(--s-16); background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); min-width: 0; }
+.admin-space { display: grid; grid-template-columns: 8px minmax(0, 1fr); background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); min-width: 0; overflow: hidden; }
 .admin-space-head { display: grid; gap: 2px; }
 .admin-space-title { font-size: 15px; margin: 0; overflow-wrap: anywhere; }
 .admin-space-name { font-size: 12px; color: var(--text-3); overflow-wrap: anywhere; }
@@ -18,3 +18,8 @@
 .admin-space-openers li { display: flex; justify-content: space-between; gap: var(--s-8); overflow-wrap: anywhere; }
 .admin-space-when { color: var(--text-3); white-space: nowrap; }
 .admin-spaces-more { display: flex; justify-content: center; margin-top: var(--s-16); }
+
+/* The generated cover as a thin band down the card's left edge. */
+.admin-space-cover { display: flex; }
+.admin-space-cover .space-cover { flex: 1; border-radius: 0; }
+.admin-space-body { display: grid; gap: var(--s-8); padding: var(--s-16); min-width: 0; }

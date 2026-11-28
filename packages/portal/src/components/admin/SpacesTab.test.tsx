@@ -154,4 +154,14 @@ describe("SpacesTab", () => {
     renderWithClient(<SpacesTab />);
     expect(await screen.findByText("Couldn't load Spaces.")).toBeInTheDocument();
   });
+
+  it("puts the generated cover on the card as a thin left band", async () => {
+    renderWithClient(<SpacesTab />);
+    const card = (await screen.findByText("Release desk")).closest("article")!;
+    expect(card).toHaveClass("admin-space");
+    const cover = card.querySelector(".admin-space-cover .space-cover");
+    expect(cover).not.toBeNull();
+    // A band, not a tile: no initial letter on it.
+    expect(cover!.querySelector(".space-cover-initial")).toBeNull();
+  });
 });

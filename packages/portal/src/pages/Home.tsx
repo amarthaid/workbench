@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   fetchStats,
@@ -10,34 +10,41 @@ import {
   UNSTORED_MESSAGE,
   type IntegrationSummary,
 } from "../api";
+import { fetchSpaces } from "../spaces-api";
 import { MCP_URL } from "../mcp-config";
 import { PageHeader } from "../components/ui/PageHeader";
 import { StatStrip } from "../components/ui/StatStrip";
 import { Box, BoxRow } from "../components/ui/Box";
 import { EmptyState } from "../components/ui/EmptyState";
-import { Badge } from "../components/ui/Badge";
+import { ListSkeleton } from "../components/ui/ListSkeleton";
 import { Button } from "../components/ui/Button";
 import { CheckIcon, CopyIcon } from "../components/ui/Icons";
 import IntegrationLogo from "../components/IntegrationLogo";
+import { AppCell } from "../components/AppCell";
+import { arrangeSpaces } from "../spaces/arrange";
+import { useSpaceGallery } from "../spaces/useSpaceGallery";
 import { ActivityTable, integrationLookup } from "../components/ActivityTable";
 
 const RECENT_LIMIT = 10;
 const APPS_SHOWN = 8;
+const SPACES_SHOWN = 6;
 
 export default function Home() {
-  const { data: stats } = useQuery({ queryKey: ["stats"], queryFn: fetchStats });
+  const navigate = useNavigate();
+  const { data: stats, isLoading: statsLoading } = useQuery({ queryKey: ["stats"], queryFn: fetchStats });
   const {
     data: recent,
     isError: recentIsError,
+    isLoading: recentLoading,
   } = useQuery({
     queryKey: ["activity", { limit: RECENT_LIMIT }],
     queryFn: () => fetchActivity({ limit: RECENT_LIMIT }),
   });
-  const { data: registry, isError: registryIsError } = useQuery({
+  const { data: registry, isError: registryIsError, isLoading: registryLoading } = useQuery({
     queryKey: ["integrations"],
     queryFn: fetchIntegrations,
   });
-  const { data: connectionsData, isError: connectionsIsError } = useQuery({
+  const { data: connectionsData, isError: connectionsIsError, isLoading: connectionsLoading } = useQuery({
     queryKey: ["connections"],
     queryFn: fetchConnections,
   });
@@ -46,6 +53,18 @@ export default function Home() {
     queryKey: ["vault"],
     queryFn: fetchVaultSecrets,
   });
+
+  const {
+    data: spacesData,
+    isError: spacesIsError,
+    isLoading: spacesLoading,
+  } = useQuery({ queryKey: ["spaces"], queryFn: fetchSpaces });
+  const spaces = spacesData ?? [];
+  const { tile, modals } = useSpaceGallery(spaces);
+  const topSpaces = useMemo(() => {
+    const { favorites, recent: opened, rest } = arrangeSpaces(spaces);
+    return [...favorites, ...opened, ...rest].slice(0, SPACES_SHOWN);
+  }, [spaces]);
 
   const integrations: IntegrationSummary[] = registry?.integrations ?? [];
 
@@ -56,6 +75,7 @@ export default function Home() {
 
   const connectedApps = integrations.filter((i) => connectedNames.has(i.name));
   const appsError = registryIsError || connectionsIsError;
+  const appsLoading = registryLoading || connectionsLoading;
 
   const appFor = useMemo(() => integrationLookup(integrations), [integrations]);
 
@@ -72,15 +92,18 @@ export default function Home() {
           stats={[
             {
               label: "Tool calls (30d)",
+              loading: statsLoading,
               value: stored ? (stats?.tool_calls ?? 0).toLocaleString("en-US") : "—",
             },
             {
               // A null rate means nothing ran, which is not the same as 0%.
               label: "Success rate (30d)",
+              loading: statsLoading,
               value: stored && rate !== null && rate !== undefined ? `${Math.round(rate * 100)}%` : "—",
             },
             {
               label: "Most used app",
+              loading: statsLoading || registryLoading,
               value:
                 stored && stats?.most_used_integration ? (
                   <span className="ui-stat-value-app">
@@ -100,31 +123,47 @@ export default function Home() {
                   "—"
                 ),
             },
-            { label: "Connected apps", value: String(connectedApps.length) },
+            { label: "Connected apps", value: String(connectedApps.length), loading: appsLoading },
           ]}
         />
 
         <Box title="Your apps" action={<Link to="/apps">Browse all</Link>}>
           {appsError ? (
             <div className="ui-form-error">Couldn't load apps.</div>
+          ) : appsLoading ? (
+            <ListSkeleton rows={2} />
           ) : connectedApps.length === 0 ? (
             <EmptyState message="No apps connected yet." action={<Link to="/apps">Browse apps</Link>} />
           ) : (
-            <>
-              {connectedApps.slice(0, APPS_SHOWN).map((i) => (
-                <BoxRow key={i.name}>
-                  <IntegrationLogo name={i.name} displayName={i.displayName} logo={i.logo} size={20} />
-                  <Link to={`/apps/${i.name}`}>{i.displayName || i.name}</Link>
-                  <span className="wb-app-cell-meta">{i.toolCount} tools</span>
-                  <span className="wb-app-cell-action"><Badge variant="green">Connected</Badge></span>
-                </BoxRow>
-              ))}
-              {connectedApps.length > APPS_SHOWN && (
-                <BoxRow>
-                  <Link to="/apps">+{connectedApps.length - APPS_SHOWN} more</Link>
-                </BoxRow>
-              )}
-            </>
+            <div className="wb-box-tiles">
+              <div className="wb-app-grid">
+                {connectedApps.slice(0, APPS_SHOWN).map((i) => (
+                  <AppCell
+                    key={i.name}
+                    integration={i}
+                    connected
+                    busy={false}
+                    onOpen={() => navigate(`/apps/${i.name}`)}
+                    onConnect={() => {}}
+                  />
+                ))}
+              </div>
+              {connectedApps.length > APPS_SHOWN && <Link to="/apps">+{connectedApps.length - APPS_SHOWN} more</Link>}
+            </div>
+          )}
+        </Box>
+
+        <Box title="Your Spaces" action={<Link to="/spaces" aria-label="Browse all Spaces">Browse all</Link>}>
+          {spacesIsError ? (
+            <div className="ui-form-error">Couldn't load Spaces.</div>
+          ) : spacesLoading ? (
+            <ListSkeleton rows={2} />
+          ) : topSpaces.length === 0 ? (
+            <EmptyState message="No Spaces yet." action={<Link to="/spaces">About Spaces</Link>} />
+          ) : (
+            <div className="wb-box-tiles">
+              <div className="space-grid">{topSpaces.map((s) => tile(s, "compact"))}</div>
+            </div>
           )}
         </Box>
 
@@ -160,6 +199,8 @@ export default function Home() {
         <Box title="Recent activity" action={<Link to="/activity">View all</Link>}>
           {recentIsError ? (
             <div className="ui-form-error">Couldn't load activity.</div>
+          ) : recentLoading ? (
+            <ListSkeleton rows={3} />
           ) : recent && !recent.stored ? (
             <EmptyState message={UNSTORED_MESSAGE} />
           ) : (recent?.events.length ?? 0) === 0 ? (
@@ -169,6 +210,7 @@ export default function Home() {
           )}
         </Box>
       </div>
+      {modals}
     </>
   );
 }

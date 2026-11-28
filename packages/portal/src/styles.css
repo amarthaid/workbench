@@ -2061,3 +2061,22 @@ button.wb-app-cell-link:focus-visible { outline: 2px solid var(--accent); outlin
 .space-detail-tool-effect { margin: 0; font-size: 12px; color: var(--text-3); }
 .space-detail-delete { color: var(--danger); margin-right: auto; }
 .space-delete-impact { margin: 0; padding-left: var(--s-16); font-size: 13px; color: var(--text-2); }
+
+/* --- Home, Settings and admin fixes --- */
+.space-detail-chips { display: flex; flex-wrap: wrap; gap: var(--s-4); }
+.wb-box-tiles { display: grid; gap: var(--s-8); padding: var(--s-12); }
+.ui-stat-skeleton {
+  display: inline-block;
+  width: 56px;
+  height: 20px;
+  vertical-align: middle;
+  background: var(--bg-sunk);
+  border-radius: var(--radius-sm);
+  animation: ui-list-pulse 1.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) { .ui-stat-skeleton { animation: none; } }
+/* Dates stay on one line: a fixed width wide enough for "Nov 28, 2026" and "3 months ago". */
+.wb-col-date { width: 120px; white-space: nowrap; }
+/* The row actions wrap inside the card instead of pushing the table wider. */
+.wb-user-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--s-4); }
+.ui-table td:has(> .wb-user-actions) { min-width: 0; }
