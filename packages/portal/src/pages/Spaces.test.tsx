@@ -289,18 +289,18 @@ describe("the Space detail modal", () => {
     expect(screen.queryByRole("button", { name: /Manage/ })).not.toBeInTheDocument();
   });
 
-  it("shows the owner Edit details, Edit sharing and Delete Space, and a viewer only Open and the heart", async () => {
+  it("shows the owner Edit sharing and Delete Space, and a viewer only Open and the heart", async () => {
     vi.mocked(fetchSpaces).mockResolvedValue([space({ name: "a", title: "Owned", mine: true }), space({ name: "b", title: "Theirs" })]);
     renderPage();
     const own = await openDetail("Owned");
-    for (const n of ["Edit details", "Edit sharing", "Delete Space"]) expect(within(own).getByRole("button", { name: n })).toBeInTheDocument();
+    for (const n of ["Edit sharing", "Delete Space"]) expect(within(own).getByRole("button", { name: n })).toBeInTheDocument();
     fireEvent.click(within(own).getByRole("button", { name: "Close" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
     const theirs = await openDetail("Theirs");
     expect(within(theirs).getByRole("link", { name: "Open" })).toBeInTheDocument();
     expect(within(theirs).getByRole("button", { name: "Favorite Theirs" })).toBeInTheDocument();
-    for (const n of ["Edit details", "Edit sharing", "Delete Space"]) expect(within(theirs).queryByRole("button", { name: n })).not.toBeInTheDocument();
+    for (const n of ["Edit sharing", "Delete Space"]) expect(within(theirs).queryByRole("button", { name: n })).not.toBeInTheDocument();
   });
 
   it("shows tool names grouped by app once the detail loads, and the rest at once", async () => {
@@ -576,40 +576,32 @@ describe("the Space detail modal", () => {
     expect(setSpaceFavorite).toHaveBeenCalledWith("a", true);
   });
 
-  it("Edit details closes the detail and edits the title, and the tile updates without a reload", async () => {
+  it("edits the title in place in the detail, and the tile updates without a reload", async () => {
     vi.mocked(fetchSpaces).mockResolvedValue([space({ name: "a", title: "Old title", description: "Old words", mine: true })]);
     vi.mocked(updateSpaceDetails).mockResolvedValue({ title: "New title", description: null, updatedAt: 1 });
     renderPage();
     const detail = await openDetail("Old title");
-    fireEvent.click(within(detail).getByRole("button", { name: "Edit details" }));
+    fireEvent.click(within(detail).getByRole("button", { name: "Edit title" }));
+    fireEvent.change(within(detail).getByRole("textbox", { name: "Title" }), { target: { value: "  New title  " } });
+    fireEvent.keyDown(within(detail).getByRole("textbox", { name: "Title" }), { key: "Enter" });
 
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByLabelText("Title")).toBeInTheDocument();
-    const save = within(dialog).getByRole("button", { name: "Save" });
-    expect(save).toBeDisabled();
-    fireEvent.change(within(dialog).getByLabelText("Title"), { target: { value: "  New title  " } });
-    fireEvent.change(within(dialog).getByLabelText("Description"), { target: { value: "" } });
-    fireEvent.click(save);
-
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(updateSpaceDetails).toHaveBeenCalledWith("a", { title: "New title", description: "" });
-    expect(screen.getByRole("button", { name: "New title" })).toBeInTheDocument();
-    expect(tileOf("New title")).not.toHaveTextContent("Old words");
+    await waitFor(() => expect(updateSpaceDetails).toHaveBeenCalledWith("a", { title: "New title", description: "Old words" }));
+    expect(await within(detail).findByRole("button", { name: "Edit title" })).toHaveTextContent("New title");
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(within(tileOf("New title")).getByRole("button", { name: "New title" })).toBeInTheDocument();
   });
 
-  it("will not save an empty title, and shows the server's reason when it refuses", async () => {
-    vi.mocked(fetchSpaces).mockResolvedValue([space({ name: "a", title: "Keep", mine: true })]);
-    const { SpaceApiError } = await import("../spaces-api");
-    vi.mocked(updateSpaceDetails).mockRejectedValue(new SpaceApiError(409, { code: "CONFLICT", message: "changed" }));
+  it("clears the description in place and the tile drops it", async () => {
+    vi.mocked(fetchSpaces).mockResolvedValue([space({ name: "a", title: "Keep", description: "Old words", mine: true })]);
+    vi.mocked(updateSpaceDetails).mockResolvedValue({ title: "Keep", description: null, updatedAt: 1 });
     renderPage();
-    fireEvent.click(within(await openDetail("Keep")).getByRole("button", { name: "Edit details" }));
-    const dialog = await screen.findByRole("dialog");
-    fireEvent.change(within(dialog).getByLabelText("Title"), { target: { value: "   " } });
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
-    fireEvent.change(within(dialog).getByLabelText("Title"), { target: { value: "Renamed" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
-    expect(await within(dialog).findByText(/changed while you were editing/)).toBeInTheDocument();
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    const detail = await openDetail("Keep");
+    fireEvent.click(within(detail).getByRole("button", { name: "Edit description" }));
+    fireEvent.change(within(detail).getByRole("textbox", { name: "Description" }), { target: { value: "" } });
+    fireEvent.blur(within(detail).getByRole("textbox", { name: "Description" }));
+    await waitFor(() => expect(updateSpaceDetails).toHaveBeenCalledWith("a", { title: "Keep", description: "" }));
+    await waitFor(() => expect(tileOf("Keep")).not.toHaveTextContent("Old words"));
+    expect(within(detail).getByRole("button", { name: "Edit description" })).toHaveTextContent("Add a description");
   });
 
   it("the audience badge on an owned tile opens Sharing, and on someone else's it is plain text", async () => {

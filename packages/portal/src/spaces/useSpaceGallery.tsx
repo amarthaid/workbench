@@ -3,7 +3,6 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { setSpaceFavorite, type SpaceSummary } from "../spaces-api";
 import { SpaceDetailModal } from "./SpaceDetailModal";
 import { SpaceTile, type TileSize } from "./SpaceTile";
-import { EditDetailsModal } from "./EditDetailsModal";
 import { SharingModal } from "./SharingModal";
 import { isNewForMe } from "./arrange";
 
@@ -18,7 +17,6 @@ export function useSpaceGallery(spaces: SpaceSummary[]): {
   modals: ReactNode;
 } {
   const qc = useQueryClient();
-  const [editing, setEditing] = useState<SpaceSummary | null>(null);
   const [sharing, setSharing] = useState<SpaceSummary | null>(null);
   const [detailName, setDetailName] = useState<string | null>(null);
 
@@ -60,14 +58,14 @@ export function useSpaceGallery(spaces: SpaceSummary[]): {
 
   const modals = (
     <>
-      {detail && !editing && !sharing && (
+      {detail && !sharing && (
         <SpaceDetailModal
           space={detail}
           onClose={() => setDetailName(null)}
           onToggleFavorite={(x) => favorite.mutate(x)}
-          onEditDetails={(x) => {
-            setDetailName(null);
-            setEditing(x);
+          onDetailsSaved={(name, saved) => {
+            patchRow(name, { title: saved.title, description: saved.description });
+            qc.setQueryData(["space", name], (d: object | undefined) => (d ? { ...d, title: saved.title, description: saved.description } : d));
           }}
           onEditSharing={(x) => {
             setDetailName(null);
@@ -77,17 +75,6 @@ export function useSpaceGallery(spaces: SpaceSummary[]): {
             setDetailName(null);
             qc.setQueryData<SpaceSummary[]>(["spaces"], (rows) => rows?.filter((r) => r.name !== name));
             qc.removeQueries({ queryKey: ["space", name] });
-          }}
-        />
-      )}
-      {editing && (
-        <EditDetailsModal
-          open
-          space={editing}
-          onClose={() => setEditing(null)}
-          onSaved={(saved) => {
-            patchRow(editing.name, { title: saved.title, description: saved.description });
-            qc.setQueryData(["space", editing.name], (d: object | undefined) => (d ? { ...d, title: saved.title, description: saved.description } : d));
           }}
         />
       )}

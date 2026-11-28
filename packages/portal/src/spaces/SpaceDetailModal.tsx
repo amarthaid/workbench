@@ -9,13 +9,15 @@ import { Button } from "../components/ui/Button";
 import { ClockIcon, DoorOpenIcon, EyeIcon, HeartIcon } from "../components/ui/Icons";
 import { Cover, DelegatedBadge, VISIBILITY } from "./SpaceTile";
 import { DeleteSpaceDialog } from "./DeleteSpaceDialog";
+import { EditableDescription, EditableTitle, useDetailsSave, type DetailsSaved } from "./InlineDetails";
 import { ToolsAccordion } from "../components/ToolsAccordion";
 
 interface Props {
   space: SpaceSummary;
   onClose: () => void;
   onToggleFavorite: (space: SpaceSummary) => void;
-  onEditDetails: (space: SpaceSummary) => void;
+  /** The owner saved a new title or description in place. */
+  onDetailsSaved: (name: string, saved: DetailsSaved) => void;
   onEditSharing: (space: SpaceSummary) => void;
   onDeleted: (name: string) => void;
 }
@@ -25,8 +27,9 @@ interface Props {
  * who owns it, what it can do, and (for the owner) the actions. Everything but
  * the tool names comes from the list row, so it shows at once.
  */
-export function SpaceDetailModal({ space, onClose, onToggleFavorite, onEditDetails, onEditSharing, onDeleted }: Props) {
+export function SpaceDetailModal({ space, onClose, onToggleFavorite, onDetailsSaved, onEditSharing, onDeleted }: Props) {
   const [deleting, setDeleting] = useState(false);
+  const details = useDetailsSave(space, (saved) => onDetailsSaved(space.name, saved));
   const vis = VISIBILITY[space.visibility] ?? VISIBILITY.private;
   const detail = useQuery({ queryKey: ["space", space.name], queryFn: () => fetchSpace(space.name) });
   const allTools = detail.data?.tools ?? [];
@@ -45,7 +48,7 @@ export function SpaceDetailModal({ space, onClose, onToggleFavorite, onEditDetai
           <div className="space-detail-hero">
             <Cover space={space} showInitial={false} />
             <div className="space-detail-hero-text">
-              <h2 className="space-detail-hero-title">{space.title}</h2>
+              <EditableTitle space={space} editable={space.mine} details={details} />
               <div className="space-detail-hero-row">
                 <p className="space-detail-credit">
                   <span className="space-detail-avatar" aria-hidden="true">
@@ -70,9 +73,6 @@ export function SpaceDetailModal({ space, onClose, onToggleFavorite, onEditDetai
         footer={
           space.mine ? (
             <>
-              <Button variant="outline" onClick={() => onEditDetails(space)}>
-                Edit details
-              </Button>
               <Button variant="outline" onClick={() => onEditSharing(space)}>
                 Edit sharing
               </Button>
@@ -108,7 +108,18 @@ export function SpaceDetailModal({ space, onClose, onToggleFavorite, onEditDetai
             Updated {relativeTime(Math.floor(space.updatedAt / 1000))}
           </span>
         </div>
-        {space.description && <p className="space-detail-desc">{space.description}</p>}
+        <EditableDescription space={space} editable={space.mine} details={details} />
+        {space.mine && (
+          <p className="space-muted space-detail-hint">
+            What it can do (its tools) is set by the agent that built it. If an agent deploys this Space again, it sets the title
+            and description again.
+          </p>
+        )}
+        {details.error && (
+          <p className="ui-form-error" role="alert">
+            {details.error}
+          </p>
+        )}
         <section className="space-detail-tools" aria-label="Tools">
           <h3 className="space-detail-subhead">Tools</h3>
           {detail.isLoading ? (

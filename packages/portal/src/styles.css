@@ -1559,7 +1559,7 @@ button.wb-app-cell-link:focus-visible { outline: none; }
   padding: var(--s-12);
   flex: 1;
 }
-.space-tile-compact .space-tile-body { padding-right: 68px; }
+.space-tile-compact .space-tile-body { padding-right: 100px; }
 .space-tile-link {
   /* A button, so reset the browser's own button look. */
   appearance: none;
@@ -2039,6 +2039,20 @@ button.wb-app-cell-link:focus-visible { outline: none; }
 .space-detail-hero-side { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--s-8); margin-left: auto; }
 .space-detail-hero-side .space-detail-chips { margin-left: 0; }
 .space-detail-open { display: inline-flex; align-items: center; gap: var(--s-8); }
+.space-detail-edit-target { position: relative; display: inline-flex; align-items: center; gap: var(--s-8); max-width: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; letter-spacing: inherit; text-align: left; cursor: text; }
+.space-detail-edit-target svg { width: 14px; height: 14px; flex: none; opacity: 0; }
+.space-detail-edit-target:hover svg, .space-detail-edit-target:focus-visible svg { opacity: .8; }
+@media (hover: none) { .space-detail-edit-target svg { opacity: .6; } }
+.space-detail-edit-target:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.space-detail-edit-title { color: #fff; }
+.space-detail-edit-desc { display: flex; width: 100%; margin: 0 0 var(--s-8); align-items: flex-start; }
+.space-detail-edit-desc .space-detail-desc { margin: 0; }
+.space-detail-desc-text { color: var(--text-2); font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.space-detail-edit-desc.is-empty .space-detail-desc-text { color: var(--text-3); }
+.space-detail-title-input { width: 100%; font-size: 20px; font-weight: 700; }
+.space-detail-desc-edit { display: grid; gap: var(--s-4); margin: 0 0 var(--s-8); }
+.space-detail-hint { margin: 0 0 var(--s-12); }
+.space-detail-modal .ui-form-error { margin: 0 0 var(--s-12); }
 .space-detail-open svg { width: 16px; height: 16px; flex: none; }
 @media (max-width: 520px) {
   .space-detail-hero-side { justify-content: flex-start; margin-left: 0; width: 100%; }

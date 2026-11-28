@@ -24,7 +24,6 @@ import { createSpaceBridge, runsAsOwner, type ConfirmRequest } from "../spaces/b
 import { SpaceToolList } from "../spaces/ToolList";
 import { ConfirmActionModal } from "../spaces/ConfirmActionModal";
 import { SharingModal } from "../spaces/SharingModal";
-import { EditDetailsModal } from "../spaces/EditDetailsModal";
 import { AskAccess } from "../spaces/AskAccess";
 import { Button } from "../components/ui/Button";
 import { Modal } from "../components/ui/Modal";
@@ -156,7 +155,6 @@ function SpaceRunner({
   onRevoke,
   revoking,
   onSharingSaved,
-  onDetailsSaved,
   onDelegationOff,
 }: {
   space: SpaceDetail;
@@ -166,7 +164,6 @@ function SpaceRunner({
   onRevoke: () => void;
   revoking: boolean;
   onSharingSaved: (sharing: SpaceSharing) => void;
-  onDetailsSaved: (saved: { title: string; description: string | null }) => void;
 }) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -206,7 +203,6 @@ function SpaceRunner({
   const [menuOpen, setMenuOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [sharingOpen, setSharingOpen] = useState(false);
-  const [detailsOpen, setDetailsOpen] = useState(false);
 
   // The Space is on screen: tell the server, which keeps my order in the gallery
   // and, for the owner, how many people have used it. Once per mount; it is
@@ -323,19 +319,6 @@ function SpaceRunner({
                     className="space-menu-item"
                     onClick={() => {
                       setMenuOpen(false);
-                      setDetailsOpen(true);
-                    }}
-                  >
-                    Edit details
-                  </button>
-                )}
-                {space.mine && (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="space-menu-item"
-                    onClick={() => {
-                      setMenuOpen(false);
                       setSharingOpen(true);
                     }}
                   >
@@ -408,10 +391,6 @@ function SpaceRunner({
           onApprovalChange={runsAsOwner(space) ? undefined : (change) => void changeApprovals(change)}
         />
       </Modal>
-
-      {space.mine && detailsOpen && (
-        <EditDetailsModal open space={space} onClose={() => setDetailsOpen(false)} onSaved={onDetailsSaved} />
-      )}
 
       {space.mine && (
         <SharingModal
@@ -623,10 +602,6 @@ export default function SpaceShell() {
         // Read the whole detail again: a save can change more than the fields
         // it answers with (the mode, the pause, the owner's own consent).
         void queryClient.invalidateQueries({ queryKey });
-        void queryClient.invalidateQueries({ queryKey: ["spaces"] });
-      }}
-      onDetailsSaved={(saved) => {
-        queryClient.setQueryData<SpaceDetail>(queryKey, (d) => (d ? { ...d, title: saved.title, description: saved.description } : d));
         void queryClient.invalidateQueries({ queryKey: ["spaces"] });
       }}
       onStopped={setStopped}

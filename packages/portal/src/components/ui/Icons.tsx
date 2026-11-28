@@ -153,3 +153,12 @@ export function DoorOpenIcon() {
     </svg>
   );
 }
+
+export function PencilIcon() {
+  return (
+    <svg {...svgProps}>
+      <path d="M2.5 13.5l.8-3L10.8 3a1.4 1.4 0 0 1 2 0l.2.2a1.4 1.4 0 0 1 0 2L5.5 12.7z" />
+      <path d="M9.5 4.3l2.2 2.2" />
+    </svg>
+  );
+}
