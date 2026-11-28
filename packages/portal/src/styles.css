@@ -1899,7 +1899,20 @@ body {
 .space-detail-tool-name { min-width: 0; overflow-wrap: anywhere; }
 .space-detail-tool-head .ui-badge { margin-left: auto; flex: none; }
 .space-detail-tool-panel { display: grid; gap: var(--s-4); padding: 0 12px 12px 36px; }
-.space-detail-tool-text { margin: 0; font-size: 13px; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.space-detail-tool-text { margin: 0; font-size: 13px; color: var(--text-2); overflow-wrap: anywhere; }
+.wb-md { font-size: 13px; line-height: 1.5; color: var(--text-2); overflow-wrap: anywhere; }
+.wb-md > :first-child { margin-top: 0; }
+.wb-md > :last-child { margin-bottom: 0; }
+.wb-md p, .wb-md ul, .wb-md ol, .wb-md pre, .wb-md blockquote { margin: 0 0 var(--s-8); }
+.wb-md ul, .wb-md ol { padding-left: var(--s-16); }
+.wb-md li { margin: 0; }
+.wb-md strong, .wb-md .wb-md-heading { color: var(--text); font-weight: 600; }
+.wb-md .wb-md-heading { margin: 0 0 var(--s-4); font-size: 13px; line-height: 1.5; }
+.wb-md a { color: var(--accent); text-decoration: underline; }
+.wb-md code { font-family: var(--mono); font-size: 12px; color: var(--accent); background: var(--accent-soft); padding: 1px var(--s-4); border-radius: var(--radius-sm); }
+.wb-md pre { overflow-x: auto; padding: var(--s-8); background: var(--code-bg); color: var(--code-text); border-radius: var(--radius); }
+.wb-md pre code { padding: 0; background: transparent; color: inherit; }
+.wb-md blockquote { padding-left: var(--s-8); border-left: 2px solid var(--border); color: var(--text-3); }
 .space-detail-tool-effect { margin: 0; font-size: 12px; color: var(--text-3); }
 .space-detail-delete { color: var(--danger); margin-right: auto; }
 .space-delete-impact { margin: 0; padding-left: var(--s-16); font-size: 13px; color: var(--text-2); }

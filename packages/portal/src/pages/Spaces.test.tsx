@@ -512,6 +512,24 @@ describe("the Space detail modal", () => {
       expect(within(dialog).getByText(long)).toBeInTheDocument();
     });
 
+    it("renders the description as markdown and the effect sentence as plain text", async () => {
+      const dialog = await openWith([tool(1, { description: "**Note** use `id` first\n\n- one\n- two" })]);
+      fireEvent.click(await within(dialog).findByRole("button", { name: /tool_1/ }));
+      const panel = dialog.querySelector(".space-detail-tool-panel") as HTMLElement;
+      expect(panel.querySelector("strong")).toHaveTextContent("Note");
+      expect(panel.querySelector("code")).toHaveTextContent("id");
+      expect(panel.querySelectorAll("li")).toHaveLength(2);
+      expect(within(dialog).getByText("Only reads data. Never changes anything.").tagName).toBe("P");
+    });
+
+    it("treats a whitespace-only description as none", async () => {
+      const dialog = await openWith([tool(1, { description: "   \n " })]);
+      fireEvent.click(await within(dialog).findByRole("button", { name: /tool_1/ }));
+      const panel = dialog.querySelector(".space-detail-tool-panel") as HTMLElement;
+      expect(panel.children).toHaveLength(1);
+      expect(panel).toHaveTextContent("Only reads data. Never changes anything.");
+    });
+
     it("shows only the effect sentence for a tool with no description", async () => {
       const dialog = await openWith([tool(1, { description: undefined })]);
       fireEvent.click(await within(dialog).findByRole("button", { name: /tool_1/ }));

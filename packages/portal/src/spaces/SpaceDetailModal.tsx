@@ -6,6 +6,7 @@ import { relativeTime } from "../format";
 import { Modal } from "../components/ui/Modal";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
+import { Markdown } from "../components/ui/Markdown";
 import { ChevronDownIcon, ClockIcon, EyeIcon, HeartIcon } from "../components/ui/Icons";
 import { Cover, VISIBILITY } from "./SpaceTile";
 import { DeleteSpaceDialog } from "./DeleteSpaceDialog";
@@ -69,7 +70,11 @@ function ToolRow({ tool, panelId }: { tool: SpaceTool; panelId: string }) {
       </button>
       {open && (
         <div id={panelId} className="space-detail-tool-panel">
-          {tool.description && <p className="space-detail-tool-text">{tool.description}</p>}
+          {tool.description?.trim() && (
+            <div className="space-detail-tool-text">
+              <Markdown>{tool.description}</Markdown>
+            </div>
+          )}
           <p className="space-detail-tool-effect">{EFFECT_SENTENCE[effect.label]}</p>
         </div>
       )}
