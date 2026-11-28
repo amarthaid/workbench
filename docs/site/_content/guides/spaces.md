@@ -14,6 +14,14 @@ A Space is a static site with one extra: a small SDK that lets the page call wor
 - Expect the viewer to approve the tool list once, and to confirm every call whose tool is set to **Ask first**: `destructive` tools by default, any `write` tool if the viewer chooses. A denied call rejects with `DENIED`. See [Always allow and Ask first](#always-allow-and-ask-first).
 - Calls use the viewer's connections, unless you turn on [delegated access](../integrations/spaces.md#delegated-access) in the portal: then they use yours. Render `DELEGATION_OFF` and `TOOL_NOT_DELEGABLE` errors in the page like any other.
 
+## The Space card and its detail
+
+In the portal gallery, clicking a Space card opens a detail modal instead of the Space. It shows the cover, the full title and description, the owner, when it was last updated, the tool names grouped by app, and the like count (the heart on the card still toggles your favorite without opening anything). **Open** goes to the Space.
+
+If you own the Space, the modal also shows how many people opened it in the last 30 days (only for an org-wide Space or from 5 people) and three actions: **Edit details**, **Edit sharing** and **Delete Space**. A pending access request badge stays on the card.
+
+**Delete Space** asks you to type the Space's name before the red button works. The dialog names the audience and the opener count, and says that files and data stored in the Space go with it and that people who have it open will lose it. Deleting cannot be undone. It also closes any open access requests for the Space. An agent can still delete one with `delete_space`.
+
 ## Always allow and Ask first
 
 Every tool that changes something has one of two settings: **Always allow** (it runs without asking) or **Ask first** (the portal asks the viewer to confirm each call). Read tools never ask and have no setting. The defaults are the tool's effect: `write` tools are Always allow, `destructive` and unlabelled tools are Ask first. Your page cannot change this: there is no SDK call for it, and neither `deploy_space` nor `update_space` touches it. Only a person, in the portal, sets it.

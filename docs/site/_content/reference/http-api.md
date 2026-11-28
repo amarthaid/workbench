@@ -64,12 +64,13 @@ Protected routes answer 401 `{ "error": "Unauthorized" }`.
 | GET | `/api/admin/overview/connections` | session only, admin | — | `{ integrations: [{ integration, connected, needs_reconnect }] }` | 401, 403 |
 | GET | `/api/admin/overview/custom-apps` | session only, admin | — | `{ apps[], total }` | 401, 403 |
 | GET | `/api/admin/overview/browser-profiles` | session only, admin | — | `{ profiles[] }` | 401, 403 |
-| GET | `/api/admin/spaces` | session only, admin | query `q` (2 to 64 characters), `limit` (max 20) | `{ spaces: [{ name, title, owner_email }], has_more }`, name prefix first | 400 `invalid_q` / `invalid_limit`, 401, 403 |
+| GET | `/api/admin/spaces/search` | session only, admin | query `q` (2 to 64 characters), `limit` (max 20) | `{ spaces: [{ name, title, owner_email }], has_more }`, name prefix first | 400 `invalid_q` / `invalid_limit`, 401, 403 |
+| GET | `/api/admin/spaces` | session only, admin | query `q` (name prefix or title, at most 64 characters), `limit` (default 24, max 100), `cursor` | `{ spaces: [{ name, title, description, owner_email, visibility, updated_at, share_count, favorite_count, openers_30d, openers: [{ email, last_opened_at }] }], has_more, next_cursor }`, newest updated first; `openers` holds at most 50, `openers_30d` is the true count | 400 `invalid_q` / `invalid_limit` / `invalid_cursor`, 401, 403 |
 | GET | `/api/admin/users` | session only, admin | — | `{ users: [{ id, email, created_at, disabled_at, has_api_key, connection_count, custom_app_count, last_activity }], total }` | 401, 403 |
 | POST | `/api/admin/users/:id/disable` | session only, admin | — | `{ ok: true }` | 400 `cannot_disable_self` / `cannot_disable_admin`, 401, 403, 404 |
 | POST | `/api/admin/users/:id/enable` | session only, admin | — | `{ ok: true }` | 401, 403, 404 |
 | POST | `/api/admin/users/:id/revoke-key` | session only, admin | — | `{ ok: true }` | 401, 403, 404 |
-| GET | `/api/admin/config` | session only, admin | — | `{ integrations: [{ name, display_name, enabled }], custom_apps_policy, browser_blocked_domains, browser_allowed_domains }` | 401, 403 |
+| GET | `/api/admin/config` | session only, admin | — | `{ integrations: [{ name, display_name, enabled }], browser_blocked_domains, browser_allowed_domains }` | 401, 403 |
 | PUT | `/api/admin/config/integrations/:name` | session only, admin | `{ enabled: boolean }` | `{ ok: true }` | 400, 401, 403, 404 `unknown_integration` |
 | PUT | `/api/admin/config/custom-apps` | session only, admin | `{ mode: "all" \| "none" \| "allowlist", user_ids? }` | `{ ok: true }` | 400 `invalid_policy` / `unknown_user`, 401, 403 |
 | PUT | `/api/admin/config/browser-blocked-domains` | session only, admin | `{ domains: string[], allowed?: string[] }` (each a whole list, max 1000; `allowed` omitted = unchanged) | `{ ok: true }` | 400 `invalid_body` / `invalid_domains` (with `invalid[]`), 401, 403 |
