@@ -1578,7 +1578,7 @@ button.wb-app-cell-link:focus-visible { outline: none; }
   padding: var(--s-12);
   flex: 1;
 }
-.space-tile-compact .space-tile-body { padding-right: 100px; }
+.space-tile-compact .space-tile-body { padding-right: 68px; }
 .space-tile-link {
   /* A button, so reset the browser's own button look. */
   appearance: none;
@@ -1650,7 +1650,11 @@ button.wb-app-cell-link:focus-visible { outline: none; }
 .space-tile-heart.is-on { color: var(--accent); }
 .space-tile-large .space-tile-icon-button { color: #fff; background: rgba(0, 0, 0, .28); }
 .space-tile-large .space-tile-icon-button:hover { background: rgba(0, 0, 0, .46); color: #fff; }
-.space-tile-open { text-decoration: none; opacity: 0; }
+/* Bottom right, in the badge row, above the stretched title link. */
+.space-tile-open { position: relative; z-index: 2; margin-left: auto; min-width: 24px; height: 24px; padding: 0; text-decoration: none; opacity: 0; color: var(--text-2); background: transparent; }
+.space-tile-large .space-tile-open { color: var(--text-2); background: transparent; }
+.space-tile-large .space-tile-open:hover, .space-tile-open:hover { color: var(--text); background: var(--bg-sunk); }
+.space-tile-open svg { width: 15px; height: 15px; }
 .space-tile:hover .space-tile-open,
 .space-tile:focus-within .space-tile-open,
 .space-tile-open:focus-visible { opacity: 1; }

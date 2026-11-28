@@ -102,16 +102,6 @@ export function SpaceTile({ space, size, isNew, onToggleFavorite, onOpen, onEdit
       <div className="space-tile-cover">
         <Cover space={space} />
         <div className="space-tile-actions">
-          {/* Revealed on hover and on focus within the tile, so a keyboard user can reach it. */}
-          <Link
-            className="space-tile-icon-button space-tile-open"
-            to={`/s/${encodeURIComponent(space.name)}`}
-            aria-label={`Open ${space.title}`}
-            title="Open"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <DoorOpenIcon />
-          </Link>
           <button
             type="button"
             className={`space-tile-icon-button space-tile-heart${space.favorited ? " is-on" : ""}`}
@@ -160,6 +150,16 @@ export function SpaceTile({ space, size, isNew, onToggleFavorite, onOpen, onEdit
             <AudienceIndicator space={space} />
           )}
           <DelegatedIndicator space={space} />
+          {/* Revealed on hover and on focus within the tile, so a keyboard user can reach it. */}
+          <Link
+            className="space-tile-icon-button space-tile-open"
+            to={`/s/${encodeURIComponent(space.name)}`}
+            aria-label={`Open ${space.title}`}
+            title="Open"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <DoorOpenIcon />
+          </Link>
         </span>
       </div>
     </article>

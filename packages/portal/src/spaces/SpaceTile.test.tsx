@@ -32,7 +32,8 @@ describe("SpaceTile hover Open", () => {
     const link = screen.getByRole("link", { name: "Open PR timeline" });
     expect(link).toHaveAttribute("href", "/s/pr%20timeline");
     expect(link).toHaveAttribute("title", "Open");
-    expect(link.closest(".space-tile-actions")).not.toBeNull();
+    expect(link.closest(".space-tile-badges")).not.toBeNull();
+    expect(link.closest(".space-tile-actions")).toBeNull();
     fireEvent.click(link);
     expect(onOpen).not.toHaveBeenCalled();
   });
